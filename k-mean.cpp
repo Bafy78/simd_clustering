@@ -1,128 +1,184 @@
 #include <iostream>
 #include <iomanip>
-#include <eve/wide.hpp>
-#include <eve/module/core.hpp>
-#include <eve/module/math.hpp>
-#include <eve/module/algo.hpp>
 #include <vector>
+#include <span>
+#include <eve/module/core.hpp>
+#include <eve/module/algo.hpp>
+#include <eve/wide.hpp>
+#include <eve/memory/aligned_allocator.hpp>
 
-struct point2d : eve::struct_support<point2d, float, float> {};
+struct Point2D : eve::struct_support<Point2D, float, float> {};
+struct Point3D : eve::struct_support<Point3D, float, float, float> {};
 
+template <eve::product_type PointType>
 void print_clustering_results(
-    eve::algo::soa_vector<point2d> const& points,
+    const eve::algo::soa_vector<PointType>& points,
     std::span<const int> assignments,
-    eve::algo::soa_vector<point2d> const& centroids
+    const std::vector<PointType>& centroids
 ) {
+    constexpr std::size_t num_dims = kumi::size_v<PointType>;
+    if (points.size() == 0) return;
+
+    int coord_width = num_dims * 8; 
+
     std::cout << std::left 
-              << std::setw(18) << "Point (x, y)" 
+              << std::setw(coord_width) << "Point" 
               << std::setw(12) << "Cluster ID" 
-              << "Centroid (cx, cy)\n";
-    std::cout << std::string(50, '-') << "\n";
+              << "Centroid\n";
+    std::cout << std::string(coord_width + 12 + coord_width, '-') << "\n";
 
-    for (size_t i = 0; i < points.size(); ++i) {
+    for (std::size_t i = 0; i < points.size(); ++i) {
         int k = assignments[i];
+        auto pt = points.get(i);
 
-        auto [px, py] = points.get(i);
-        auto [cx, cy] = centroids.get(k);
+        std::cout << "(";
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            ((std::cout << std::setw(5) << get<I>(pt) << (I == num_dims - 1 ? "" : ", ")), ...);
+        }(std::make_index_sequence<num_dims>{});
+        std::cout << ") ";
 
-        std::cout << "(" << std::setw(4) << px << ", " 
-                  << std::setw(4) << py << ")"
-                  << std::right << std::setw(8) << k << "      "
-                  << "(" << cx << ", " << cy << ")\n";
+        std::cout << std::right << std::setw(8) << k << "      ";
+
+        std::cout << "(";
+        auto c = centroids[k];
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            ((std::cout << std::setw(5) << get<I>(c) << (I == num_dims - 1 ? "" : ", ")), ...);
+        }(std::make_index_sequence<num_dims>{});
+        std::cout << ")\n";
     }
 }
 
-void assign_points_to_centroids(
-    eve::algo::soa_vector<point2d> const& points,
-    eve::algo::soa_vector<point2d> const& centroids,
+template <eve::product_type PointType>
+bool assign_points_to_centroids(
+    const eve::algo::soa_vector<PointType>& points,
+    const std::vector<PointType>& centroids, 
     std::span<int> assignments
 ) {
-    eve::algo::transform_to[eve::algo::expensive_callable](points, assignments, 
-        [&](auto batch) {
-            auto [points_batch_x, points_batch_y] = batch;
+    bool changed = false;
 
-            auto min_distances = eve::valmax(eve::as(points_batch_x));
-            auto closest_centroid_indices = eve::convert(eve::zero(eve::as(points_batch_x)), eve::as<int>{});
+    auto zipped_data = eve::views::zip(points, assignments);
 
-            for (int k = 0; k < centroids.size(); ++k) {
-                auto [cx, cy] = centroids.get(k);
+    eve::algo::for_each(
+        zipped_data, 
+        [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
+            
+            // Unpack the zipped iterator into component iterators
+            auto [pt_it, assign_it] = it; 
 
-                auto dist_sq_x = eve::sqr(points_batch_x - cx);
-                auto y_diff = points_batch_y - cy;
-                
-                auto total_dist_sq = eve::fma(y_diff, y_diff, dist_sq_x);
+            // Load the wide tuple of points and the old assignments
+            auto pt = eve::load[ignore](pt_it); 
+            auto old_assignments = eve::load[ignore](assign_it);
+
+            auto min_distances = eve::valmax(eve::as<eve::wide<float>>());
+            auto closest_centroid_indices = eve::zero(eve::as<eve::wide<int>>());
+
+            for (std::size_t k = 0; k < centroids.size(); ++k) {
+                auto total_dist_sq = eve::zero(eve::as<eve::wide<float>>());
+                auto centroid = centroids[k]; 
+
+                // Compile-time loop over the dimensions using fold expressions
+                [&]<std::size_t... I>(std::index_sequence<I...>) {
+                    (..., (
+                        [&] {
+                            // Extract the i-th dimension from the SIMD point and scalar centroid
+                            auto diff = get<I>(pt) - get<I>(centroid);
+                            total_dist_sq = eve::fma(diff, diff, total_dist_sq); 
+                        }()
+                    ));
+                }(std::make_index_sequence<kumi::size_v<PointType>>{});
                 
                 auto is_closer = total_dist_sq < min_distances;
                 min_distances = eve::min(min_distances, total_dist_sq);
-                
-                closest_centroid_indices = eve::if_else(is_closer, k, closest_centroid_indices);
+                closest_centroid_indices = eve::if_else(is_closer, eve::wide<int>(k), closest_centroid_indices);
             }
 
-            return closest_centroid_indices; 
+            if (eve::any[ignore](closest_centroid_indices != old_assignments)) {
+                changed = true;
+            }
+
+            // Store the updated centroid index back via the assignment iterator
+            eve::store[ignore](closest_centroid_indices, assign_it);
         }
     );
+
+    return !changed;
 }
 
+template <eve::product_type PointType>
 void update_centroids(
-    eve::algo::soa_vector<point2d> const& points,
-    std::span<int> assignments,
-    eve::algo::soa_vector<point2d>& centroids
+    const eve::algo::soa_vector<PointType>& points,
+    std::span<const int> assignments,
+    std::vector<PointType>& centroids,
+    std::vector<PointType>& sum,
+    std::vector<int>& counts
 ) {
-    std::size_t k = centroids.size();
-    std::vector<float> sum_x(k, 0.0f);
-    std::vector<float> sum_y(k, 0.0f);
-    std::vector<int> counts(k, 0);
+    constexpr std::size_t num_dims = kumi::size_v<PointType>;
 
-    // Accumulate sums and counts for each centroid
+    std::fill(counts.begin(), counts.end(), 0);
+    
+    // Zero out the pre-allocated buffers using fold expressions
+    for (auto& row : sum) {
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            ((get<I>(row) = 0.0f), ...);
+        }(std::make_index_sequence<num_dims>{});
+    }
+
+    // Accumulate sums and counts
     for (std::size_t i = 0; i < points.size(); ++i) {
         int cluster_idx = assignments[i];
-        auto [px, py] = points.get(i);
-        
-        sum_x[cluster_idx] += px;
-        sum_y[cluster_idx] += py;
         counts[cluster_idx]++;
+        
+        auto pt = points.get(i);
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            ((get<I>(sum[cluster_idx]) += get<I>(pt)), ...);
+        }(std::make_index_sequence<num_dims>{});
     }
 
     // Compute the new means and update the centroids
-    for (std::size_t i = 0; i < k; ++i) {
-        if (counts[i] > 0) {
-            centroids.set(i, point2d{sum_x[i] / counts[i], sum_y[i] / counts[i]});
+    for (std::size_t k = 0; k < centroids.size(); ++k) {
+        if (counts[k] > 0) {
+            [&]<std::size_t... I>(std::index_sequence<I...>) {
+                ((get<I>(centroids[k]) = get<I>(sum[k]) / counts[k]), ...);
+            }(std::make_index_sequence<num_dims>{});
         }
     }
 }
 
 int main()
 {
-    eve::algo::soa_vector<point2d> points {
-        point2d{1.0f, 1.0f}, point2d{2.0f, 1.5f}, point2d{3.0f, 2.0f}, 
-        point2d{4.0f, 2.5f}, point2d{5.0f, 3.0f}, point2d{6.0f, 3.5f}, 
-        point2d{7.0f, 4.0f}, point2d{8.0f, 4.5f}
+    eve::algo::soa_vector<Point2D> points {
+            Point2D{1.0f, 1.0f}, Point2D{2.0f, 1.5f}, Point2D{3.0f, 2.0f}, 
+            Point2D{4.0f, 2.5f}, Point2D{5.0f, 3.0f}, Point2D{6.0f, 3.5f}, 
+            Point2D{7.0f, 4.0f}, Point2D{8.0f, 4.5f}
+        };
+
+    std::vector<Point2D> centroids {
+        Point2D{2.5f, 3.0f}, 
+        Point2D{6.0f, 2.0f}
     };
 
-    eve::algo::soa_vector<point2d> centroids {
-        point2d{2.5f, 3.0f}, point2d{6.0f, 2.0f}
-    };
+    // Align these as we'll zip them together later
+    std::vector<int, eve::aligned_allocator<int>> centroid_assignments(points.size(), -1);
 
-    std::vector<int> centroid_assignments(points.size());
-    std::vector<int> previous_assignments(points.size(), -1);
+    // Buffers for the update step
+    std::vector<Point2D> sum(centroids.size());
+    std::vector<int> counts(centroids.size(), 0);
 
     bool converged = false;
     int max_iterations = 100;
     int iterations = 0;
 
     while (!converged && iterations < max_iterations) {
-        assign_points_to_centroids(points, centroids, centroid_assignments);
+        converged = assign_points_to_centroids(points, centroids, centroid_assignments);
 
-        converged = (centroid_assignments == previous_assignments);
         if (converged) break;
-        previous_assignments = centroid_assignments;
 
-        update_centroids(points, centroid_assignments, centroids);
+        update_centroids(points, centroid_assignments, centroids, sum, counts);
         
         iterations++;
     }
 
     print_clustering_results(points, centroid_assignments, centroids);
 
-  return 0;
+    return 0;
 }
