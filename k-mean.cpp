@@ -31,13 +31,13 @@ void print_clustering_results(
         int k = assignments[i];
         auto pt = points.get(i);
 
-        std::cout << "(";
+        std::cout<< std::right << "(";
         [&]<std::size_t... I>(std::index_sequence<I...>) {
             ((std::cout << std::setw(5) << get<I>(pt) << (I == num_dims - 1 ? "" : ", ")), ...);
         }(std::make_index_sequence<num_dims>{});
         std::cout << ") ";
 
-        std::cout << std::right << std::setw(8) << k << "      ";
+        std::cout << std::setw(8) << k << "      ";
 
         std::cout << "(";
         auto c = centroids[k];
@@ -49,25 +49,20 @@ void print_clustering_results(
 }
 
 template <eve::product_type PointType>
-bool assign_points_to_centroids(
+void assign_points_to_centroids(
     const eve::algo::soa_vector<PointType>& points,
     const std::vector<PointType>& centroids, 
     std::span<int> assignments
 ) {
-    bool changed = false;
-
     auto zipped_data = eve::views::zip(points, assignments);
 
     eve::algo::for_each(
         zipped_data, 
         [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
             
-            // Unpack the zipped iterator into component iterators
             auto [pt_it, assign_it] = it; 
 
-            // Load the wide tuple of points and the old assignments
             auto pt = eve::load[ignore](pt_it); 
-            auto old_assignments = eve::load[ignore](assign_it);
 
             auto min_distances = eve::valmax(eve::as<eve::wide<float>>());
             auto closest_centroid_indices = eve::zero(eve::as<eve::wide<int>>());
@@ -92,16 +87,9 @@ bool assign_points_to_centroids(
                 closest_centroid_indices = eve::if_else(is_closer, eve::wide<int>(k), closest_centroid_indices);
             }
 
-            if (eve::any[ignore](closest_centroid_indices != old_assignments)) {
-                changed = true;
-            }
-
-            // Store the updated centroid index back via the assignment iterator
             eve::store[ignore](closest_centroid_indices, assign_it);
         }
     );
-
-    return !changed;
 }
 
 template <eve::product_type PointType>
@@ -144,39 +132,87 @@ void update_centroids(
     }
 }
 
+// Helper: Calculate squared Frobenius norm of the shift between old and new centroids
+template <eve::product_type PointType>
+float calculate_centroid_shift_sq(
+    const std::vector<PointType>& old_centroids,
+    const std::vector<PointType>& new_centroids
+) {
+    constexpr std::size_t num_dims = kumi::size_v<PointType>;
+    float shift_sq = 0.0f;
+    
+    for (std::size_t k = 0; k < new_centroids.size(); ++k) {
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            (..., (
+                [&] {
+                    float diff = get<I>(new_centroids[k]) - get<I>(old_centroids[k]);
+                    shift_sq += diff * diff;
+                }()
+            ));
+        }(std::make_index_sequence<num_dims>{});
+    }
+    return shift_sq;
+}
+
 int main()
 {
-    eve::algo::soa_vector<Point2D> points {
-            Point2D{1.0f, 1.0f}, Point2D{2.0f, 1.5f}, Point2D{3.0f, 2.0f}, 
-            Point2D{4.0f, 2.5f}, Point2D{5.0f, 3.0f}, Point2D{6.0f, 3.5f}, 
-            Point2D{7.0f, 4.0f}, Point2D{8.0f, 4.5f}
-        };
+    eve::algo::soa_vector<Point3D> points {
+        // Cluster 1 roughly around (1, 1, 1)
+        Point3D{1.0f, 1.0f, 1.5f}, Point3D{1.2f, 1.1f, 1.4f}, Point3D{0.8f, 1.3f, 1.6f},
+        Point3D{1.1f, 0.9f, 1.2f}, Point3D{1.5f, 1.2f, 1.7f}, Point3D{0.9f, 1.0f, 1.5f},
+        Point3D{1.3f, 1.4f, 1.3f}, Point3D{1.0f, 1.2f, 1.1f}, Point3D{1.4f, 0.8f, 1.4f},
+        Point3D{1.2f, 1.5f, 1.6f},
+        
+        // Cluster 2 roughly around (5, 5, 5)
+        Point3D{5.0f, 5.0f, 5.0f}, Point3D{5.2f, 4.8f, 5.1f}, Point3D{4.9f, 5.3f, 4.8f},
+        Point3D{5.1f, 5.1f, 5.2f}, Point3D{4.8f, 4.9f, 4.9f}, Point3D{5.3f, 5.0f, 5.3f},
+        Point3D{5.0f, 5.2f, 4.7f}, Point3D{4.7f, 5.1f, 5.0f}, Point3D{5.2f, 5.3f, 5.1f},
+        Point3D{4.9f, 4.7f, 5.2f},
+        
+        // Cluster 3 roughly around (8, 1, 8)
+        Point3D{8.0f, 1.0f, 8.0f}, Point3D{8.1f, 1.2f, 7.8f}, Point3D{7.9f, 0.9f, 8.2f},
+        Point3D{8.2f, 1.1f, 8.1f}, Point3D{7.8f, 1.0f, 7.9f}, Point3D{8.3f, 0.8f, 8.0f},
+        Point3D{8.0f, 1.3f, 7.7f}, Point3D{7.7f, 1.1f, 8.3f}, Point3D{8.1f, 0.9f, 8.1f},
+        Point3D{7.9f, 1.2f, 7.8f}
+    };
 
-    std::vector<Point2D> centroids {
-        Point2D{2.5f, 3.0f}, 
-        Point2D{6.0f, 2.0f}
+    std::vector<Point3D> centroids {
+        Point3D{2.5f, 3.0f, 1.0f}, 
+        Point3D{6.0f, 2.0f, 4.5f},
+        Point3D{7.5f, 4.0f, 7.0f}
     };
 
     // Align these as we'll zip them together later
     std::vector<int, eve::aligned_allocator<int>> centroid_assignments(points.size(), -1);
 
     // Buffers for the update step
-    std::vector<Point2D> sum(centroids.size());
+    std::vector<Point3D> sum(centroids.size());
     std::vector<int> counts(centroids.size(), 0);
+
+    std::vector<Point3D> previous_centroids(centroids.size());
 
     bool converged = false;
     int max_iterations = 100;
     int iterations = 0;
+    float tol = 1e-4f;
 
     while (!converged && iterations < max_iterations) {
-        converged = assign_points_to_centroids(points, centroids, centroid_assignments);
+        assign_points_to_centroids(points, centroids, centroid_assignments);
 
-        if (converged) break;
+        previous_centroids = centroids;
 
         update_centroids(points, centroid_assignments, centroids, sum, counts);
         
+        float shift_sq = calculate_centroid_shift_sq(previous_centroids, centroids);
+        if (shift_sq <= tol * tol) {
+            converged = true;
+        }
+
         iterations++;
     }
+
+    // Post-loop step: Reassign labels to perfectly match the final centroid positions
+    assign_points_to_centroids(points, centroids, centroid_assignments);
 
     print_clustering_results(points, centroid_assignments, centroids);
 
