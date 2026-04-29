@@ -3,12 +3,14 @@
 #include <vector>
 #include <span>
 #include <ranges>
+#include <random>
+#include <numeric>
+#include <algorithm>
 #include <eve/module/core.hpp>
 #include <eve/module/algo.hpp>
 #include <eve/wide.hpp>
 #include <eve/memory/aligned_allocator.hpp>
 
-struct Point2D : eve::struct_support<Point2D, float, float> {};
 struct Point3D : eve::struct_support<Point3D, float, float, float> {};
 
 template <eve::product_type PointType>
@@ -18,7 +20,7 @@ void print_clustering_results(
     const std::vector<PointType>& centroids
 ) {
     constexpr std::size_t num_dims = kumi::size_v<PointType>;
-    if (points.size() == 0) return;
+    if (points.empty()) return;
 
     int coord_width = num_dims * 8; 
 
@@ -50,14 +52,21 @@ void print_clustering_results(
     }
 }
 
-template <eve::product_type PointType>
-void assign_points_to_centroids(
-    const eve::algo::soa_vector<PointType>& points,
-    const std::vector<PointType>& centroids, 
-    std::span<int> assignments
-) {
-    auto zipped_data = eve::views::zip(points, assignments);
+// Helper lambda: Computes SIMD squared distance between a block of points and a centroid
+constexpr auto compute_simd_dist_sq = [](const auto& pt, const auto& centroid) {
+    auto dist_sq = eve::zero(eve::as<eve::wide<float>>());
+    kumi::for_each([&](auto p, auto c) {
+        auto diff = p - c;
+        dist_sq = eve::fma(diff, diff, dist_sq); 
+    }, pt, centroid);
+    return dist_sq;
+};
 
+template <eve::algo::relaxed_range R, typename PointType>
+void assign_points_to_centroids(
+    R&& zipped_data, 
+    const std::vector<PointType>& centroids
+) {
     eve::algo::for_each(
         zipped_data, 
         [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
@@ -70,13 +79,7 @@ void assign_points_to_centroids(
             auto closest_centroid_indices = eve::zero(eve::as<eve::wide<int>>());
 
             for (std::size_t k = 0; k < centroids.size(); ++k) {
-                auto total_dist_sq = eve::zero(eve::as<eve::wide<float>>());
-                auto centroid = centroids[k]; 
-
-                kumi::for_each([&](auto p, auto c) {
-                    auto diff = p - c;
-                    total_dist_sq = eve::fma(diff, diff, total_dist_sq); 
-                }, pt, centroid);
+                auto total_dist_sq = compute_simd_dist_sq(pt, centroids[k]);
                 
                 auto is_closer = total_dist_sq < min_distances;
                 min_distances = eve::min(min_distances, total_dist_sq);
@@ -116,7 +119,7 @@ void resolve_dead_centroids(
         // Identify the biggest cluster
         auto max_it = std::ranges::max_element(counts);
         if (*max_it <= 1) break; 
-        int biggest_cluster = std::distance(counts.begin(), max_it);
+        int biggest_cluster = std::ranges::distance(counts.begin(), max_it);
 
         // Find the farthest data point within that biggest cluster
         const auto& biggest_centroid = old_centroids[biggest_cluster];
@@ -202,8 +205,12 @@ std::vector<int, eve::aligned_allocator<int>> k_means(
     int max_iterations = 100,
     float tol = 1e-4f
 ) {
-    // Align these as we will zip them together in SIMD kernels
+    // Align these to zip them together in SIMD kernels
     std::vector<int, eve::aligned_allocator<int>> centroid_assignments(points.size(), -1);
+    auto aligned_ptr = eve::as_aligned(centroid_assignments.data());
+    auto unaligned_end = centroid_assignments.data() + points.size();
+    auto assignments_range = eve::algo::as_range(aligned_ptr, unaligned_end);
+    auto zipped_data = eve::views::zip(points, assignments_range);
 
     // Buffers for the update step
     std::vector<PointType> sum(centroids.size());
@@ -214,7 +221,7 @@ std::vector<int, eve::aligned_allocator<int>> k_means(
     int iterations = 0;
 
     while (!converged && iterations < max_iterations) {
-        assign_points_to_centroids(points, centroids, centroid_assignments);
+        assign_points_to_centroids(zipped_data, centroids);
 
         previous_centroids = centroids;
 
@@ -229,9 +236,122 @@ std::vector<int, eve::aligned_allocator<int>> k_means(
     }
 
     // Post-loop step: Reassign labels to perfectly match the final centroid positions
-    assign_points_to_centroids(points, centroids, centroid_assignments);
+    assign_points_to_centroids(zipped_data, centroids);
 
     return centroid_assignments;
+}
+
+template <eve::product_type PointType>
+std::vector<PointType> greedy_kmeans_pp_init(
+    const eve::algo::soa_vector<PointType>& points,
+    int num_clusters,
+    int num_local_trials = 0,
+    unsigned int seed = std::random_device{}()
+) {
+    if (num_local_trials == 0) num_local_trials = 2 + static_cast<int>(std::log(num_clusters));
+
+    std::vector<PointType> centroids;
+    if (points.empty() || num_clusters <= 0) return centroids;
+    
+    centroids.reserve(num_clusters);
+    std::mt19937 gen(seed);
+    
+    // First centroid: Choose uniformly at random
+    std::uniform_int_distribution<std::size_t> uni_dist(0, points.size() - 1);
+    centroids.push_back(points.get(uni_dist(gen)));
+
+    if (num_clusters == 1) return centroids;
+
+    // Maintain the minimum squared distance (D^2) from each point to the closest chosen centroid
+    std::vector<float, eve::aligned_allocator<float>> min_sq_dist(
+        points.size(), std::numeric_limits<float>::infinity()
+    );
+    
+    auto min_dist_view = eve::algo::as_range(
+        eve::as_aligned(min_sq_dist.data()), 
+        min_sq_dist.data() + min_sq_dist.size()
+    );
+
+    // Helper lambda: Updates the D^2 array when a new centroid is finalized
+    auto update_distances = [&](const PointType& new_centroid) {
+        auto zipped = eve::views::zip(points, min_dist_view);
+        eve::algo::for_each(zipped, [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
+            auto [pt_it, dist_it] = it;
+            auto pt = eve::load[ignore](pt_it);
+            auto current_min_dist = eve::load[ignore](dist_it);
+            
+            auto dist_sq = compute_simd_dist_sq(pt, new_centroid);
+            
+            auto new_min = eve::min(current_min_dist, dist_sq);
+            eve::store[ignore](new_min, dist_it);
+        });
+    };
+
+    // Update D^2 array for the very first randomly chosen centroid
+    update_distances(centroids.back());
+
+    std::vector<float> cdf(points.size());
+
+    // Iteratively select the remaining centroids
+    for (int k = 1; k < num_clusters; ++k) {
+        std::partial_sum(min_sq_dist.begin(), min_sq_dist.end(), cdf.begin());
+        float total_weight = cdf.back();
+
+        if (total_weight <= 0.0f) {
+            // Edge case: All points perfectly overlap with existing centroids. Pick uniformly.
+            centroids.push_back(points.get(uni_dist(gen)));
+            update_distances(centroids.back());
+            continue;
+        }
+
+        std::uniform_real_distribution<float> prob_dist(0.0f, total_weight);
+        
+        float best_cost = std::numeric_limits<float>::infinity();
+        std::size_t best_candidate_idx = 0;
+
+        // The Greedy Step: Sample l candidates and evaluate them
+        for (int trial = 0; trial < num_local_trials; ++trial) {
+            // Probabilistic selection using binary search on the CDF
+            float r = prob_dist(gen);
+            auto it = std::ranges::lower_bound(cdf, r);
+            std::size_t candidate_idx = it - cdf.begin();
+            if (candidate_idx >= points.size()) candidate_idx = points.size() - 1;
+
+            PointType candidate = points.get(candidate_idx);
+
+            // Vectorized Evaluation: Calculate potential inertia if this candidate were chosen
+            auto cost_accumulator = eve::zero(eve::as<eve::wide<float>>());
+            auto zipped = eve::views::zip(points, min_dist_view);
+            
+            eve::algo::for_each(zipped, [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
+                auto [pt_it, dist_it] = it;
+                auto pt = eve::load[ignore](pt_it);
+                auto current_min_dist = eve::load[ignore](dist_it);
+                
+                auto dist_sq = compute_simd_dist_sq(pt, candidate);                
+                auto trial_min = eve::min(current_min_dist, dist_sq);
+                
+                // Mask out inactive lanes to prevent adding garbage data to the reduction sum
+                auto mask = ignore.mask(eve::as<eve::wide<float>>());
+                cost_accumulator += eve::if_else(mask, trial_min, eve::zero);
+            });
+            
+            // Reduce the wide vector to a single scalar cost
+            float current_trial_cost = eve::reduce(cost_accumulator);
+
+            // Greedily track the candidate that yields the lowest overall inertia
+            if (current_trial_cost < best_cost) {
+                best_cost = current_trial_cost;
+                best_candidate_idx = candidate_idx;
+            }
+        }
+
+        // 4. Finalize the best candidate and update the D^2 array permanently
+        centroids.push_back(points.get(best_candidate_idx));
+        update_distances(centroids.back());
+    }
+
+    return centroids;
 }
 
 int main()
@@ -256,11 +376,16 @@ int main()
         Point3D{7.9f, 1.2f, 7.8f}
     };
 
+    /*
     std::vector<Point3D> centroids {
         Point3D{2.5f, 3.0f, 1.0f}, 
         Point3D{6.0f, 2.0f, 4.5f},
         Point3D{7.5f, 4.0f, 7.0f}
     };
+    */
+
+    int num_clusters = 3;
+    std::vector<Point3D> centroids = greedy_kmeans_pp_init(points, num_clusters);
 
     auto centroid_assignments = k_means(points, centroids);
 

@@ -1,5 +1,6 @@
 import numpy as np
 from sklearn.cluster import KMeans
+from threadpoolctl import threadpool_limits
 
 X = np.array([
     # Cluster 1 roughly around (1, 1, 1)
@@ -21,22 +22,22 @@ X = np.array([
     [7.9, 1.2, 7.8]
 ], dtype=np.float32)
 
-initial_centroids = np.array([
-    [2.5, 3.0, 1.0], 
-    [6.0, 2.0, 4.5],
-    [7.5, 4.0, 7.0]
-], dtype=np.float32)
+# initial_centroids = np.array([
+#     [2.5, 3.0, 1.0], 
+#     [6.0, 2.0, 4.5],
+#     [7.5, 4.0, 7.0]
+# ], dtype=np.float32)
 
-kmeans = KMeans(
-    n_clusters=initial_centroids.shape[0], 
-    init=initial_centroids, 
-    n_init=1, 
-    max_iter=100, 
-    algorithm="lloyd",
-    tol=1e-4
-)
-
-kmeans.fit(X)
+with threadpool_limits(limits=1):
+    kmeans = KMeans(
+        n_clusters=3, 
+        init="k-means++", 
+        n_init=1, 
+        max_iter=100, 
+        algorithm="lloyd",
+        tol=1e-4
+    )
+    kmeans.fit(X)
 
 num_dims = X.shape[1]
 coord_width = num_dims * 8
