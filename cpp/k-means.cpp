@@ -6,6 +6,9 @@
 #include <ranges>
 #include <algorithm>
 
+#define ANKERL_NANOBENCH_IMPLEMENT
+#include <nanobench.h>
+
 #include <eve/module/core.hpp>
 #include <eve/module/algo.hpp>
 #include <eve/wide.hpp>
@@ -231,8 +234,9 @@ void write_results(const std::string& filename,
 
 int main(int argc, char* argv[])
 {
-    if (argc < 5) {
-        std::cerr << "Usage: " << argv[0] << " <binary_file> <n_samples> <n_clusters> <output_file>\n";
+    if (argc < 6) {
+        std::cerr << "Usage: " << argv[0] 
+                  << " <binary_file> <n_samples> <n_clusters> <output_file> <nanobench_json_out>\n";
         return 1;
     }
 
@@ -240,9 +244,9 @@ int main(int argc, char* argv[])
     std::size_t n_samples = std::stoull(argv[2]);
     int n_clusters = std::stoi(argv[3]);
     std::string out_filename = argv[4];
+    std::string nanobench_out = argv[5];
 
-    // 2. Read Raw Binary Data (AoS Format)
-    // A single float array of size (n_samples * TUPLE_SIZE)
+    // Read Raw Binary Data (AoS Format)
     std::vector<float> raw_aos_data(n_samples * TUPLE_SIZE);
     
     std::ifstream file(filename, std::ios::binary);
@@ -257,25 +261,63 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // 3. Convert AoS to SoA
-    eve::algo::soa_vector<PointType> points(n_samples);
-    
-    for (std::size_t i = 0; i < n_samples; ++i) {
-        PointType pt;
-        
-        // Extract the continuous block for this point
-        kumi::for_each_index([&](auto index, auto& element) {
-            element = raw_aos_data[i * TUPLE_SIZE + index];
-        }, pt);
-        
-        points.set(i, pt);
-    }
+    // Benchmark 1: The AoS to SoA Tax
+    ankerl::nanobench::Bench bench1;
+    bench1.title("EVE K-Means " + std::to_string(TUPLE_SIZE) + "D (AoS to SoA)")
+          .unit("run")
+          .warmup(1)
+          .epochs(20)
+          .performanceCounters(true);
 
-    // 4. Run the Algorithm
-    std::vector<PointType> centroids = greedy_kmeans_pp_init(points, n_clusters);
-    auto centroid_assignments = k_means(points, centroids);
+    eve::algo::soa_vector<PointType> points(n_samples);
+
+    bench1.run("aos_to_soa", [&] {
+        for (std::size_t i = 0; i < n_samples; ++i) {
+            PointType pt;
+            kumi::for_each_index([&](auto index, auto& element) {
+                element = raw_aos_data[i * TUPLE_SIZE + index];
+            }, pt);
+            points.set(i, pt);
+        }
+        ankerl::nanobench::doNotOptimizeAway(points);
+    });
     
-    write_results(out_filename, centroids, centroid_assignments, n_clusters);
+    std::ofstream bench_out1(nanobench_out + "_aos_to_soa.json");
+    bench1.render(ankerl::nanobench::templates::pyperf(), bench_out1);
+    bench_out1.close();
+
+
+    // Benchmark 2: The actual K-Means Math
+    ankerl::nanobench::Bench bench2;
+    bench2.title("EVE K-Means " + std::to_string(TUPLE_SIZE) + "D (Math)")
+          .unit("run")
+          .warmup(1)
+          .epochs(20)
+          .performanceCounters(true);
+    
+    // Containers to capture the output of the final benchmark iteration
+    std::vector<PointType> final_centroids;
+    std::vector<int, eve::aligned_allocator<int>> final_assignments;
+
+    bench2.run("kmeans_fit", [&] {
+        // Run the Algorithm using the points converted in the previous step
+        std::vector<PointType> centroids = greedy_kmeans_pp_init(points, n_clusters);
+        auto centroid_assignments = k_means(points, centroids);
+
+        // Prevent the compiler from optimizing away the calculations
+        ankerl::nanobench::doNotOptimizeAway(centroids.data());
+        ankerl::nanobench::doNotOptimizeAway(centroid_assignments.data());
+
+        // O(1) swap to safely extract the results from the lambda without allocation overhead
+        final_centroids.swap(centroids);
+        final_assignments.swap(centroid_assignments);
+    });
+    
+    std::ofstream bench_out2(nanobench_out + "_kmeans_fit.json");
+    bench2.render(ankerl::nanobench::templates::pyperf(), bench_out2);
+    bench_out2.close();
+
+    write_results(out_filename, final_centroids, final_assignments, n_clusters);
 
     return 0;
 }
