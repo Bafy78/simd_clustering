@@ -159,7 +159,7 @@ template <eve::product_type PointType>
 std::vector<int, eve::aligned_allocator<int>> k_means(
     const eve::algo::soa_vector<PointType>& points,
     std::vector<PointType>& centroids,
-    int max_iterations = 100,
+    int max_iterations = 300,
     float tol = 1e-4f
 ) {
     // Align these to zip them together in SIMD kernels
@@ -198,17 +198,48 @@ std::vector<int, eve::aligned_allocator<int>> k_means(
     return centroid_assignments;
 }
 
+template <eve::product_type PointType>
+void write_results(const std::string& filename, 
+                   const std::vector<PointType>& centroids, 
+                   std::span<const int> assignments, 
+                   int num_clusters) {
+    std::ofstream out(filename);
+    
+    out << "[Centroids]\n";
+    for (const auto& c : centroids) {
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            ((out << get<I>(c) << (I == TUPLE_SIZE - 1 ? "" : " ")), ...);
+        }(std::make_index_sequence<TUPLE_SIZE>{});
+        out << "\n";
+    }
+
+    out << "[Clusters]\n";
+    // Group point indices by their assigned cluster
+    std::vector<std::vector<int>> sets(num_clusters);
+    for (std::size_t i = 0; i < assignments.size(); ++i) {
+        sets[assignments[i]].push_back(i);
+    }
+
+    for (int k = 0; k < num_clusters; ++k) {
+        out << k << ":";
+        for (int idx : sets[k]) {
+            out << " " << idx;
+        }
+        out << "\n";
+    }
+}
+
 int main(int argc, char* argv[])
 {
-    // 1. Parse Command Line Arguments
-    if (argc < 4) {
-        std::cerr << "Usage: " << argv[0] << " <binary_file> <n_samples> <n_clusters>\n";
+    if (argc < 5) {
+        std::cerr << "Usage: " << argv[0] << " <binary_file> <n_samples> <n_clusters> <output_file>\n";
         return 1;
     }
 
     std::string filename = argv[1];
     std::size_t n_samples = std::stoull(argv[2]);
     int n_clusters = std::stoi(argv[3]);
+    std::string out_filename = argv[4];
 
     // 2. Read Raw Binary Data (AoS Format)
     // A single float array of size (n_samples * TUPLE_SIZE)
@@ -244,14 +275,7 @@ int main(int argc, char* argv[])
     std::vector<PointType> centroids = greedy_kmeans_pp_init(points, n_clusters);
     auto centroid_assignments = k_means(points, centroids);
     
-    std::cout << "Final Centroids:\n";
-    for (int k = 0; k < n_clusters; ++k) {
-        std::cout << "Cluster " << k << ": (";
-        auto c = centroids[k];
-        kumi::for_each_index([&](auto index, auto const& element) {
-            std::cout << element << (index == TUPLE_SIZE - 1 ? "" : ", ");
-        }, c);
-    }
+    write_results(out_filename, centroids, centroid_assignments, n_clusters);
 
     return 0;
 }
