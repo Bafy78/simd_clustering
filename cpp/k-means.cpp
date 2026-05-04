@@ -1,6 +1,7 @@
 #include <iostream>
 #include <iomanip>
 #include <vector>
+#include <fstream>
 #include <span>
 #include <ranges>
 #include <algorithm>
@@ -12,46 +13,11 @@
 
 #include "greedy_k-means_pp.h"
 
-struct Point3D : eve::struct_support<Point3D, float, float, float> {};
+#ifndef TUPLE_SIZE
+#define TUPLE_SIZE 2
+#endif
 
-template <eve::product_type PointType>
-void print_clustering_results(
-    const eve::algo::soa_vector<PointType>& points,
-    std::span<const int> assignments,
-    const std::vector<PointType>& centroids
-) {
-    constexpr std::size_t num_dims = kumi::size_v<PointType>;
-    if (points.empty()) return;
-
-    int coord_width = num_dims * 8; 
-
-    std::cout << std::left 
-              << std::setw(coord_width) << "Point" 
-              << std::setw(12) << "Cluster ID" 
-              << "Centroid\n";
-    std::cout << std::string(coord_width + 12 + coord_width, '-') << "\n";
-
-    auto print_point = [](const auto& point) {
-        std::cout << "(";
-        std::size_t dim_idx = 0;
-        kumi::for_each([&](auto val) {
-            std::cout << std::setw(5) << val 
-                      << (++dim_idx == num_dims ? "" : ", ");
-        }, point);
-        
-        std::cout << ")";
-    };
-
-    for (std::size_t i = 0; i < points.size(); ++i) {
-        int k = assignments[i];
-
-        std::cout << std::right;
-        print_point(points.get(i)); 
-        std::cout << " " << std::setw(8) << k << "      ";
-        print_point(centroids[k]); 
-        std::cout << "\n";
-    }
-}
+using PointType = kumi::result::fill_t<TUPLE_SIZE,float>;
 
 template <eve::algo::relaxed_range R, typename PointType>
 void assign_points_to_centroids(
@@ -232,42 +198,60 @@ std::vector<int, eve::aligned_allocator<int>> k_means(
     return centroid_assignments;
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-    eve::algo::soa_vector<Point3D> points {
-        // Cluster 1 roughly around (1, 1, 1)
-        Point3D{1.0f, 1.0f, 1.5f}, Point3D{1.2f, 1.1f, 1.4f}, Point3D{0.8f, 1.3f, 1.6f},
-        Point3D{1.1f, 0.9f, 1.2f}, Point3D{1.5f, 1.2f, 1.7f}, Point3D{0.9f, 1.0f, 1.5f},
-        Point3D{1.3f, 1.4f, 1.3f}, Point3D{1.0f, 1.2f, 1.1f}, Point3D{1.4f, 0.8f, 1.4f},
-        Point3D{1.2f, 1.5f, 1.6f},
+    // 1. Parse Command Line Arguments
+    if (argc < 4) {
+        std::cerr << "Usage: " << argv[0] << " <binary_file> <n_samples> <n_clusters>\n";
+        return 1;
+    }
+
+    std::string filename = argv[1];
+    std::size_t n_samples = std::stoull(argv[2]);
+    int n_clusters = std::stoi(argv[3]);
+
+    // 2. Read Raw Binary Data (AoS Format)
+    // A single float array of size (n_samples * TUPLE_SIZE)
+    std::vector<float> raw_aos_data(n_samples * TUPLE_SIZE);
+    
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Error: Could not open file " << filename << "\n";
+        return 1;
+    }
+    
+    file.read(reinterpret_cast<char*>(raw_aos_data.data()), raw_aos_data.size() * sizeof(float));
+    if (!file) {
+        std::cerr << "Error: Failed to read entire file.\n";
+        return 1;
+    }
+
+    // 3. Convert AoS to SoA
+    eve::algo::soa_vector<PointType> points(n_samples);
+    
+    for (std::size_t i = 0; i < n_samples; ++i) {
+        PointType pt;
         
-        // Cluster 2 roughly around (5, 5, 5)
-        Point3D{5.0f, 5.0f, 5.0f}, Point3D{5.2f, 4.8f, 5.1f}, Point3D{4.9f, 5.3f, 4.8f},
-        Point3D{5.1f, 5.1f, 5.2f}, Point3D{4.8f, 4.9f, 4.9f}, Point3D{5.3f, 5.0f, 5.3f},
-        Point3D{5.0f, 5.2f, 4.7f}, Point3D{4.7f, 5.1f, 5.0f}, Point3D{5.2f, 5.3f, 5.1f},
-        Point3D{4.9f, 4.7f, 5.2f},
+        // Extract the continuous block for this point
+        kumi::for_each_index([&](auto index, auto& element) {
+            element = raw_aos_data[i * TUPLE_SIZE + index];
+        }, pt);
         
-        // Cluster 3 roughly around (8, 1, 8)
-        Point3D{8.0f, 1.0f, 8.0f}, Point3D{8.1f, 1.2f, 7.8f}, Point3D{7.9f, 0.9f, 8.2f},
-        Point3D{8.2f, 1.1f, 8.1f}, Point3D{7.8f, 1.0f, 7.9f}, Point3D{8.3f, 0.8f, 8.0f},
-        Point3D{8.0f, 1.3f, 7.7f}, Point3D{7.7f, 1.1f, 8.3f}, Point3D{8.1f, 0.9f, 8.1f},
-        Point3D{7.9f, 1.2f, 7.8f}
-    };
+        points.set(i, pt);
+    }
 
-    /*
-    std::vector<Point3D> centroids {
-        Point3D{2.5f, 3.0f, 1.0f}, 
-        Point3D{6.0f, 2.0f, 4.5f},
-        Point3D{7.5f, 4.0f, 7.0f}
-    };
-    */
-
-    int num_clusters = 3;
-    std::vector<Point3D> centroids = greedy_kmeans_pp_init(points, num_clusters);
-
+    // 4. Run the Algorithm
+    std::vector<PointType> centroids = greedy_kmeans_pp_init(points, n_clusters);
     auto centroid_assignments = k_means(points, centroids);
-
-    print_clustering_results(points, centroid_assignments, centroids);
+    
+    std::cout << "Final Centroids:\n";
+    for (int k = 0; k < n_clusters; ++k) {
+        std::cout << "Cluster " << k << ": (";
+        auto c = centroids[k];
+        kumi::for_each_index([&](auto index, auto const& element) {
+            std::cout << element << (index == TUPLE_SIZE - 1 ? "" : ", ");
+        }, c);
+    }
 
     return 0;
 }
