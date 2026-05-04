@@ -1,4 +1,5 @@
 docs/
 .venv/
 *.bin
+*.csv
 datasets/

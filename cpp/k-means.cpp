@@ -267,7 +267,7 @@ int main(int argc, char* argv[])
           .unit("run")
           .warmup(1)
           .epochs(20)
-          .performanceCounters(true);
+          .performanceCounters(false);
 
     eve::algo::soa_vector<PointType> points(n_samples);
 
@@ -293,7 +293,7 @@ int main(int argc, char* argv[])
           .unit("run")
           .warmup(1)
           .epochs(20)
-          .performanceCounters(true);
+          .performanceCounters(false);
     
     // Containers to capture the output of the final benchmark iteration
     std::vector<PointType> final_centroids;
