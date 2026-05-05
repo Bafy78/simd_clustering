@@ -1,5 +1,7 @@
 docs/
+datasets/
 .venv/
 *.bin
 *.csv
-datasets/
+.vscode/
+*.html
