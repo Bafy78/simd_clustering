@@ -3,6 +3,7 @@ import sys
 import subprocess
 from dataclasses import dataclass
 from typing import List
+import shutil
 
 @dataclass
 class Task:
@@ -124,14 +125,7 @@ def execute_pipeline(dim: int, n_samples: int, n_clusters: int):
     
     pipeline = build_pipeline(dim, n_samples, n_clusters)
     
-    for task in pipeline:
-        # If the command specifies an output file, remove it so pyperf doesn't complain
-        if "--output" in task.command:
-            output_idx = task.command.index("--output") + 1
-            output_path = task.command[output_idx]
-            if os.path.exists(output_path):
-                os.remove(output_path)
-        
+    for task in pipeline:        
         print(f"[{task.name}] Running...")
         result = subprocess.run(task.command, capture_output=True, text=True)
         
@@ -144,11 +138,18 @@ def execute_pipeline(dim: int, n_samples: int, n_clusters: int):
             sys.exit(1)
 
 if __name__ == "__main__":
-    os.makedirs("./datasets", exist_ok=True)
+    datasets_dir = "./datasets"
     
-    test_dimensions = [2, 3, 5, 8, 12, 20]
-    test_samples = [10000, 100000, 1000000]
-    test_clusters = [3, 5, 10, 20]
+    # Clean slate: Remove the directory if it exists, then recreate it
+    if os.path.exists(datasets_dir):
+        print(f"Cleaning {datasets_dir}...")
+        shutil.rmtree(datasets_dir)
+    
+    os.makedirs(datasets_dir, exist_ok=True)
+    
+    test_dimensions = [2, 3, 5, 7, 8, 9, 12, 15, 16, 17, 20]
+    test_samples = [5000, 10000, 100000, 150000, 1000000, 4000000, 6000000]
+    test_clusters = [3, 5, 8, 12, 15, 20]
 
     for dim in test_dimensions:
         compile_cpp_binaries(dim)

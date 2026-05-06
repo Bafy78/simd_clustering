@@ -45,8 +45,12 @@ if __name__ == "__main__":
         final_kmeans = run_kmeans_lloyd(X, args.n_clusters, init_centers)
         centroids = final_kmeans.cluster_centers_
         labels = final_kmeans.labels_
+        iters = final_kmeans.n_iter_
 
         with open(args.result_file, 'w') as f:
+            f.write("[Lloyd Iterations]\n")
+            f.write(f"{iters}\n")
+            
             f.write("[Centroids]\n")
             for c in centroids:
                 f.write(" ".join(f"{v:g}" for v in c) + "\n")

@@ -147,6 +147,7 @@ template <eve::product_type PointType>
 std::vector<int, eve::aligned_allocator<int>> k_means(
     const eve::algo::soa_vector<PointType>& points,
     std::vector<PointType>& centroids,
+    int& out_iterations,
     int max_iterations = 300,
     float tol = 1e-4f
 ) {
@@ -179,6 +180,8 @@ std::vector<int, eve::aligned_allocator<int>> k_means(
 
         iterations++;
     }
+
+    out_iterations = iterations;
 
     // Post-loop step: Reassign labels to perfectly match the final centroid positions
     assign_points_to_centroids(zipped_data, centroids);

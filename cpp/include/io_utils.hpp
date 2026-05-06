@@ -46,13 +46,16 @@ inline std::vector<PointType> read_initial_centroids_binary(const std::string& f
     return centroids;
 }
 
-// --- Helper: Write Final Results (Unchanged) ---
+// --- Helper: Write Final Results ---
 template <eve::product_type PointType>
 void write_results(const std::string& filename, 
                    const std::vector<PointType>& centroids, 
                    std::span<const int> assignments, 
-                   int num_clusters) {
+                   int num_clusters,
+                   int iterations) {
     std::ofstream out(filename);
+    
+    out << "[Lloyd Iterations]\n" << iterations << "\n";
     
     out << "[Centroids]\n";
     for (const auto& c : centroids) {

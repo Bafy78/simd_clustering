@@ -27,11 +27,12 @@ int main(int argc, char* argv[]) {
     
     std::vector<PointType> final_centroids;
     std::vector<int, eve::aligned_allocator<int>> final_assignments;
+    int iterations_to_converge = 0;
 
     bench.run("kmeans_lloyd", [&] {
         // Crucial: Copy the initial state for every epoch
         std::vector<PointType> current_centroids = initial_centroids;
-        auto centroid_assignments = k_means(points, current_centroids);
+        auto centroid_assignments = k_means(points, current_centroids, iterations_to_converge);
 
         ankerl::nanobench::doNotOptimizeAway(current_centroids.data());
         ankerl::nanobench::doNotOptimizeAway(centroid_assignments.data());
@@ -44,7 +45,7 @@ int main(int argc, char* argv[]) {
     bench.render(ankerl::nanobench::templates::pyperf(), bench_out);
     
     // Save final results for verification
-    write_results(out_filename, final_centroids, final_assignments, n_clusters);
+    write_results(out_filename, final_centroids, final_assignments, n_clusters, iterations_to_converge);
 
     return 0;
 }
