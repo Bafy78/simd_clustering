@@ -1,12 +1,14 @@
 #include <iostream>
 #define ANKERL_NANOBENCH_IMPLEMENT
 #include <nanobench.h>
+#include <chrono>
 #include "../include/io_utils.hpp"
 #include "../include/kmeans_lloyd.hpp"
 
 int main(int argc, char* argv[]) {
-    if (argc < 7) {
-        std::cerr << "Usage: " << argv[0] << " <binary_file> <n_samples> <n_clusters> <init_centroids_bin> <output_file> <nanobench_json_out>\n";
+    if (argc < 9) {
+        std::cerr << "Usage: " << argv[0]
+                << " <binary_file> <n_samples> <n_clusters> <init_centroids_bin> <output_file> <nanobench_json_out> <bench_epochs> <min_epoch_seconds>\n";
         return 1;
     }
 
@@ -16,6 +18,12 @@ int main(int argc, char* argv[]) {
     std::string init_centroids_bin = argv[4];
     std::string out_filename = argv[5];
     std::string nanobench_out = argv[6];
+    std::size_t bench_epochs = std::stoull(argv[7]);
+    double min_epoch_seconds = std::stod(argv[8]);
+
+    auto min_epoch_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(min_epoch_seconds)
+    );
 
     // Setup: Convert to SoA and read Orchestrator centroids (not benchmarked)
     auto points = read_dataset_soa(filename, n_samples);
@@ -23,7 +31,8 @@ int main(int argc, char* argv[]) {
 
     ankerl::nanobench::Bench bench;
     bench.title("EVE K-Means " + std::to_string(TUPLE_SIZE) + "D (Lloyd Iterations)")
-         .unit("run").warmup(1).epochs(20).performanceCounters(false).output(nullptr);
+         .unit("run").warmup(1).epochs(bench_epochs).minEpochTime(min_epoch_time)
+         .performanceCounters(false).output(nullptr);
     
     std::vector<PointType> final_centroids;
     std::vector<int, eve::aligned_allocator<int>> final_assignments;

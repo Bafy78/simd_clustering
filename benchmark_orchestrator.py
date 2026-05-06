@@ -37,7 +37,13 @@ def compile_cpp_binaries(dim: int):
             print(f"Compilation failed for {target['src']}:\n{result.stderr}")
             sys.exit(1)
 
-def build_pipeline(dim: int, n_samples: int, n_clusters: int) -> List[Task]:
+def build_pipeline(
+    dim: int,
+    n_samples: int,
+    n_clusters: int,
+    bench_values: int,
+    bench_min_time: float,
+) -> List[Task]:
     """Defines the strict 'contract' of tasks for a single configuration."""
     config_id = f"{dim}D_{n_samples}S_{n_clusters}K"
     
@@ -64,18 +70,21 @@ def build_pipeline(dim: int, n_samples: int, n_clusters: int) -> List[Task]:
     tasks.append(Task(
         name="C++: AoS to SoA Tax",
         command=[
-            "./bin/bench_soa.bin", 
-            dataset_bin, str(n_samples), 
-            f"./datasets/soa_cpp_{config_id}.json"
+            "./bin/bench_soa.bin",
+            dataset_bin,
+            str(n_samples), f"./datasets/soa_cpp_{config_id}.json",
+            str(bench_values), str(bench_min_time),
         ]
     ))
     
     tasks.append(Task(
         name="C++: K-Means++ Initialization",
         command=[
-            "./bin/bench_pp.bin", 
-            dataset_bin, str(n_samples), str(n_clusters), 
-            f"./datasets/pp_cpp_{config_id}.json"
+            "./bin/bench_pp.bin",
+            dataset_bin,
+            str(n_samples), str(n_clusters),
+            f"./datasets/pp_cpp_{config_id}.json",
+            str(bench_values), str(bench_min_time),
         ]
     ))
 
@@ -87,6 +96,8 @@ def build_pipeline(dim: int, n_samples: int, n_clusters: int) -> List[Task]:
             "--n-samples", str(n_samples),
             "--n-features", str(dim),
             "--n-clusters", str(n_clusters),
+            "--bench-values", str(bench_values),
+            "--bench-min-time", str(bench_min_time),
             "--output", f"./datasets/pp_py_{config_id}.json"
         ]
     ))
@@ -99,7 +110,8 @@ def build_pipeline(dim: int, n_samples: int, n_clusters: int) -> List[Task]:
             dataset_bin, str(n_samples), str(n_clusters),
             init_centroids_bin,
             f"./datasets/results_cpp_{config_id}.txt",
-            f"./datasets/lloyd_cpp_{config_id}.json"
+            f"./datasets/lloyd_cpp_{config_id}.json",
+            str(bench_values), str(bench_min_time),
         ]
     ))
 
@@ -113,17 +125,19 @@ def build_pipeline(dim: int, n_samples: int, n_clusters: int) -> List[Task]:
             "--n-clusters", str(n_clusters),
             "--init-centroids-bin", init_centroids_bin,
             "--result-file", f"./datasets/results_py_{config_id}.txt",
+            "--bench-values", str(bench_values),
+            "--bench-min-time", str(bench_min_time),
             "--output", f"./datasets/lloyd_py_{config_id}.json"
         ]
     ))
 
     return tasks
 
-def execute_pipeline(dim: int, n_samples: int, n_clusters: int):
+def execute_pipeline(dim: int, n_samples: int, n_clusters: int, bench_values: int, bench_min_time: float):
     """Executes the task list for a specific configuration."""
     print(f"\n--- Running Config: {dim}D | {n_samples} Samples | {n_clusters} Clusters ---")
     
-    pipeline = build_pipeline(dim, n_samples, n_clusters)
+    pipeline = build_pipeline(dim, n_samples, n_clusters, bench_values, bench_min_time)
     
     for task in pipeline:        
         print(f"[{task.name}] Running...")
@@ -150,12 +164,14 @@ if __name__ == "__main__":
     test_dimensions = [2, 3, 5, 7, 8, 9, 12, 15, 16, 17, 20]
     test_samples = [5000, 10000, 100000, 150000, 1000000, 4000000, 6000000]
     test_clusters = [3, 5, 8, 12, 15, 20]
+    bench_values = 10
+    bench_min_time = 0.1
 
     for dim in test_dimensions:
         compile_cpp_binaries(dim)
         
         for n in test_samples:
             for k in test_clusters:
-                execute_pipeline(dim, n, k)
+                execute_pipeline(dim, n, k, bench_values, bench_min_time)
                 
     print("\nAll benchmarking finished successfully!")
