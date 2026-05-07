@@ -6,3 +6,4 @@ datasets_old/
 *.csv
 .vscode/
 *.html
+**/__pycache__/
