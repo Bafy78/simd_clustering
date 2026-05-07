@@ -1,4 +1,7 @@
 #include <ranges>
+#include <algorithm>
+#include <vector>
+#include <numeric>
 
 #include <eve/module/core.hpp>
 #include <eve/module/algo.hpp>
@@ -85,53 +88,104 @@ void resolve_dead_centroids(
     std::vector<AccumulatorType<PointType>>& sum,
     std::vector<int>& counts
 ) {
-    // Helper: Compute squared distance between two points using Kumi
+    // Squared distance between two Kumi product points.
     auto get_dist_sq = [](const auto& p1, const auto& p2) {
-    auto sq_diffs = kumi::map([](auto a, auto b) { 
-        double diff = static_cast<double>(a) - static_cast<double>(b);
-        return diff * diff; 
-    }, p1, p2);
-        return kumi::sum(sq_diffs, 0.0); 
+        auto sq_diffs = kumi::map([](auto a, auto b) {
+            double diff = static_cast<double>(a) - static_cast<double>(b);
+            return diff * diff;
+        }, p1, p2);
+
+        return kumi::sum(sq_diffs, 0.0);
     };
 
-    // Helper: Move a point's value from one sum to another using Kumi
-    auto transfer_sum = [](auto& from, auto& to, const auto& pt) {
-        kumi::for_each([](auto& f, auto& t, auto p) {
-            double pd = static_cast<double>(p);
-            f -= pd;
-            t += pd;
-        }, from, to, pt);
+    // sum[cluster] -= pt
+    auto subtract_from_sum = [](auto& dst, const auto& pt) {
+        kumi::for_each([](auto& d, auto p) {
+            d -= static_cast<double>(p);
+        }, dst, pt);
     };
 
-    for (std::size_t k = 0; k < old_centroids.size(); ++k) {
-        if (counts[k] != 0) continue; 
+    // sum[cluster] = pt
+    //
+    // In sklearn, centers_new[new_cluster_id, k] = X[far_idx, k] * weight.
+    // Here weight is implicitly 1.
+    auto set_sum_to_point = [](auto& dst, const auto& pt) {
+        kumi::for_each([](auto& d, auto p) {
+            d = static_cast<double>(p);
+        }, dst, pt);
+    };
 
-        // Identify the biggest cluster
-        auto max_it = std::ranges::max_element(counts);
-        if (*max_it <= 1) break; 
-        int biggest_cluster = std::ranges::distance(counts.begin(), max_it);
+    const std::size_t n_samples = points.size();
+    const std::size_t n_clusters = old_centroids.size();
 
-        // Find the farthest data point within that biggest cluster
-        const auto& biggest_centroid = old_centroids[biggest_cluster];
+    // Find empty clusters, in cluster-id order, matching np.where(counts == 0)[0].
+    std::vector<std::size_t> empty_clusters;
+    empty_clusters.reserve(n_clusters);
 
-        auto cluster_indices = std::views::iota(std::size_t{0}, points.size())
-                             | std::views::filter([&](std::size_t i) { return assignments[i] == biggest_cluster; });
+    for (std::size_t k = 0; k < n_clusters; ++k) {
+        if (counts[k] == 0) {
+            empty_clusters.push_back(k);
+        }
+    }
 
-        auto farthest_it = std::ranges::max_element(cluster_indices, {}, [&](std::size_t i) {
-            return get_dist_sq(points.get(i), biggest_centroid);
-        });
+    const std::size_t n_empty = empty_clusters.size();
 
-        if (farthest_it == cluster_indices.end()) continue;
-        
-        int farthest_idx = *farthest_it;
+    if (n_empty == 0) return;
 
-        // Exclude this farthest point and reassign to the empty cluster
-        assignments[farthest_idx] = k;
-        counts[biggest_cluster]--;
-        counts[k]++;
+    // Compute distance of each point to its currently assigned old centroid:
+    // sklearn: distances = ((X - centers_old[labels]) ** 2).sum(axis=1)
+    std::vector<double> distances(n_samples);
 
-        // Update the sums in place
-        transfer_sum(sum[biggest_cluster], sum[k], points.get(farthest_idx));
+    double max_distance = 0.0;
+
+    for (std::size_t i = 0; i < n_samples; ++i) {
+        const int label = assignments[i];
+
+        const double dist = get_dist_sq(points.get(i), old_centroids[label]);
+
+        distances[i] = dist;
+        max_distance = std::max(max_distance, dist);
+    }
+
+    // sklearn returns early when all distances are exactly zero.
+    // This happens when there are more clusters than distinct non-duplicate samples.
+    if (max_distance == 0.0) return;
+
+    // Select the n_empty farthest points globally.
+    // sklearn uses np.argpartition(...)[-n_empty:][::-1].
+    std::vector<std::size_t> farthest_indices(n_samples);
+    std::iota(farthest_indices.begin(), farthest_indices.end(), std::size_t{0});
+
+    auto farther = [&](std::size_t a, std::size_t b) {
+        if (distances[a] != distances[b]) {
+            return distances[a] > distances[b];
+        }
+
+        return a < b;
+    };
+
+    std::partial_sort(
+        farthest_indices.begin(),
+        farthest_indices.begin() + static_cast<std::ptrdiff_t>(n_empty),
+        farthest_indices.end(),
+        farther
+    );
+
+    // Relocate each empty cluster using one farthest point.
+    // Important sklearn detail:
+    // labels / assignments are NOT changed here. Only the sums and counts are changed.
+    for (std::size_t idx = 0; idx < n_empty; ++idx) {
+        const std::size_t new_cluster_id = empty_clusters[idx];
+        const std::size_t far_idx = farthest_indices[idx];
+
+        const int old_cluster_id = assignments[far_idx];
+        const auto pt = points.get(far_idx);
+
+        subtract_from_sum(sum[old_cluster_id], pt);
+        set_sum_to_point(sum[new_cluster_id], pt);
+
+        counts[old_cluster_id] -= 1;
+        counts[new_cluster_id] = 1;
     }
 }
 
@@ -208,20 +262,29 @@ std::vector<int, eve::aligned_allocator<int>> k_means(
     std::vector<int> counts(centroids.size(), 0);
     std::vector<PointType> previous_centroids(centroids.size());
 
+    std::vector<int, eve::aligned_allocator<int>> previous_assignments(points.size(), -1);
+
     double scaled_tol = compute_sklearn_tolerance(points, tol);
     bool converged = false;
     int iterations = 0;
 
     while (!converged && iterations < max_iterations) {
+        previous_assignments = centroid_assignments;
+
         assign_points_to_centroids(zipped_data, centroids);
 
         previous_centroids = centroids;
 
         update_centroids(points, centroid_assignments, centroids, sum, counts);
         
-        double shift_sq = calculate_centroid_shift_sq(previous_centroids, centroids);
-        if (shift_sq <= scaled_tol) {
+        if (std::ranges::equal(centroid_assignments, previous_assignments)) {
             converged = true;
+        } else {
+            double shift_sq = calculate_centroid_shift_sq(previous_centroids, centroids);
+
+            if (shift_sq <= scaled_tol) {
+                converged = true;
+            }
         }
 
         iterations++;
