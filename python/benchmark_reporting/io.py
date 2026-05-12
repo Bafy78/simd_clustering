@@ -4,7 +4,7 @@ import json
 from typing import Any
 import pandas as pd
 
-from .benchmark_constants import *
+from .constants import *
 
 SUMMARY_FILENAME = "benchmark_summary.json"
 
@@ -156,8 +156,8 @@ def load_benchmark_data(
                     COL_ITERATIONS: iterations,
                     COL_TIME_S: selected_time,
                     COL_CONFIGURATION: configuration,
-                    "Config_ID": config_id,
-                    "Phase_Key": phase_key,
+                    COL_CONFIG_ID: config_id,
+                    COL_PHASE_KEY: phase_key,
                     COL_TIME_FIELD: time_field,
                     COL_TIME_STATISTIC: statistic,
                     COL_N_PROCESSES: language_entry.get("n_processes"),
@@ -244,8 +244,8 @@ def load_speedup_summary(
                     COL_SAMPLES: samples,
                     COL_CLUSTERS: clusters,
                     COL_CONFIGURATION: configuration,
-                    "Config_ID": config_id,
-                    "Phase_Key": phase_key,
+                    COL_CONFIG_ID: config_id,
+                    COL_PHASE_KEY: phase_key,
                     COL_TIME_FIELD: time_field,
                     COL_SPEEDUP_STATISTIC: ratio_statistic,
                     COL_SPEEDUP: speedup_entry["point"],

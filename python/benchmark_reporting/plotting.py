@@ -38,7 +38,7 @@ def format_abbrev(num):
     return f"{val:.1f}".replace(".0", "") + suffix
 
 
-small_multiple_title_style = dict(
+SMALL_MULTIPLE_TITLE_STYLE = dict(
     boxstyle="round,pad=0.3", facecolor="black", alpha=0.1, edgecolor="none"
 )
 
@@ -93,7 +93,7 @@ def _put_facet_titles_inside(g):
                 transform=ax.transAxes,
                 ha="center",
                 va="top",
-                bbox=small_multiple_title_style,
+                bbox=SMALL_MULTIPLE_TITLE_STYLE,
             )
 
     return g
@@ -170,7 +170,7 @@ def style_facet_grid(
         g.set(xscale="log")
 
     if not titles_inside:
-        g.set_titles(bbox=small_multiple_title_style)
+        g.set_titles(bbox=SMALL_MULTIPLE_TITLE_STYLE)
     else:
         _put_facet_titles_inside(g)
 
