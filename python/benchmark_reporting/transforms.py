@@ -247,3 +247,65 @@ def _require_columns(df, columns):
     missing = [col for col in columns if col not in df.columns]
     if missing:
         raise KeyError(f"Missing required columns: {missing}")
+
+
+def available_speedup_phases(df_speedup, *, phase_order=PHASE_ORDER):
+    """Return ordered phases that are actually present in a speedup dataframe."""
+    require_speedup_columns(df_speedup)
+
+    present = set(df_speedup[COL_PHASE].dropna())
+
+    return [phase for phase in phase_order if phase in present]
+
+
+def prepare_speedup_comparison_data(
+    df_speedup,
+    *,
+    phases=None,
+    add_errors=True,
+):
+    """
+    Canonical prep for any plot comparing speedups.
+
+    By default this keeps every phase that has speedup data.
+    Pass phases=... only for a deliberately phase-specific plot.
+    """
+    require_speedup_columns(df_speedup)
+
+    result = df_speedup.copy()
+
+    if add_errors and COL_SPEEDUP_ERROR_WIDTH not in result.columns:
+        result = add_ci_error_columns(result)
+
+    if phases is None:
+        phases = available_speedup_phases(result)
+
+    result = filter_bench(result, phase=phases)
+
+    result[COL_PHASE] = pd.Categorical(
+        result[COL_PHASE],
+        categories=phases,
+        ordered=True,
+    )
+
+    return result.sort_values(
+        [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+    ).reset_index(drop=True)
+
+
+def iter_speedup_phase_data(df_speedup, *, phases=None):
+    """
+    Yield one dataframe per speedup phase.
+
+    This is the thing every speedup comparison plot should use.
+    """
+    df_plot = prepare_speedup_comparison_data(df_speedup)
+
+    if phases is None:
+        phases = available_speedup_phases(df_plot)
+
+    for phase in phases:
+        phase_df = filter_bench(df_plot, phase=phase)
+
+        if not phase_df.empty:
+            yield phase, phase_df
