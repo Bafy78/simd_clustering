@@ -3,42 +3,45 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 
+
 def create_subplot_grid(n_plots, cols=2, row_height=5, fig_width=12):
     """Handles the boilerplate for dynamic grid layouts and unused axes."""
     rows = math.ceil(n_plots / cols)
-    fig, axes = plt.subplots(nrows=rows, ncols=cols, figsize=(fig_width, row_height * rows))
-    
+    fig, axes = plt.subplots(
+        nrows=rows, ncols=cols, figsize=(fig_width, row_height * rows)
+    )
+
     axes = axes.flatten() if n_plots > 1 else np.array([axes])
-    
+
     for j in range(n_plots, len(axes)):
         fig.delaxes(axes[j])
-        
+
     return fig, axes
+
 
 def format_abbrev(num):
     num = float(num)
     if num >= 1e9:
         val = num / 1e9
-        suffix = 'B'
+        suffix = "B"
     elif num >= 1e6:
         val = num / 1e6
-        suffix = 'M'
+        suffix = "M"
     elif num >= 1e3:
         val = num / 1e3
-        suffix = 'K'
+        suffix = "K"
     else:
         val = num
-        suffix = ''
-    
+        suffix = ""
+
     # Format to 1 decimal place, then remove trailing '.0' if it's a whole number
     return f"{val:.1f}".replace(".0", "") + suffix
 
+
 small_multiple_title_style = dict(
-        boxstyle="round,pad=0.3", 
-        facecolor="black",
-        alpha=0.1,        
-        edgecolor="none"  
-    )
+    boxstyle="round,pad=0.3", facecolor="black", alpha=0.1, edgecolor="none"
+)
+
 
 def _extract_and_remove_figure_legend(
     g,
@@ -126,6 +129,7 @@ def _add_legend_to_row_ends(
 
     return g
 
+
 def move_facet_legend_to_row_ends(
     g,
     *,
@@ -171,13 +175,20 @@ def style_facet_grid(
         _put_facet_titles_inside(g)
 
     if title is not None:
-        g.figure.suptitle(title, y=title_y, fontsize= 16, fontweight= "bold",)
+        g.figure.suptitle(
+            title,
+            y=title_y,
+            fontsize=16,
+            fontweight="bold",
+        )
 
     for ax in g.axes.flat:
         ax.tick_params(labelbottom=True)
 
         if sample_x_axis:
-            ax.xaxis.set_major_formatter(mtick.FuncFormatter(lambda x, _: format_abbrev(x)))
+            ax.xaxis.set_major_formatter(
+                mtick.FuncFormatter(lambda x, _: format_abbrev(x))
+            )
 
         if grid_axis is not None:
             ax.grid(axis=grid_axis, linestyle="--", alpha=0.7)

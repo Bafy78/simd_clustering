@@ -5,10 +5,12 @@
 #include "../include/io_utils.hpp"
 #include "../include/kmeans_lloyd.hpp"
 
-int main(int argc, char* argv[]) {
-    if (argc < 9) {
+int main(int argc, char* argv[])
+{
+    if (argc < 9)
+    {
         std::cerr << "Usage: " << argv[0]
-                << " <binary_file> <n_samples> <n_clusters> <init_centroids_bin> <output_file> <nanobench_json_out> <bench_epochs> <min_epoch_seconds>\n";
+            << " <binary_file> <n_samples> <n_clusters> <init_centroids_bin> <metrics_json_out> <nanobench_json_out> <bench_epochs> <min_epoch_seconds>\n";
         return 1;
     }
 
@@ -16,14 +18,13 @@ int main(int argc, char* argv[]) {
     std::size_t n_samples = std::stoull(argv[2]);
     int n_clusters = std::stoi(argv[3]);
     std::string init_centroids_bin = argv[4];
-    std::string out_filename = argv[5];
+    std::string metrics_json_out = argv[5];
     std::string nanobench_out = argv[6];
     std::size_t bench_epochs = std::stoull(argv[7]);
     double min_epoch_seconds = std::stod(argv[8]);
 
     auto min_epoch_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::duration<double>(min_epoch_seconds)
-    );
+        std::chrono::duration<double>(min_epoch_seconds));
 
     // Setup: Convert to SoA and read Orchestrator centroids (not benchmarked)
     auto points = read_dataset_soa(filename, n_samples);
@@ -31,9 +32,13 @@ int main(int argc, char* argv[]) {
 
     ankerl::nanobench::Bench bench;
     bench.title("EVE K-Means " + std::to_string(TUPLE_SIZE) + "D (Lloyd Iterations)")
-         .unit("run").warmup(1).epochs(bench_epochs).minEpochTime(min_epoch_time)
-         .performanceCounters(false).output(nullptr);
-    
+        .unit("run")
+        .warmup(1)
+        .epochs(bench_epochs)
+        .minEpochTime(min_epoch_time)
+        .performanceCounters(false)
+        .output(nullptr);
+
     std::vector<PointType> final_centroids;
     std::vector<int, eve::aligned_allocator<int>> final_assignments;
     int iterations_to_converge = 0;
@@ -47,14 +52,19 @@ int main(int argc, char* argv[]) {
         ankerl::nanobench::doNotOptimizeAway(centroid_assignments.data());
 
         final_centroids.swap(current_centroids);
-        final_assignments.swap(centroid_assignments);
-    });
+        final_assignments.swap(centroid_assignments); });
 
     std::ofstream bench_out(nanobench_out);
     bench.render(ankerl::nanobench::templates::pyperf(), bench_out);
-    
-    // Save final results for verification
-    write_results(out_filename, final_centroids, final_assignments, n_clusters, iterations_to_converge);
+
+    // Save compact final metrics for verification.
+    write_lloyd_metrics(
+        metrics_json_out,
+        points,
+        final_centroids,
+        final_assignments,
+        n_clusters,
+        iterations_to_converge);
 
     return 0;
 }

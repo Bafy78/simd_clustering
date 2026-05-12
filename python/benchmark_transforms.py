@@ -7,6 +7,7 @@ from .benchmark_constants import *
 def _is_sequence_filter(value):
     return isinstance(value, (list, tuple, set, pd.Index, np.ndarray))
 
+
 def filter_bench(
     df,
     *,
@@ -16,10 +17,6 @@ def filter_bench(
     samples=None,
     clusters=None,
 ):
-    """Return a filtered copy of a benchmark dataframe.
-
-    Each argument can be either a single value or a list/set/tuple of values.
-    """
     mask = pd.Series(True, index=df.index)
 
     filters = {
@@ -34,6 +31,9 @@ def filter_bench(
         if value is None:
             continue
 
+        if col not in df.columns:
+            raise KeyError(f"Missing column {col!r}")
+
         if _is_sequence_filter(value):
             mask &= df[col].isin(value)
         else:
@@ -42,97 +42,208 @@ def filter_bench(
     return df.loc[mask].copy()
 
 
-def mean_time_by_config(df, group_cols=None):
-    """Compute mean benchmark time grouped by configuration columns."""
-    if group_cols is None:
-        group_cols = CONFIG_LANGUAGE_COLS
+def add_time_per_iteration_columns(df):
+    result = df.copy()
 
-    return (
-        df.groupby(group_cols, observed=True)[COL_TIME_S]
-        .mean()
-        .reset_index()
+    if "time_per_iteration_s_median" not in result.columns:
+        raise KeyError(
+            "Expected column 'time_per_iteration_s_median' from benchmark_summary.json"
+        )
+
+    result[COL_TIME_PER_ITER] = result["time_per_iteration_s_median"]
+    result[COL_TIME_PER_ITER_MS] = result[COL_TIME_PER_ITER] * 1000.0
+
+    return result
+
+
+def add_total_time_ms_column(df):
+    result = df.copy()
+    result["Total_Time_ms"] = result[COL_TIME_S] * 1000.0
+    return result
+
+
+def require_speedup_columns(df):
+    required = [
+        COL_PHASE,
+        COL_DIMENSIONS,
+        COL_SAMPLES,
+        COL_CLUSTERS,
+        COL_SPEEDUP,
+        COL_SPEEDUP_CI_LOW,
+        COL_SPEEDUP_CI_HIGH,
+    ]
+
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise KeyError(
+            "Expected a post-processed speedup dataframe from "
+            f"load_speedup_summary(); missing columns: {missing}"
+        )
+
+
+def add_ci_error_columns(
+    df_speedup,
+):
+    require_speedup_columns(df_speedup)
+
+    result = df_speedup.copy()
+    result[COL_SPEEDUP_CI_LOWER_ERROR] = (
+        result[COL_SPEEDUP] - result[COL_SPEEDUP_CI_LOW]
+    )
+    result[COL_SPEEDUP_CI_UPPER_ERROR] = (
+        result[COL_SPEEDUP_CI_HIGH] - result[COL_SPEEDUP]
+    )
+    result[COL_SPEEDUP_ERROR_WIDTH] = (
+        result[COL_SPEEDUP_CI_HIGH] - result[COL_SPEEDUP_CI_LOW]
     )
 
-def add_speedup(
+    return result
+
+
+def add_speedup_retention(
+    df_speedup,
+    *,
+    base_clusters=None,
+    group_cols=None,
+):
+    require_speedup_columns(df_speedup)
+
+    if group_cols is None:
+        group_cols = [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES]
+
+    result = df_speedup.copy()
+
+    if base_clusters is None:
+        base_clusters = int(result[COL_CLUSTERS].min())
+
+    baseline = (
+        result[result[COL_CLUSTERS] == base_clusters]
+        .loc[:, group_cols + [COL_SPEEDUP]]
+        .rename(columns={COL_SPEEDUP: COL_BASE_SPEEDUP})
+    )
+
+    result = result.merge(
+        baseline,
+        on=group_cols,
+        how="left",
+        validate="many_to_one",
+    )
+
+    if result[COL_BASE_SPEEDUP].isna().any():
+        missing = result[result[COL_BASE_SPEEDUP].isna()]
+        raise RuntimeError(
+            "Missing baseline speedup rows for some configurations. "
+            f"Example rows:\n{missing.head()}"
+        )
+
+    result[COL_RETENTION] = result[COL_SPEEDUP] / result[COL_BASE_SPEEDUP] * 100.0
+
+    return result
+
+
+def add_time_per_iteration_per_sample_columns(
     df,
     *,
-    numerator_col=LANG_PY,
-    denominator_col=LANG_CPP,
-    out_col=COL_SPEEDUP,
+    statistic: str = "median",
+    spread: str = "iqr",
+    scale: float = 1000.0,
 ):
-    """Return a copy of df with a speedup column added.
+    """
+    Add per-iteration-per-sample timing columns from benchmark_summary.json stats.
 
-    Default interpretation:
-    speedup = Python time / C++ time
+    The default center is the median time_per_iteration_s divided by samples.
+    The default spread is IQR, i.e. p25 to p75, which matches a median-centered plot.
+
+    Parameters
+    ----------
+    statistic:
+        Center statistic from time_per_iteration_s, for example "median" or "mean".
+
+    spread:
+        Run-to-run spread to show as error bars.
+
+        Supported values:
+        - "iqr" or "p25_p75": p25 to p75
+        - "p05_p95": p05 to p95
+        - "stddev": center ± stddev
+        - "mad": center ± MAD
+
+    scale:
+        Unit scale. Use 1000.0 to convert seconds to milliseconds.
     """
     result = df.copy()
 
-    missing_cols = [
-        col for col in [numerator_col, denominator_col]
-        if col not in result.columns
-    ]
-    if missing_cols:
-        raise KeyError(f"Missing required columns for speedup: {missing_cols}")
+    prefix = "time_per_iteration_s"
+    center_col = f"{prefix}_{statistic}"
 
-    result[out_col] = result[numerator_col] / result[denominator_col]
+    if center_col not in result.columns:
+        raise KeyError(
+            f"Expected column {center_col!r}. "
+            "Did load_benchmark_data() copy time_per_iteration_s stats?"
+        )
+
+    if COL_SAMPLES not in result.columns:
+        raise KeyError(f"Missing required column {COL_SAMPLES!r}")
+
+    result[COL_TIME_PER_ITER_PER_SAMPLE_MS] = (
+        result[center_col] / result[COL_SAMPLES] * scale
+    )
+
+    if spread in {"iqr", "p25_p75"}:
+        low_col = f"{prefix}_p25"
+        high_col = f"{prefix}_p75"
+        spread_label = "p25–p75"
+
+        _require_columns(result, [low_col, high_col])
+
+        low = result[low_col] / result[COL_SAMPLES] * scale
+        high = result[high_col] / result[COL_SAMPLES] * scale
+
+    elif spread == "p05_p95":
+        low_col = f"{prefix}_p05"
+        high_col = f"{prefix}_p95"
+        spread_label = "p05–p95"
+
+        _require_columns(result, [low_col, high_col])
+
+        low = result[low_col] / result[COL_SAMPLES] * scale
+        high = result[high_col] / result[COL_SAMPLES] * scale
+
+    elif spread in {"stddev", "mad"}:
+        spread_col = f"{prefix}_{spread}"
+        spread_label = f"± {spread}"
+
+        _require_columns(result, [spread_col])
+
+        err = result[spread_col] / result[COL_SAMPLES] * scale
+        low = result[COL_TIME_PER_ITER_PER_SAMPLE_MS] - err
+        high = result[COL_TIME_PER_ITER_PER_SAMPLE_MS] + err
+
+    else:
+        raise ValueError(
+            "Unsupported spread. Expected one of: "
+            "'iqr', 'p25_p75', 'p05_p95', 'stddev', 'mad'."
+        )
+
+    result[COL_TIME_PER_ITER_PER_SAMPLE_LOW_MS] = low.clip(lower=0)
+    result[COL_TIME_PER_ITER_PER_SAMPLE_HIGH_MS] = high
+
+    result[COL_TIME_PER_ITER_PER_SAMPLE_LOWER_ERROR_MS] = (
+        result[COL_TIME_PER_ITER_PER_SAMPLE_MS]
+        - result[COL_TIME_PER_ITER_PER_SAMPLE_LOW_MS]
+    )
+
+    result[COL_TIME_PER_ITER_PER_SAMPLE_UPPER_ERROR_MS] = (
+        result[COL_TIME_PER_ITER_PER_SAMPLE_HIGH_MS]
+        - result[COL_TIME_PER_ITER_PER_SAMPLE_MS]
+    )
+
+    result[COL_RUN_TO_RUN_SPREAD] = spread_label
+
     return result
 
 
-def compute_language_speedup(
-    df,
-    *,
-    phase=None,
-    group_cols=None,
-):
-    """Compute mean Python-vs-C++ speedup for matching benchmark configs."""
-    if group_cols is None:
-        group_cols = CONFIG_COLS
-
-    group_cols = list(group_cols)
-
-    if phase is not None:
-        df = filter_bench(df, phase=phase)
-
-    df_mean = mean_time_by_config(
-        df,
-        group_cols=group_cols + [COL_LANGUAGE],
-    )
-
-    df_pivot = df_mean.pivot(
-        index=group_cols,
-        columns=COL_LANGUAGE,
-        values=COL_TIME_S,
-    ).reset_index()
-
-    return add_speedup(df_pivot)
-
-
-def compute_cpp_speedup_against_python_mean(
-    df,
-    *,
-    group_cols=None,
-):
-    """Compare each raw C++ run against the mean Python time for the same config.
-
-    This preserves C++ run-level variance, which is useful for Seaborn error bands.
-    """
-    if group_cols is None:
-        group_cols = PHASE_CONFIG_COLS
-
-    group_cols = list(group_cols)
-
-    py_means = mean_time_by_config(
-        filter_bench(df, language=LANG_PY),
-        group_cols=group_cols,
-    ).rename(columns={COL_TIME_S: COL_PY_MEAN_TIME})
-
-    df_cpp = filter_bench(df, language=LANG_CPP)
-
-    result = pd.merge(
-        df_cpp,
-        py_means,
-        on=group_cols,
-    )
-
-    result[COL_SPEEDUP] = result[COL_PY_MEAN_TIME] / result[COL_TIME_S]
-    return result
+def _require_columns(df, columns):
+    missing = [col for col in columns if col not in df.columns]
+    if missing:
+        raise KeyError(f"Missing required columns: {missing}")

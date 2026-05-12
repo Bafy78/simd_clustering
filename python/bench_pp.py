@@ -1,19 +1,16 @@
 import pyperf
 
-memmap = None
-float32 = None
+np = None
 kmeans_plusplus = None
 
 
 def import_runtime_deps():
-    global memmap, float32, kmeans_plusplus
+    global np, kmeans_plusplus
 
-    from numpy import memmap as _memmap
-    from numpy import float32 as _float32
+    import numpy as _np
     from sklearn.cluster import kmeans_plusplus as _kmeans_plusplus
 
-    memmap = _memmap
-    float32 = _float32
+    np = _np
     kmeans_plusplus = _kmeans_plusplus
 
 
@@ -23,9 +20,9 @@ def run_kmeans_pp(X, n_clusters):
 
 
 def load_dataset(args):
-    return memmap(
+    return np.memmap(
         args.dataset_bin,
-        dtype=float32,
+        dtype=np.float32,
         mode="r",
         shape=(args.n_samples, args.n_features),
     )
