@@ -59,6 +59,7 @@ inline std::vector<PointType> read_initial_centroids_binary(const std::string& f
 // To compute inertia. We could also do it in SIMD by simply asking `assign_points_to_centroid` to
 // do a sum reduction and then get the result at the last iteration in k-means, but that would slow down the
 // algorithm. So we're keeping it as a separate step for now.
+// We're doing double because else the calculation is imprecise and doesn't match scikit
 template <eve::product_type PointT>
 double compute_scalar_dist_sq(const PointT& point, const PointT& centroid) {
     double dist_sq = 0.0;
