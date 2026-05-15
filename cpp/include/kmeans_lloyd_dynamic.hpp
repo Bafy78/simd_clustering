@@ -654,6 +654,7 @@ struct tiled_kmeans_backend {
 
     void check_cluster_count() const {
         kmeans::check_cluster_count_fits<label_type>(centroids.n_clusters);
+        kmeans::check_cluster_count(centroids.n_clusters, points.n_samples);
     }
 
     assignment_vector make_assignment_vector(label_type initial_value) const {

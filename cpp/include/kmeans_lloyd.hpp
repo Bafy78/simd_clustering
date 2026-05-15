@@ -232,6 +232,7 @@ struct kumi_kmeans_backend {
 
     void check_cluster_count() const {
         kmeans::check_cluster_count_fits<label_type>(centroids.size());
+        kmeans::check_cluster_count(centroids.size(), points.size());
     }
 
     assignment_vector make_assignment_vector(label_type initial_value) const {

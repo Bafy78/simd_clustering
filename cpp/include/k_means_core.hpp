@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <numeric>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
@@ -45,6 +44,16 @@ inline void check_cluster_count_fits(std::size_t n_clusters) {
 
     if (n_clusters > max_clusters_for_label_v<Label>) {
         throw std::invalid_argument("n_clusters exceeds label_t capacity");
+    }
+}
+
+inline void check_cluster_count(std::size_t n_clusters, std::size_t n_samples) {
+    if (n_clusters == 0) {
+        throw std::invalid_argument("n_clusters must be greater than zero");
+    }
+
+    if (n_clusters > n_samples) {
+        throw std::invalid_argument("n_clusters must be <= n_samples");
     }
 }
 
@@ -145,46 +154,56 @@ void resolve_dead_centroids_common(
 
     if (n_empty == 0) return;
 
+    // Dead-cluster repair keeps sample ids in uint32_t. 
+    // This path assumes n_samples <= UINT32_MAX
+    if (n_samples > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        throw std::length_error("dead-centroid repair requires n_samples <= UINT32_MAX");
+    }
+
+    struct candidate_t {
+        float distance;
+        std::uint32_t index;
+    };
+
     // Compute distance of each point to its currently assigned old centroid:
     // sklearn: distances = ((X - centers_old[labels]) ** 2).sum(axis=1)
-    std::vector<float> distances(n_samples);
-
-    float max_distance = 0.0f;
+    std::vector<candidate_t> farthest_candidates;
 
     for (std::size_t i = 0; i < n_samples; ++i) {
         const std::size_t label = static_cast<std::size_t>(assignments[i]);
-
         const float dist = ops.distance_to_old_centroid(i, label);
 
-        distances[i] = dist;
-        max_distance = std::max(max_distance, dist);
+        if (farthest_candidates.empty()) {
+            if (dist == 0.0f) continue;
+
+            farthest_candidates.reserve(n_samples);
+
+            for (std::uint32_t j = 0; j < static_cast<std::uint32_t>(i); ++j) {
+                farthest_candidates.push_back({ 0.0f, j });
+            }
+        }
+
+        farthest_candidates.push_back({ dist, static_cast<std::uint32_t>(i) });
     }
 
     // sklearn returns early when all distances are exactly zero.
     // This happens when there are more clusters than distinct non-duplicate samples.
-    if (max_distance == 0.0f) return;
+    if (farthest_candidates.empty()) return;
 
     // Select the n_empty farthest points globally.
     // sklearn uses np.argpartition(...)[-n_empty:][::-1].
-    std::vector<std::size_t> farthest_indices(n_samples);
-    std::iota(
-        farthest_indices.begin(),
-        farthest_indices.end(),
-        std::size_t{ 0 }
-    );
-
-    auto farther = [&](std::size_t a, std::size_t b) {
-        if (distances[a] != distances[b]) {
-            return distances[a] > distances[b];
+    auto farther = [](const candidate_t& a, const candidate_t& b) {
+        if (a.distance != b.distance) {
+            return a.distance > b.distance;
         }
 
-        return a < b;
+        return a.index < b.index;
     };
 
     std::partial_sort(
-        farthest_indices.begin(),
-        farthest_indices.begin() + static_cast<std::ptrdiff_t>(n_empty),
-        farthest_indices.end(),
+        farthest_candidates.begin(),
+        farthest_candidates.begin() + static_cast<std::ptrdiff_t>(n_empty),
+        farthest_candidates.end(),
         farther
     );
 
@@ -194,7 +213,7 @@ void resolve_dead_centroids_common(
     // labels / assignments are NOT changed here. Only the sums and counts are changed.
     for (std::size_t idx = 0; idx < n_empty; ++idx) {
         const std::size_t new_cluster_id = empty_clusters[idx];
-        const std::size_t far_idx = farthest_indices[idx];
+        const std::size_t far_idx = static_cast<std::size_t>(farthest_candidates[idx].index);
 
         const std::size_t old_cluster_id = static_cast<std::size_t>(assignments[far_idx]);
 
