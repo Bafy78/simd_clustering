@@ -17,8 +17,7 @@
 using PointType = kumi::result::fill_t<TUPLE_SIZE, float>;
 
 // --- Helper: Read Raw Binary Data & Convert to SoA (For Setup) ---
-inline eve::algo::soa_vector<PointType> read_dataset_soa(const std::string& filename, std::size_t n_samples)
-{
+inline eve::algo::soa_vector<PointType> read_dataset_soa(const std::string& filename, std::size_t n_samples) {
     std::vector<float> raw_aos_data(n_samples * TUPLE_SIZE);
     std::ifstream file(filename, std::ios::binary);
     if (!file)
@@ -27,28 +26,24 @@ inline eve::algo::soa_vector<PointType> read_dataset_soa(const std::string& file
     file.read(reinterpret_cast<char*>(raw_aos_data.data()), raw_aos_data.size() * sizeof(float));
 
     eve::algo::soa_vector<PointType> points(n_samples);
-    for (std::size_t i = 0; i < n_samples; ++i)
-    {
+    for (std::size_t i = 0; i < n_samples; ++i) {
         PointType pt;
         kumi::for_each_index([&](auto index, auto& element)
-            { element = raw_aos_data[i * TUPLE_SIZE + index]; }, pt);
+        { element = raw_aos_data[i * TUPLE_SIZE + index]; }, pt);
         points.set(i, pt);
     }
     return points;
 }
 
 // --- Helper: Read Orchestrator's Initial Centroids ---
-inline std::vector<PointType> read_initial_centroids_binary(const std::string& filename, int n_clusters)
-{
+inline std::vector<PointType> read_initial_centroids_binary(const std::string& filename, int n_clusters) {
     std::vector<PointType> centroids(n_clusters);
     std::ifstream in(filename, std::ios::binary);
     if (!in)
         throw std::runtime_error("Error: Could not open initial centroids file " + filename);
 
-    for (auto& c : centroids)
-    {
-        [&] <std::size_t... I>(std::index_sequence<I...>)
-        {
+    for (auto& c : centroids) {
+        [&] <std::size_t... I>(std::index_sequence<I...>) {
             (..., in.read(reinterpret_cast<char*>(&get<I>(c)), sizeof(float)));
         }(std::make_index_sequence<TUPLE_SIZE>{});
     }
@@ -66,9 +61,9 @@ double compute_scalar_dist_sq(const PointT& point, const PointT& centroid) {
 
     kumi::for_each(
         [&dist_sq](auto p, auto c) {
-            double diff = static_cast<double>(p) - static_cast<double>(c);
-            dist_sq += diff * diff;
-        },
+        double diff = static_cast<double>(p) - static_cast<double>(c);
+        dist_sq += diff * diff;
+    },
         point,
         centroid
     );

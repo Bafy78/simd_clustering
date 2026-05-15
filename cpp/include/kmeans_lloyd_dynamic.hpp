@@ -13,6 +13,8 @@
 #include <eve/wide.hpp>
 #include <eve/memory/aligned_allocator.hpp>
 
+#include "./k_means_core.hpp"
+
 using wide_f = eve::wide<float>;
 using wide_i = eve::wide<int, typename wide_f::cardinal_type>;
 
@@ -27,23 +29,13 @@ inline std::size_t round_up_to_multiple(std::size_t n, std::size_t multiple) {
     return ((n + multiple - 1) / multiple) * multiple;
 }
 
-template<std::size_t D, typename Function>
-inline constexpr void for_each_feature(Function&& f) {
-    auto&& fn = f;
-    kumi::for_each_index(
-        [&](auto index, auto) { fn(index); },
-        kumi::fill<D>(0)
-    );
-}
-
 // Static-D feature-major point view:
 //
 //     points[d][i]
 //
 // D is compile-time.
 // stride is runtime because n_samples is runtime.
-// stride is padded to SIMD cardinality so each feature column can be loaded
-// safely in SIMD chunks.
+// stride is padded to SIMD cardinality so each feature column can be loaded safely in SIMD chunks
 template<std::size_t D>
 struct points_soa_view {
     static constexpr std::size_t n_features = D;
@@ -108,7 +100,7 @@ struct points_soa_storage {
         return points_soa_view<D>{
             .data = data.data(),
                 .n_samples = n_samples,
-                .stride = stride
+                .stride = stride,
         };
     }
 };
@@ -180,7 +172,7 @@ struct centroids_storage {
     void sync_feature_major_from_row_major() {
         std::fill(feature_major.begin(), feature_major.end(), 0.0f);
 
-        for_each_feature<D>([&](auto feature_index) {
+        kmeans::for_each_feature<D>([&](auto feature_index) {
             constexpr std::size_t d = decltype(feature_index)::value;
 
             float* dst = feature_major.data() + d * feature_major_stride;
@@ -188,7 +180,7 @@ struct centroids_storage {
             for (std::size_t k = 0; k < n_clusters; ++k) {
                 dst[k] = row_major[k * D + d];
             }
-            });
+        });
     }
 };
 
@@ -209,7 +201,7 @@ inline void process_centroid_tile(
 ) {
     auto distances = kumi::fill<K_TILE>(eve::zero(eve::as<wide_f>()));
 
-    for_each_feature<D>([&](auto feature_index) {
+    kmeans::for_each_feature<D>([&](auto feature_index) {
         constexpr std::size_t d = decltype(feature_index)::value;
 
         // points are feature-major:
@@ -225,32 +217,32 @@ inline void process_centroid_tile(
 
         kumi::for_each_index(
             [&](auto index, auto& dist) {
-                constexpr std::size_t t = decltype(index)::value;
+            constexpr std::size_t t = decltype(index)::value;
 
-                auto c = wide_f(centroid_feature[t]);
-                auto diff = x - c;
+            auto c = wide_f(centroid_feature[t]);
+            auto diff = x - c;
 
-                dist = eve::fma(diff, diff, dist);
-            },
+            dist = eve::fma(diff, diff, dist);
+        },
             distances
         );
-        });
+    });
 
     kumi::for_each_index(
         [&](auto index, auto dist) {
-            constexpr std::size_t t = decltype(index)::value;
+        constexpr std::size_t t = decltype(index)::value;
 
-            const auto candidate_k = static_cast<int>(k0 + t);
-            auto closer = dist < best_dist;
+        const auto candidate_k = static_cast<int>(k0 + t);
+        auto closer = dist < best_dist;
 
-            best_dist = eve::min(best_dist, dist);
+        best_dist = eve::min(best_dist, dist);
 
-            best_k = eve::if_else(
-                closer,
-                wide_i(candidate_k),
-                best_k
-            );
-        },
+        best_k = eve::if_else(
+            closer,
+            wide_i(candidate_k),
+            best_k
+        );
+    },
         distances
     );
 }
@@ -386,55 +378,20 @@ void assign_points_to_centroids_tiled(
 }
 
 template<std::size_t D>
-inline float compute_sklearn_tolerance(points_soa_view<D> points, float tol) {
-    if (tol == 0.0f) return 0.0f;
-
-    const std::size_t n = points.n_samples;
-
-    if (n == 0) return 0.0f;
-
-    std::array<float, D> means{};
-
-    // Accumulate mean for each feature.
-    // points are feature-major, so this is cache-friendly.
-    for_each_feature<D>([&](auto feature_index) {
+inline float compute_sklearn_tolerance(
+    points_soa_view<D> points,
+    float tol
+) {
+    auto sample_value = [&](auto feature_index, std::size_t sample_i) {
         constexpr std::size_t d = decltype(feature_index)::value;
+        return points.template feature<d>()[sample_i];
+    };
 
-        const float* x = points.template feature<d>();
-
-        float sum = 0.0f;
-
-        for (std::size_t i = 0; i < n; ++i) {
-            sum += x[i];
-        }
-
-        means[d] = sum / static_cast<float>(n);
-        });
-
-    float total_variance = 0.0f;
-
-    // Accumulate variance for each feature.
-    for_each_feature<D>([&](auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-
-        const float* x = points.template feature<d>();
-        const float mean = means[d];
-
-        float variance = 0.0f;
-
-        for (std::size_t i = 0; i < n; ++i) {
-            const float diff = x[i] - mean;
-            variance += diff * diff;
-        }
-
-        total_variance += variance / static_cast<float>(n);
-        });
-
-    const float mean_variance =
-        total_variance / static_cast<float>(D);
-
-    // Scikit-learn returns mean(variances) * tol.
-    return mean_variance * tol;
+    return kmeans::compute_sklearn_tolerance_common<D>(
+        points.n_samples,
+        sample_value,
+        tol
+    );
 }
 
 template<std::size_t D>
@@ -448,14 +405,14 @@ inline float point_to_centroid_dist_sq(
 
     float dist = 0.0f;
 
-    for_each_feature<D>([&](auto feature_index) {
+    kmeans::for_each_feature<D>([&](auto feature_index) {
         constexpr std::size_t d = decltype(feature_index)::value;
 
         const float diff =
             points.template feature<d>()[sample_i] - centroid[d];
 
         dist += diff * diff;
-        });
+    });
 
     return dist;
 }
@@ -468,96 +425,46 @@ inline void resolve_dead_centroids(
     std::span<float> sums_row_major,
     std::span<int> counts
 ) {
-    const std::size_t n_samples = points.n_samples;
-    const std::size_t n_clusters = counts.size();
+    struct ops_t {
+        points_soa_view<D> points;
+        std::span<const float> old_centroids_row_major;
+        std::span<float> sums_row_major;
 
-    // Find empty clusters, in cluster-id order, matching np.where(counts == 0)[0].
-    std::vector<std::size_t> empty_clusters;
-    empty_clusters.reserve(n_clusters);
+        std::size_t n_samples() const { return points.n_samples; }
 
-    for (std::size_t k = 0; k < n_clusters; ++k) {
-        if (counts[k] == 0) {
-            empty_clusters.push_back(k);
-        }
-    }
-
-    const std::size_t n_empty = empty_clusters.size();
-
-    if (n_empty == 0) return;
-
-    // Compute distance of each point to its currently assigned old centroid:
-    // sklearn: distances = ((X - centers_old[labels]) ** 2).sum(axis=1)
-    std::vector<float> distances(n_samples);
-
-    float max_distance = 0.0f;
-
-    for (std::size_t i = 0; i < n_samples; ++i) {
-        const int label = assignments[i];
-
-        const float dist = point_to_centroid_dist_sq<D>(
-            points,
-            i,
-            old_centroids_row_major,
-            static_cast<std::size_t>(label)
-        );
-
-        distances[i] = dist;
-        max_distance = std::max(max_distance, dist);
-    }
-
-    // sklearn returns early when all distances are exactly zero.
-    // This happens when there are more clusters than distinct non-duplicate samples.
-    if (max_distance == 0.0f) return;
-
-    // Select the n_empty farthest points globally.
-    // sklearn uses np.argpartition(...)[-n_empty:][::-1].
-    std::vector<std::size_t> farthest_indices(n_samples);
-    std::iota(farthest_indices.begin(), farthest_indices.end(), std::size_t{ 0 });
-
-    auto farther = [&](std::size_t a, std::size_t b) {
-        if (distances[a] != distances[b]) {
-            return distances[a] > distances[b];
+        float distance_to_old_centroid(std::size_t sample_i, int old_label) const {
+            return point_to_centroid_dist_sq<D>(
+                points,
+                sample_i,
+                old_centroids_row_major,
+                static_cast<std::size_t>(old_label)
+            );
         }
 
-        return a < b;
-        };
+        void relocate_empty_cluster(
+            std::size_t old_cluster_id,
+            std::size_t new_cluster_id,
+            std::size_t sample_i
+        ) {
+            float* old_sum = sums_row_major.data() + old_cluster_id * D;
+            float* new_sum = sums_row_major.data() + new_cluster_id * D;
 
-    std::partial_sort(
-        farthest_indices.begin(),
-        farthest_indices.begin() + static_cast<std::ptrdiff_t>(n_empty),
-        farthest_indices.end(),
-        farther
-    );
-
-    // Relocate each empty cluster using one farthest point.
-    // Important sklearn detail:
-    // labels / assignments are NOT changed here. Only the sums and counts are changed.
-    for (std::size_t idx = 0; idx < n_empty; ++idx) {
-        const std::size_t new_cluster_id = empty_clusters[idx];
-        const std::size_t far_idx = farthest_indices[idx];
-
-        const int old_cluster_id_int = assignments[far_idx];
-        const std::size_t old_cluster_id =
-            static_cast<std::size_t>(old_cluster_id_int);
-
-        float* old_sum = sums_row_major.data() + old_cluster_id * D;
-        float* new_sum = sums_row_major.data() + new_cluster_id * D;
-
-        for_each_feature<D>([&](auto feature_index) {
-            constexpr std::size_t d = decltype(feature_index)::value;
-
-            const float x = points.template feature<d>()[far_idx];
-
-            // sum[old_cluster_id] -= X[far_idx]
-            old_sum[d] -= x;
-
-            // sum[new_cluster_id] = X[far_idx]
-            new_sum[d] = x;
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                const float x = points.template feature<d>()[sample_i];
+                old_sum[d] -= x;
+                new_sum[d] = x;
             });
+        }
+    };
 
-        counts[old_cluster_id] -= 1;
-        counts[new_cluster_id] = 1;
-    }
+    ops_t ops{ points, old_centroids_row_major, sums_row_major };
+
+    kmeans::resolve_dead_centroids_common(
+        ops,
+        std::span<const int>(assignments.data(), assignments.size()),
+        counts
+    );
 }
 
 template<std::size_t D>
@@ -568,103 +475,165 @@ inline void update_centroids(
     aligned_float_vector& sums_row_major,
     aligned_int_vector& counts
 ) {
-    const std::size_t n_samples = points.n_samples;
     const std::size_t n_clusters = centroids.n_clusters;
 
     if (sums_row_major.size() != n_clusters * D) {
         sums_row_major.assign(n_clusters * D, 0.0f);
     }
-    else {
-        std::fill(sums_row_major.begin(), sums_row_major.end(), 0.0f);
-    }
 
     if (counts.size() != n_clusters) {
         counts.assign(n_clusters, 0);
     }
-    else {
-        std::fill(counts.begin(), counts.end(), 0);
-    }
 
-    // Accumulate sums and counts.
-    //
-    // Same logic as before, but D is compile-time, so the feature loop is
-    // unrolled. This keeps the update step aligned with the static-D design.
-    for (std::size_t i = 0; i < n_samples; ++i) {
-        const int cluster_idx_int = assignments[i];
+    struct ops_t {
+        points_soa_view<D> points;
+        centroids_storage<D>& centroids;
+        aligned_float_vector& sums_row_major;
 
-        const std::size_t cluster_idx =
-            static_cast<std::size_t>(cluster_idx_int);
+        std::size_t n_samples() const { return points.n_samples; }
+        std::size_t n_clusters() const { return centroids.n_clusters; }
 
-        counts[cluster_idx]++;
-
-        float* dst = sums_row_major.data() + cluster_idx * D;
-
-        for_each_feature<D>([&](auto feature_index) {
-            constexpr std::size_t d = decltype(feature_index)::value;
-
-            dst[d] += points.template feature<d>()[i];
-            });
-    }
-
-    resolve_dead_centroids<D>(
-        points,
-        assignments,
-        std::span<const float>(
-            centroids.row_major.data(),
-            centroids.row_major.size()
-        ),
-        std::span<float>(
-            sums_row_major.data(),
-            sums_row_major.size()
-        ),
-        std::span<int>(
-            counts.data(),
-            counts.size()
-        )
-    );
-
-    // Compute the new means and update row-major centroids.
-    for (std::size_t k = 0; k < n_clusters; ++k) {
-        if (counts[k] > 0) {
-            const float inv_count = 1.0f / static_cast<float>(counts[k]);
-
-            const float* src = sums_row_major.data() + k * D;
-            float* dst = centroids.row_major.data() + k * D;
-
-            for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-
-                dst[d] = src[d] * inv_count;
-                });
+        void reset_sums() {
+            std::fill(sums_row_major.begin(), sums_row_major.end(), 0.0f);
         }
-    }
 
-    centroids.sync_feature_major_from_row_major();
+        void add_point_to_sum(std::size_t cluster_idx, std::size_t sample_i) {
+            float* dst = sums_row_major.data() + cluster_idx * D;
+
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                dst[d] += points.template feature<d>()[sample_i];
+            });
+        }
+
+        void resolve_dead_centroids(std::span<int> assignments, std::span<int> counts) {
+            ::resolve_dead_centroids<D>(
+                points,
+                assignments,
+                std::span<const float>(centroids.row_major.data(), centroids.row_major.size()),
+                std::span<float>(sums_row_major.data(), sums_row_major.size()),
+                counts
+            );
+        }
+
+        void write_centroid_from_sum(std::size_t cluster_idx, int count) {
+            const float inv_count = 1.0f / static_cast<float>(count);
+
+            const float* src = sums_row_major.data() + cluster_idx * D;
+            float* dst = centroids.row_major.data() + cluster_idx * D;
+
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                dst[d] = src[d] * inv_count;
+            });
+        }
+
+        void after_centroids_updated() {
+            centroids.sync_feature_major_from_row_major();
+        }
+    };
+
+    ops_t ops{ points, centroids, sums_row_major };
+
+    kmeans::update_centroids_common(
+        ops,
+        assignments,
+        std::span<int>(counts.data(), counts.size())
+    );
 }
+
 template<std::size_t D>
 inline float calculate_centroid_shift_sq(
     std::span<const float> old_centroids_row_major,
     std::span<const float> new_centroids_row_major
 ) {
-    float shift_sq = 0.0f;
+    const std::size_t n_clusters = new_centroids_row_major.size() / D;
 
-    const std::size_t n_clusters =
-        new_centroids_row_major.size() / D;
+    auto old_value = [&](std::size_t k, auto feature_index) {
+        constexpr std::size_t d = decltype(feature_index)::value;
+        return old_centroids_row_major[k * D + d];
+    };
 
-    for (std::size_t k = 0; k < n_clusters; ++k) {
-        const float* old_centroid = old_centroids_row_major.data() + k * D;
-        const float* new_centroid = new_centroids_row_major.data() + k * D;
+    auto new_value = [&](std::size_t k, auto feature_index) {
+        constexpr std::size_t d = decltype(feature_index)::value;
+        return new_centroids_row_major[k * D + d];
+    };
 
-        for_each_feature<D>([&](auto feature_index) {
-            constexpr std::size_t d = decltype(feature_index)::value;
+    return kmeans::calculate_centroid_shift_sq_common<D>(
+        n_clusters,
+        old_value,
+        new_value
+    );
+}
 
-            const float diff = new_centroid[d] - old_centroid[d];
-            shift_sq += diff * diff;
-            });
+template<std::size_t D, std::size_t K_TILE>
+struct tiled_kmeans_backend {
+    using assignment_vector = aligned_int_vector;
+    using counts_vector = aligned_int_vector;
+    using centroid_snapshot = aligned_float_vector;
+
+    points_soa_view<D> points;
+    centroids_storage<D>& centroids;
+
+    aligned_float_vector sums_row_major;
+
+    tiled_kmeans_backend(
+        points_soa_view<D> points_,
+        centroids_storage<D>& centroids_
+    ) : points(points_), centroids(centroids_), sums_row_major(centroids_.n_clusters* D, 0.0f) {
+        centroids.sync_feature_major_from_row_major();
     }
 
-    return shift_sq;
-}
+    assignment_vector make_assignment_vector(int initial_value) const {
+        return assignment_vector(points.n_samples, initial_value);
+    }
+
+    counts_vector make_counts_vector() const {
+        return counts_vector(centroids.n_clusters, 0);
+    }
+
+    float compute_tolerance(float tol) const {
+        return ::compute_sklearn_tolerance<D>(points, tol);
+    }
+
+    centroid_snapshot make_centroid_snapshot() const {
+        return centroid_snapshot(centroids.row_major.size(), 0.0f);
+    }
+
+    void save_centroids(centroid_snapshot& snapshot) const {
+        snapshot = centroids.row_major;
+    }
+
+    void assign(assignment_vector& assignments) const {
+        ::assign_points_to_centroids_tiled<D, K_TILE>(
+            points,
+            centroids,
+            std::span<int>(assignments.data(), assignments.size())
+        );
+    }
+
+    void update_centroids(
+        assignment_vector& assignments,
+        counts_vector& counts
+    ) {
+        ::update_centroids<D>(
+            points,
+            std::span<int>(assignments.data(), assignments.size()),
+            centroids,
+            sums_row_major,
+            counts
+        );
+    }
+
+    float centroid_shift_sq(
+        const centroid_snapshot& previous_centroids
+    ) const {
+        return ::calculate_centroid_shift_sq<D>(
+            std::span<const float>(previous_centroids.data(), previous_centroids.size()),
+            std::span<const float>(centroids.row_major.data(), centroids.row_major.size())
+        );
+    }
+};
 
 template<std::size_t D, std::size_t K_TILE>
 aligned_int_vector k_means_tiled(
@@ -678,86 +647,12 @@ aligned_int_vector k_means_tiled(
     static_assert(K_TILE > 0);
     static_assert(std::has_single_bit(K_TILE));
 
-    // Ensure assignment-friendly storage matches the initial row-major centroids.
-    centroids.sync_feature_major_from_row_major();
+    tiled_kmeans_backend<D, K_TILE> backend{ points, centroids };
 
-    aligned_int_vector centroid_assignments(points.n_samples, -1);
-    aligned_int_vector previous_assignments(points.n_samples, -1);
-
-    aligned_float_vector sums_row_major(
-        centroids.n_clusters * D,
-        0.0f
+    return kmeans::k_means_core(
+        backend,
+        out_iterations,
+        max_iterations,
+        tol
     );
-
-    aligned_int_vector counts(centroids.n_clusters, 0);
-
-    aligned_float_vector previous_centroids_row_major(
-        centroids.row_major.size(),
-        0.0f
-    );
-
-    const float scaled_tol =
-        compute_sklearn_tolerance<D>(points, tol);
-
-    bool converged = false;
-    int iterations = 0;
-
-    while (!converged && iterations < max_iterations) {
-        previous_assignments = centroid_assignments;
-
-        assign_points_to_centroids_tiled<D, K_TILE>(
-            points,
-            centroids,
-            std::span<int>(
-                centroid_assignments.data(),
-                centroid_assignments.size()
-            )
-        );
-
-        previous_centroids_row_major = centroids.row_major;
-
-        update_centroids<D>(
-            points,
-            std::span<int>(centroid_assignments.data(), centroid_assignments.size()),
-            centroids,
-            sums_row_major,
-            counts
-        );
-
-        if (std::ranges::equal(centroid_assignments, previous_assignments)) {
-            converged = true;
-        }
-        else {
-            const float shift_sq = calculate_centroid_shift_sq<D>(
-                std::span<const float>(
-                    previous_centroids_row_major.data(),
-                    previous_centroids_row_major.size()
-                ),
-                std::span<const float>(
-                    centroids.row_major.data(),
-                    centroids.row_major.size()
-                )
-            );
-
-            if (shift_sq <= scaled_tol) {
-                converged = true;
-            }
-        }
-
-        iterations++;
-    }
-
-    out_iterations = iterations;
-
-    // Post-loop step: reassign labels to perfectly match final centroid positions.
-    assign_points_to_centroids_tiled<D, K_TILE>(
-        points,
-        centroids,
-        std::span<int>(
-            centroid_assignments.data(),
-            centroid_assignments.size()
-        )
-    );
-
-    return centroid_assignments;
 }

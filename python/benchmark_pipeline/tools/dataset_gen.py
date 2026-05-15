@@ -26,6 +26,6 @@ if __name__ == "__main__":
     X_float32.tofile(args.dataset_out)
 
     # 2. Generate Initial Centroids
-    centers, _ = kmeans_plusplus(X_float32, n_clusters=args.n_clusters)
+    centers, _ = kmeans_plusplus(X_float32, n_clusters=args.n_clusters, random_state=42)
     centers_float32 = centers.astype(np.float32)
     centers_float32.tofile(args.centroids_out)
