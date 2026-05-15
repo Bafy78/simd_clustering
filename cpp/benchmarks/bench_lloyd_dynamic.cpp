@@ -27,9 +27,9 @@ points_soa_storage<TUPLE_SIZE> make_dynamic_points(
 
         kumi::for_each_index(
             [&](auto index, auto value) {
-                constexpr std::size_t d = decltype(index)::value;
-                out(i, d) = value;
-            },
+            constexpr std::size_t d = decltype(index)::value;
+            out(i, d) = value;
+        },
             pt
         );
     }
@@ -46,9 +46,9 @@ inline centroids_storage<TUPLE_SIZE> make_dynamic_centroids(
     for (std::size_t k = 0; k < static_centroids.size(); ++k) {
         kumi::for_each_index(
             [&](auto index, auto value) {
-                constexpr std::size_t d = decltype(index)::value;
-                out.row(k, d) = value;
-            },
+            constexpr std::size_t d = decltype(index)::value;
+            out.row(k, d) = value;
+        },
             static_centroids[k]
         );
     }
@@ -68,9 +68,9 @@ inline std::vector<PointType> make_static_centroids(
 
         kumi::for_each_index(
             [&](auto index, auto& value) {
-                constexpr std::size_t d = decltype(index)::value;
-                value = dynamic_centroids.row(k, d);
-            },
+            constexpr std::size_t d = decltype(index)::value;
+            value = dynamic_centroids.row(k, d);
+        },
             pt
         );
 
@@ -93,10 +93,8 @@ inline void swap_centroids_storage(
     swap(a.feature_major_stride, b.feature_major_stride);
 }
 
-int main(int argc, char* argv[])
-{
-    if (argc < 9)
-    {
+int main(int argc, char* argv[]) {
+    if (argc < 9) {
         std::cerr << "Usage: " << argv[0]
             << " <binary_file> <n_samples> <n_clusters> <init_centroids_bin> <metrics_json_out> <nanobench_json_out> <bench_epochs> <min_epoch_seconds>\n";
         return 1;
@@ -140,7 +138,8 @@ int main(int argc, char* argv[])
         .output(nullptr);
 
     centroids_storage<TUPLE_SIZE> final_dynamic_centroids;
-    aligned_int_vector final_assignments;
+    using Label = kmeans::default_label_t;
+    aligned_label_vector<Label> final_assignments;
     int iterations_to_converge = 0;
 
     bench.run("kmeans_lloyd_staticD_streamed_tiled", [&] {
@@ -148,12 +147,11 @@ int main(int argc, char* argv[])
         centroids_storage<TUPLE_SIZE> current_centroids =
             dynamic_initial_centroids;
 
-        auto centroid_assignments =
-            k_means_tiled<TUPLE_SIZE, KMEANS_K_TILE>(
-                dynamic_points,
-                current_centroids,
-                iterations_to_converge
-            );
+        auto centroid_assignments = k_means_tiled<TUPLE_SIZE, KMEANS_K_TILE, Label>(
+            dynamic_points,
+            current_centroids,
+            iterations_to_converge
+        );
 
         ankerl::nanobench::doNotOptimizeAway(current_centroids.row_major.data());
         ankerl::nanobench::doNotOptimizeAway(current_centroids.feature_major.data());
@@ -161,15 +159,14 @@ int main(int argc, char* argv[])
 
         swap_centroids_storage(final_dynamic_centroids, current_centroids);
         final_assignments.swap(centroid_assignments);
-        });
+    });
 
     std::ofstream bench_out(nanobench_out);
     bench.render(ankerl::nanobench::templates::pyperf(), bench_out);
 
     // Convert final centroids back to the original static representation so we
     // can reuse the existing verification/metrics writer unchanged.
-    auto final_centroids =
-        make_static_centroids(final_dynamic_centroids);
+    auto final_centroids = make_static_centroids(final_dynamic_centroids);
 
     write_lloyd_metrics(
         metrics_json_out,

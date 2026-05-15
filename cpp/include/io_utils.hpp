@@ -91,12 +91,12 @@ void write_point_json(std::ostream& out, const PointT& point) {
     out << "]";
 }
 
-template <eve::product_type PointT>
+template <eve::product_type PointT, class Assignments>
 void write_lloyd_metrics(
     const std::string& filename,
     const eve::algo::soa_vector<PointT>& points,
     const std::vector<PointT>& centroids,
-    std::span<const int> assignments,
+    const Assignments& assignments,
     int num_clusters,
     int iterations
 ) {
@@ -118,13 +118,17 @@ void write_lloyd_metrics(
     double total_inertia = 0.0;
 
     for (std::size_t i = 0; i < points.size(); ++i) {
-        int cluster_id = assignments[i];
+        const std::size_t cluster_id =
+            static_cast<std::size_t>(assignments[i]);
 
-        if (cluster_id < 0 || cluster_id >= num_clusters) {
+        if (cluster_id >= static_cast<std::size_t>(num_clusters)) {
             throw std::runtime_error("Invalid cluster assignment");
         }
 
-        double dist_sq = compute_scalar_dist_sq(points.get(i), centroids[cluster_id]);
+        double dist_sq = compute_scalar_dist_sq(
+            points.get(i),
+            centroids[cluster_id]
+        );
 
         cluster_counts[cluster_id] += 1;
         cluster_inertia[cluster_id] += dist_sq;
@@ -133,9 +137,7 @@ void write_lloyd_metrics(
 
     std::ofstream out(filename);
 
-    if (!out) {
-        throw std::runtime_error("Could not open Lloyd metrics output file: " + filename);
-    }
+    if (!out) throw std::runtime_error("Could not open Lloyd metrics output file: " + filename);
 
     out << std::setprecision(std::numeric_limits<double>::max_digits10);
 
@@ -151,7 +153,7 @@ void write_lloyd_metrics(
             out << ", ";
         }
 
-        out << cluster_counts[k];
+        out << cluster_counts[static_cast<std::size_t>(k)];
     }
     out << "],\n";
 
@@ -161,7 +163,7 @@ void write_lloyd_metrics(
             out << ", ";
         }
 
-        out << cluster_inertia[k];
+        out << cluster_inertia[static_cast<std::size_t>(k)];
     }
     out << "],\n";
 

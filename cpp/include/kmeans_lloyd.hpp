@@ -32,11 +32,13 @@ float compute_sklearn_tolerance(
     );
 }
 
-template <eve::algo::relaxed_range R, typename PointType>
-void assign_points_to_centroids(
+template <bool TrackChanges = false, class Label = int, eve::algo::relaxed_range R, typename PointType>
+bool assign_points_to_centroids(
     R&& zipped_data,
     const std::vector<PointType>& centroids
 ) {
+    bool any_changed = false;
+
     eve::algo::for_each(
         zipped_data,
         [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
@@ -45,8 +47,8 @@ void assign_points_to_centroids(
         auto pt = eve::load[ignore](pt_it);
 
         using wide_dist = decltype(compute_simd_dist_sq(pt, centroids[0]));
-
         using wide_index = eve::wide<int, typename wide_dist::cardinal_type>;
+        using wide_label = eve::wide<Label, typename wide_dist::cardinal_type>;
 
         auto min_distances = eve::valmax(eve::as<wide_dist>());
         auto closest_centroid_indices = eve::zero(eve::as<wide_index>());
@@ -59,15 +61,37 @@ void assign_points_to_centroids(
             closest_centroid_indices = eve::if_else(is_closer, wide_index(static_cast<int>(k)), closest_centroid_indices);
         }
 
-        eve::store[ignore](closest_centroid_indices, assign_it);
+        if constexpr (TrackChanges) {
+            if (!any_changed) {
+                const auto previous_centroid_labels = eve::load[ignore](assign_it);
+
+                const auto previous_centroid_indices = eve::convert(
+                    previous_centroid_labels,
+                    eve::as<int>()
+                );
+
+                any_changed = eve::any[ignore](
+                    closest_centroid_indices != previous_centroid_indices
+                    );
+            }
+        }
+
+        const auto closest_centroid_labels = eve::convert(
+            closest_centroid_indices,
+            eve::as<Label>()
+        );
+
+        eve::store[ignore](closest_centroid_labels, assign_it);
     }
     );
+
+    return any_changed;
 }
 
-template <eve::product_type PointType>
+template <eve::product_type PointType, class Label>
 void resolve_dead_centroids(
     const eve::algo::soa_vector<PointType>& points,
-    std::span<int> assignments,
+    std::span<const Label> assignments,
     const std::vector<PointType>& old_centroids,
     std::vector<PointType>& sum,
     std::span<int> counts
@@ -79,9 +103,9 @@ void resolve_dead_centroids(
 
         std::size_t n_samples() const { return points.size(); }
 
-        float distance_to_old_centroid(std::size_t sample_i, int old_label) const {
+        float distance_to_old_centroid(std::size_t sample_i, std::size_t old_label) const {
             const auto pt = points.get(sample_i);
-            const auto& centroid = old_centroids[static_cast<std::size_t>(old_label)];
+            const auto& centroid = old_centroids[old_label];
 
             float dist = 0.0f;
             kumi::for_each([&dist](auto p, auto c) {
@@ -107,15 +131,15 @@ void resolve_dead_centroids(
 
     kmeans::resolve_dead_centroids_common(
         ops,
-        std::span<const int>(assignments.data(), assignments.size()),
+        assignments,
         counts
     );
 }
 
-template <eve::product_type PointType>
+template <eve::product_type PointType, class Label>
 void update_centroids(
     const eve::algo::soa_vector<PointType>& points,
-    std::span<int> assignments,
+    std::span<const Label> assignments,
     std::vector<PointType>& centroids,
     std::vector<PointType>& sum,
     std::vector<int>& counts
@@ -139,7 +163,7 @@ void update_centroids(
             kumi::for_each([](auto& s, auto p) { s += p; }, sum[cluster_idx], pt);
         }
 
-        void resolve_dead_centroids(std::span<int> assignments, std::span<int> counts) {
+        void resolve_dead_centroids(std::span<const Label> assignments, std::span<int> counts) {
             ::resolve_dead_centroids(points, assignments, centroids, sum, counts);
         }
 
@@ -186,11 +210,15 @@ float calculate_centroid_shift_sq(
 }
 
 
-template <eve::product_type PointType>
+template <eve::product_type PointType, class Label = kmeans::default_label_t>
 struct kumi_kmeans_backend {
-    using assignment_vector = std::vector<int, eve::aligned_allocator<int>>;
+    using label_type = Label;
+    using assignment_cardinal = typename eve::wide<float>::cardinal_type;
+    using assignment_vector = std::vector<label_type, eve::aligned_allocator<label_type>>;
     using counts_vector = std::vector<int>;
     using centroid_snapshot = std::vector<PointType>;
+
+    static constexpr label_type invalid_label = kmeans::invalid_label_v<label_type>;
 
     const eve::algo::soa_vector<PointType>& points;
     std::vector<PointType>& centroids;
@@ -202,7 +230,11 @@ struct kumi_kmeans_backend {
         std::vector<PointType>& centroids_
     ) : points(points_), centroids(centroids_), sum(centroids_.size()) {}
 
-    assignment_vector make_assignment_vector(int initial_value) const {
+    void check_cluster_count() const {
+        kmeans::check_cluster_count_fits<label_type>(centroids.size());
+    }
+
+    assignment_vector make_assignment_vector(label_type initial_value) const {
         return assignment_vector(points.size(), initial_value);
     }
 
@@ -223,11 +255,18 @@ struct kumi_kmeans_backend {
     }
 
     void assign(assignment_vector& assignments) const {
-        auto aligned_ptr = eve::as_aligned(assignments.data());
+        auto aligned_ptr = eve::as_aligned(assignments.data(), assignment_cardinal{});
         auto unaligned_end = assignments.data() + assignments.size();
         auto assignments_range = eve::algo::as_range(aligned_ptr, unaligned_end);
         auto zipped_data = eve::views::zip(points, assignments_range);
-        ::assign_points_to_centroids(zipped_data, centroids);
+        (void)::assign_points_to_centroids<false, label_type>(zipped_data, centroids);
+    }
+    bool assign_and_check_changed(assignment_vector& assignments) const {
+        auto aligned_ptr = eve::as_aligned(assignments.data(), assignment_cardinal{});
+        auto unaligned_end = assignments.data() + assignments.size();
+        auto assignments_range = eve::algo::as_range(aligned_ptr, unaligned_end);
+        auto zipped_data = eve::views::zip(points, assignments_range);
+        return ::assign_points_to_centroids<true, label_type>(zipped_data, centroids);
     }
 
     void update_centroids(
@@ -236,7 +275,7 @@ struct kumi_kmeans_backend {
     ) {
         ::update_centroids(
             points,
-            std::span<int>(assignments.data(), assignments.size()),
+            std::span<const label_type>(assignments.data(), assignments.size()),
             centroids,
             sum,
             counts
@@ -253,15 +292,15 @@ struct kumi_kmeans_backend {
     }
 };
 
-template <eve::product_type PointType>
-std::vector<int, eve::aligned_allocator<int>> k_means(
+template <class Label = kmeans::default_label_t, eve::product_type PointType>
+auto k_means(
     const eve::algo::soa_vector<PointType>& points,
     std::vector<PointType>& centroids,
     int& out_iterations,
     int max_iterations = 300,
     float tol = 1e-4f
 ) {
-    kumi_kmeans_backend<PointType> backend{ points, centroids };
+    kumi_kmeans_backend<PointType, Label> backend{ points, centroids };
 
     return kmeans::k_means_core(
         backend,

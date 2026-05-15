@@ -3,12 +3,50 @@
 #include <ranges>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <numeric>
 #include <span>
+#include <stdexcept>
+#include <type_traits>
 #include <array>
 #include <vector>
 
+#ifndef KMEANS_MAX_CLUSTERS
+#define KMEANS_MAX_CLUSTERS 255
+#endif
+
 namespace kmeans {
+
+template<std::size_t MaxClusters>
+using label_for_max_clusters_t =
+std::conditional_t<
+    MaxClusters <= 255,
+    std::uint8_t,
+    std::conditional_t<
+    MaxClusters <= 65535,
+    std::uint16_t,
+    std::uint32_t
+    >
+>;
+
+using default_label_t = label_for_max_clusters_t<KMEANS_MAX_CLUSTERS>;
+
+template<class Label>
+inline constexpr Label invalid_label_v = std::numeric_limits<Label>::max();
+
+template<class Label>
+inline constexpr std::size_t max_clusters_for_label_v =
+static_cast<std::size_t>(std::numeric_limits<Label>::max());
+
+template<class Label>
+inline void check_cluster_count_fits(std::size_t n_clusters) {
+    static_assert(std::is_integral_v<Label>);
+
+    if (n_clusters > max_clusters_for_label_v<Label>) {
+        throw std::invalid_argument("n_clusters exceeds label_t capacity");
+    }
+}
 
 template<std::size_t D, typename Function>
 inline constexpr void for_each_feature(Function&& f) {
@@ -84,10 +122,10 @@ inline float calculate_centroid_shift_sq_common(
     return shift_sq;
 }
 
-template<class Ops>
+template<class Ops, class Label>
 void resolve_dead_centroids_common(
     Ops& ops,
-    std::span<const int> assignments,
+    std::span<const Label> assignments,
     std::span<int> counts
 ) {
     const std::size_t n_samples = ops.n_samples();
@@ -114,10 +152,9 @@ void resolve_dead_centroids_common(
     float max_distance = 0.0f;
 
     for (std::size_t i = 0; i < n_samples; ++i) {
-        const int label = assignments[i];
+        const std::size_t label = static_cast<std::size_t>(assignments[i]);
 
-        const float dist =
-            ops.distance_to_old_centroid(i, label);
+        const float dist = ops.distance_to_old_centroid(i, label);
 
         distances[i] = dist;
         max_distance = std::max(max_distance, dist);
@@ -159,9 +196,7 @@ void resolve_dead_centroids_common(
         const std::size_t new_cluster_id = empty_clusters[idx];
         const std::size_t far_idx = farthest_indices[idx];
 
-        const int old_cluster_id_int = assignments[far_idx];
-        const std::size_t old_cluster_id =
-            static_cast<std::size_t>(old_cluster_id_int);
+        const std::size_t old_cluster_id = static_cast<std::size_t>(assignments[far_idx]);
 
         ops.relocate_empty_cluster(
             old_cluster_id,
@@ -174,18 +209,17 @@ void resolve_dead_centroids_common(
     }
 }
 
-template<class Ops>
+template<class Ops, class Label>
 void update_centroids_common(
     Ops& ops,
-    std::span<int> assignments,
+    std::span<const Label> assignments,
     std::span<int> counts
 ) {
     ops.reset_sums();
     std::fill(counts.begin(), counts.end(), 0);
 
     for (std::size_t i = 0; i < ops.n_samples(); ++i) {
-        const int cluster_idx_int = assignments[i];
-        const std::size_t cluster_idx = static_cast<std::size_t>(cluster_idx_int);
+        const std::size_t cluster_idx = static_cast<std::size_t>(assignments[i]);
 
         counts[cluster_idx]++;
         ops.add_point_to_sum(cluster_idx, i);
@@ -209,8 +243,13 @@ auto k_means_core(
     int max_iterations = 300,
     float tol = 1e-4f
 ) -> typename Backend::assignment_vector {
-    auto assignments = backend.make_assignment_vector(-1);
-    auto previous_assignments = backend.make_assignment_vector(-1);
+    using label_type = typename Backend::label_type;
+
+    if constexpr (requires(const Backend & b) { b.check_cluster_count(); }) {
+        backend.check_cluster_count();
+    }
+
+    auto assignments = backend.make_assignment_vector(invalid_label_v<label_type>);
     auto counts = backend.make_counts_vector();
     auto previous_centroids = backend.make_centroid_snapshot();
 
@@ -220,19 +259,16 @@ auto k_means_core(
     int iterations = 0;
 
     while (!converged && iterations < max_iterations) {
-        previous_assignments = assignments;
-
-        backend.assign(assignments);
+        const bool labels_changed = backend.assign_and_check_changed(assignments);
 
         backend.save_centroids(previous_centroids);
 
         backend.update_centroids(assignments, counts);
 
-        if (std::ranges::equal(assignments, previous_assignments)) {
+        if (!labels_changed) {
             converged = true;
         } else {
-            const float shift_sq =
-                backend.centroid_shift_sq(previous_centroids);
+            const float shift_sq = backend.centroid_shift_sq(previous_centroids);
 
             if (shift_sq <= scaled_tol) {
                 converged = true;

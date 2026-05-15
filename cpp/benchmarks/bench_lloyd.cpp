@@ -5,10 +5,8 @@
 #include "../include/io_utils.hpp"
 #include "../include/kmeans_lloyd.hpp"
 
-int main(int argc, char* argv[])
-{
-    if (argc < 9)
-    {
+int main(int argc, char* argv[]) {
+    if (argc < 9) {
         std::cerr << "Usage: " << argv[0]
             << " <binary_file> <n_samples> <n_clusters> <init_centroids_bin> <metrics_json_out> <nanobench_json_out> <bench_epochs> <min_epoch_seconds>\n";
         return 1;
@@ -40,13 +38,17 @@ int main(int argc, char* argv[])
         .output(nullptr);
 
     std::vector<PointType> final_centroids;
-    std::vector<int, eve::aligned_allocator<int>> final_assignments;
+    using Label = kmeans::default_label_t;
+    using Backend = kumi_kmeans_backend<PointType, Label>;
+    using assignment_vector = typename Backend::assignment_vector;
+
+    assignment_vector final_assignments;
     int iterations_to_converge = 0;
 
     bench.run("kmeans_lloyd", [&] {
         // Crucial: Copy the initial state for every epoch
         std::vector<PointType> current_centroids = initial_centroids;
-        auto centroid_assignments = k_means(points, current_centroids, iterations_to_converge);
+        auto centroid_assignments = k_means<Label>(points, current_centroids, iterations_to_converge);
 
         ankerl::nanobench::doNotOptimizeAway(current_centroids.data());
         ankerl::nanobench::doNotOptimizeAway(centroid_assignments.data());
