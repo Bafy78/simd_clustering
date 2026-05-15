@@ -340,16 +340,14 @@ inline bool assign_one_sample_block_tiled(
 
     bool changed = false;
 
+    const wide_label best_label = eve::convert(best_k, eve::as<Label>());
+
     if constexpr (TrackChanges) {
         const wide_label previous_label =
             eve::load[ignore](assignment_aligned_ptr, eve::as<wide_label>{});
 
-        const auto previous_k = eve::convert(previous_label, eve::as<int>());
-
-        changed = eve::any[ignore](best_k != previous_k);
+        changed = eve::any[ignore](best_label != previous_label);
     }
-
-    const wide_label best_label = eve::convert(best_k, eve::as<Label>());
 
     eve::store[ignore](best_label, assignment_aligned_ptr);
 

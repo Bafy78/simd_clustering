@@ -61,25 +61,20 @@ bool assign_points_to_centroids(
             closest_centroid_indices = eve::if_else(is_closer, wide_index(static_cast<int>(k)), closest_centroid_indices);
         }
 
-        if constexpr (TrackChanges) {
-            if (!any_changed) {
-                const auto previous_centroid_labels = eve::load[ignore](assign_it);
-
-                const auto previous_centroid_indices = eve::convert(
-                    previous_centroid_labels,
-                    eve::as<int>()
-                );
-
-                any_changed = eve::any[ignore](
-                    closest_centroid_indices != previous_centroid_indices
-                    );
-            }
-        }
-
-        const auto closest_centroid_labels = eve::convert(
+        const wide_label closest_centroid_labels = eve::convert(
             closest_centroid_indices,
             eve::as<Label>()
         );
+
+        if constexpr (TrackChanges) {
+            if (!any_changed) {
+                const wide_label previous_centroid_labels = eve::load[ignore](assign_it);
+
+                any_changed = eve::any[ignore](
+                    closest_centroid_labels != previous_centroid_labels
+                    );
+            }
+        }
 
         eve::store[ignore](closest_centroid_labels, assign_it);
     }

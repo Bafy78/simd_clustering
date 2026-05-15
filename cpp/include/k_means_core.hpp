@@ -141,12 +141,12 @@ void resolve_dead_centroids_common(
     const std::size_t n_clusters = counts.size();
 
     // Find empty clusters, in cluster-id order, matching np.where(counts == 0)[0].
-    std::vector<std::size_t> empty_clusters;
+    std::vector<Label> empty_clusters;
     empty_clusters.reserve(n_clusters);
 
     for (std::size_t k = 0; k < n_clusters; ++k) {
         if (counts[k] == 0) {
-            empty_clusters.push_back(k);
+            empty_clusters.push_back(static_cast<Label>(k));
         }
     }
 
@@ -212,7 +212,7 @@ void resolve_dead_centroids_common(
     // Important sklearn detail:
     // labels / assignments are NOT changed here. Only the sums and counts are changed.
     for (std::size_t idx = 0; idx < n_empty; ++idx) {
-        const std::size_t new_cluster_id = empty_clusters[idx];
+        const std::size_t new_cluster_id = static_cast<std::size_t>(empty_clusters[idx]);
         const std::size_t far_idx = static_cast<std::size_t>(farthest_candidates[idx].index);
 
         const std::size_t old_cluster_id = static_cast<std::size_t>(assignments[far_idx]);
