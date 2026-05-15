@@ -132,8 +132,6 @@ struct centroids_storage {
     template<std::size_t K_TILE>
     void resize_for_tile(std::size_t clusters) {
         static_assert(K_TILE > 0);
-        static_assert(std::has_single_bit(K_TILE));
-
         n_clusters = clusters;
         feature_major_stride = round_up_to_multiple(n_clusters, K_TILE);
 
@@ -249,20 +247,22 @@ inline void process_centroid_tile(
     );
 }
 
-// Compile-time recursive tail decomposition.
-template<std::size_t D, std::size_t TILE, typename Ignore>
-inline void process_centroid_tail(
+// Compile-time exact tail dispatch
+template<std::size_t D, std::size_t TAIL, typename Ignore>
+inline void process_centroid_tail_exact(
     points_soa_view<D> points,
     const centroids_storage<D>& centroids,
     std::size_t sample_i,
-    std::size_t& k0,
-    std::size_t& remaining,
+    std::size_t k0,
+    std::size_t remaining,
     Ignore ignore,
     wide_f& best_dist,
     wide_i& best_k
 ) {
-    if (remaining >= TILE) {
-        process_centroid_tile<D, TILE>(
+    static_assert(TAIL > 0);
+
+    if (remaining == TAIL) {
+        process_centroid_tile<D, TAIL>(
             points,
             centroids,
             sample_i,
@@ -271,13 +271,8 @@ inline void process_centroid_tail(
             best_dist,
             best_k
         );
-
-        k0 += TILE;
-        remaining -= TILE;
-    }
-
-    if constexpr (TILE > 1) {
-        process_centroid_tail<D, TILE / 2>(
+    } else if constexpr (TAIL > 1) {
+        process_centroid_tail_exact<D, TAIL - 1>(
             points,
             centroids,
             sample_i,
@@ -324,18 +319,20 @@ inline bool assign_one_sample_block_tiled(
     }
 
     if constexpr (K_TILE > 1) {
-        std::size_t remaining = K - k0;
+        const std::size_t remaining = K - k0;
 
-        process_centroid_tail<D, K_TILE / 2>(
-            points,
-            centroids,
-            sample_i,
-            k0,
-            remaining,
-            ignore,
-            best_dist,
-            best_k
-        );
+        if (remaining != 0) {
+            process_centroid_tail_exact<D, K_TILE - 1>(
+                points,
+                centroids,
+                sample_i,
+                k0,
+                remaining,
+                ignore,
+                best_dist,
+                best_k
+            );
+        }
     }
 
     bool changed = false;
@@ -723,8 +720,6 @@ aligned_label_vector<Label> k_means_tiled(
 ) {
     static_assert(D > 0);
     static_assert(K_TILE > 0);
-    static_assert(std::has_single_bit(K_TILE));
-
     tiled_kmeans_backend<D, K_TILE, Label> backend{ points, centroids };
 
     return kmeans::k_means_core(
