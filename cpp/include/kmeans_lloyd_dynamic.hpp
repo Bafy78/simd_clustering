@@ -803,6 +803,9 @@ struct tiled_kmeans_backend {
             return 0.0f;
         }
 
+        constexpr std::size_t card = simd_cardinal();
+        const std::size_t n = points.n_samples;
+
         float total_variance = 0.0f;
 
         kmeans::for_each_feature<D>([&](auto feature_index) {
@@ -811,21 +814,40 @@ struct tiled_kmeans_backend {
             const float* src = original_points.template feature<d>();
             float* dst = points.template feature<d>();
             const float mean = feature_mean[d];
+            const wide_f mean_v(mean);
 
-            float variance = 0.0f;
+            std::size_t i = 0;
 
             if (tol == 0.0f) {
-                for (std::size_t i = 0; i < points.n_samples; ++i) {
+                for (; i + card <= n; i += card) {
+                    const auto x = eve::load(eve::as_aligned(src + i));
+                    const auto centered = x - mean_v;
+                    eve::store(centered, eve::as_aligned(dst + i));
+                }
+
+                for (; i < n; ++i) {
                     dst[i] = src[i] - mean;
                 }
             } else {
-                for (std::size_t i = 0; i < points.n_samples; ++i) {
+                wide_f variance_v = eve::zero(eve::as<wide_f>());
+
+                for (; i + card <= n; i += card) {
+                    const auto x = eve::load(eve::as_aligned(src + i));
+                    const auto centered = x - mean_v;
+
+                    eve::store(centered, eve::as_aligned(dst + i));
+                    variance_v = eve::fma(centered, centered, variance_v);
+                }
+
+                float variance = eve::reduce(variance_v);
+
+                for (; i < n; ++i) {
                     const float centered = src[i] - mean;
                     dst[i] = centered;
                     variance += centered * centered;
                 }
 
-                total_variance += variance / static_cast<float>(points.n_samples);
+                total_variance += variance / static_cast<float>(n);
             }
         });
 

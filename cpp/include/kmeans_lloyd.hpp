@@ -303,29 +303,36 @@ struct kumi_kmeans_backend {
         });
     }
 
-    float center_points_in_place_and_compute_scaled_tolerance(float tol) {
+    float copy_centered_points_from_original_and_compute_scaled_tolerance(float tol) {
         constexpr std::size_t D = kumi::size_v<PointType>;
+
+        points.resize(original_points.size());
 
         std::array<float, D> variance_sums{};
 
+        auto zipped_points = eve::views::zip(original_points, points);
+
         eve::algo::for_each(
-            points,
+            zipped_points,
             [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
-            auto pt = eve::load[ignore](it);
+            auto [src_it, dst_it] = it;
+
+            const auto src_pt = eve::load[ignore](src_it);
+            auto dst_pt = src_pt;
 
             kmeans::for_each_feature<D>([&](auto feature_index) {
                 constexpr std::size_t d = decltype(feature_index)::value;
-                using wide_component = std::remove_cvref_t<decltype(get<d>(pt))>;
+                using wide_component = std::remove_cvref_t<decltype(get<d>(src_pt))>;
 
-                auto centered = get<d>(pt) - wide_component(feature_mean[d]);
-                get<d>(pt) = centered;
+                auto centered = get<d>(src_pt) - wide_component(feature_mean[d]);
+                get<d>(dst_pt) = centered;
 
                 if (tol != 0.0f) {
-                    variance_sums[d] += eve::sum[ignore](centered* centered);
+                    variance_sums[d] += eve::reduce[ignore](centered* centered);
                 }
             });
 
-            eve::store[ignore](pt, it);
+            eve::store[ignore](dst_pt, dst_it);
         }
         );
 
@@ -366,9 +373,7 @@ struct kumi_kmeans_backend {
     float prepare_data_for_fit(float tol) {
         compute_feature_mean_from_original();
 
-        points = original_points;
-
-        const float scaled_tol = center_points_in_place_and_compute_scaled_tolerance(tol);
+        const float scaled_tol = copy_centered_points_from_original_and_compute_scaled_tolerance(tol);
 
         subtract_feature_mean_from_centroids();
         recompute_centroid_norms();
