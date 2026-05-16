@@ -8,7 +8,6 @@
 #include <nanobench.h>
 
 #include "../include/io_utils.hpp"
-#include "../include/kmeans_lloyd.hpp"
 #include "../include/kmeans_lloyd_dynamic.hpp"
 
 #ifndef KMEANS_K_TILE

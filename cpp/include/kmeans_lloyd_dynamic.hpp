@@ -143,6 +143,7 @@ struct centroids_storage {
 
     aligned_float_vector row_major;
     aligned_float_vector feature_major;
+    aligned_float_vector centroid_norm_sq;
 
     std::size_t n_clusters = 0;
     std::size_t feature_major_stride = 0;
@@ -157,6 +158,7 @@ struct centroids_storage {
 
         row_major.assign(n_clusters * D, 0.0f);
         feature_major.assign(D * feature_major_stride, 0.0f);
+        centroid_norm_sq.assign(n_clusters, 0.0f);
     }
 
     float& row(std::size_t k, std::size_t d) {
@@ -203,6 +205,49 @@ struct centroids_storage {
             }
         });
     }
+
+    void recompute_centroid_norms_from_row_major() {
+        if (centroid_norm_sq.size() != n_clusters) {
+            centroid_norm_sq.assign(n_clusters, 0.0f);
+        } else {
+            std::fill(centroid_norm_sq.begin(), centroid_norm_sq.end(), 0.0f);
+        }
+
+        for (std::size_t k = 0; k < n_clusters; ++k) {
+            const float* centroid = row_major.data() + k * D;
+
+            float norm = 0.0f;
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                const float c = centroid[d];
+                norm += c * c;
+            });
+
+            centroid_norm_sq[k] = norm;
+        }
+    }
+
+    void sync_assignment_layout_from_row_major() {
+        std::fill(feature_major.begin(), feature_major.end(), 0.0f);
+
+        if (centroid_norm_sq.size() != n_clusters) {
+            centroid_norm_sq.assign(n_clusters, 0.0f);
+        } else {
+            std::fill(centroid_norm_sq.begin(), centroid_norm_sq.end(), 0.0f);
+        }
+
+        kmeans::for_each_feature<D>([&](auto feature_index) {
+            constexpr std::size_t d = decltype(feature_index)::value;
+
+            float* dst = feature_major.data() + d * feature_major_stride;
+
+            for (std::size_t k = 0; k < n_clusters; ++k) {
+                const float c = row_major[k * D + d];
+                dst[k] = -2.0f * c;
+                centroid_norm_sq[k] += c * c;
+            }
+        });
+    }
 };
 
 inline void update_best_centroid(
@@ -235,7 +280,12 @@ inline void process_centroid_tiles(
     wide_i& best_k
 ) {
     constexpr std::size_t TOTAL_TILE = K_TILE * N_TILES;
-    auto distances = kumi::fill<TOTAL_TILE>(eve::zero(eve::as<wide_f>()));
+    auto scores = kumi::fill<TOTAL_TILE>(eve::zero(eve::as<wide_f>()));
+
+    kumi::for_each_index([&](auto index, auto& score) {
+        constexpr std::size_t t = decltype(index)::value;
+        score = wide_f(centroids.centroid_norm_sq[k0 + t]);
+    }, scores);
 
     kmeans::for_each_feature<D>([&](auto feature_index) {
         constexpr std::size_t d = decltype(feature_index)::value;
@@ -243,36 +293,37 @@ inline void process_centroid_tiles(
         // points are feature-major:
         //     points[d][sample_i : sample_i + SIMD_WIDTH]
         //
-        // D is compile-time, but the feature column is streamed.
+        // feature_major stores the assignment coefficient -2*c:
+        //     score = ||c||^2 + sum_d x[d] * (-2*c[d])
         auto x = eve::load[ignore](
             eve::as_aligned(points.template feature<d>() + sample_i)
             );
 
         const float* centroid_feature = centroids.template feature_centroids<d>() + k0;
 
-        kumi::for_each_index([&](auto index, auto& dist) {
+        kumi::for_each_index([&](auto index, auto& score) {
             constexpr std::size_t t = decltype(index)::value;
 
-            auto c = wide_f(centroid_feature[t]);
-            auto diff = x - c;
+            auto neg_two_c = wide_f(centroid_feature[t]);
 
-            dist = eve::fma(diff, diff, dist);
+            score = eve::fma(x, neg_two_c, score);
         },
-                             distances
+                             scores
         );
     });
 
-    kumi::for_each_index([&](auto index, auto dist) {
+    kumi::for_each_index([&](auto index, auto score) {
         constexpr std::size_t t = decltype(index)::value;
+        const std::size_t k = k0 + t;
 
         update_best_centroid(
-            dist,
-            k0 + t,
+            score,
+            k,
             best_dist,
             best_k
         );
     },
-                         distances
+                         scores
     );
 }
 
@@ -480,7 +531,7 @@ bool assign_points_to_centroids_tiled_impl(
 }
 
 // Static-D high-D assignment kernel.
-// The main grouped loop keeps centroid_tiles_at_once<K_TILE>() * K_TILE distance accumulators live; D is streamed.
+// The main grouped loop keeps centroid_tiles_at_once<K_TILE>() * K_TILE dot accumulators live; D is streamed.
 // The main loop is unmasked; only the final tail block uses ignore_last.
 // assignments.data() must be SIMD-aligned
 template<std::size_t D, std::size_t K_TILE, class Label>
@@ -658,7 +709,7 @@ inline void update_centroids(
         }
 
         void after_centroids_updated() {
-            centroids.sync_feature_major_from_row_major();
+            centroids.sync_assignment_layout_from_row_major();
         }
     };
 
@@ -713,7 +764,7 @@ struct tiled_kmeans_backend {
         points_soa_view<D> points_,
         centroids_storage<D>& centroids_
     ) : points(points_), centroids(centroids_), sums_row_major(centroids_.n_clusters* D, 0.0f) {
-        centroids.sync_feature_major_from_row_major();
+        centroids.sync_assignment_layout_from_row_major();
     }
 
     void check_cluster_count() const {

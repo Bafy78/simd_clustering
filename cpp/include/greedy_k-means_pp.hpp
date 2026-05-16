@@ -12,6 +12,16 @@
 
 #include "./simd_common.hpp"
 
+// Computes SIMD squared distance between a block of points and a centroid
+constexpr auto compute_simd_dist_sq = [](const auto& pt, const auto& centroid) {
+    auto dist_sq = eve::zero(eve::as<eve::wide<float>>());
+    kumi::for_each([&](auto p, auto c) {
+        auto diff = p - c;
+        dist_sq = eve::fma(diff, diff, dist_sq);
+    }, pt, centroid);
+    return dist_sq;
+};
+
 // Permanently updates the minimum distance array with a new centroid
 template <eve::product_type PointType, typename MinDistView>
 void update_min_distances(
@@ -24,9 +34,9 @@ void update_min_distances(
         auto [pt_it, dist_it] = it;
         auto pt = eve::load[ignore](pt_it);
         auto current_min_dist = eve::load[ignore](dist_it);
-        
+
         auto dist_sq = compute_simd_dist_sq(pt, new_centroid);
-        
+
         auto new_min = eve::min(current_min_dist, dist_sq);
         eve::store[ignore](new_min, dist_it);
     });
@@ -41,20 +51,20 @@ float evaluate_candidate_cost(
 ) {
     auto cost_accumulator = eve::zero(eve::as<eve::wide<float>>());
     auto zipped = eve::views::zip(points, min_dist_view);
-    
+
     eve::algo::for_each(zipped, [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
         auto [pt_it, dist_it] = it;
         auto pt = eve::load[ignore](pt_it);
         auto current_min_dist = eve::load[ignore](dist_it);
-        
-        auto dist_sq = compute_simd_dist_sq(pt, candidate);                
+
+        auto dist_sq = compute_simd_dist_sq(pt, candidate);
         auto trial_min = eve::min(current_min_dist, dist_sq);
-        
+
         // Mask out inactive lanes to prevent adding garbage data to the reduction sum
         auto mask = ignore.mask(eve::as<eve::wide<float>>());
         cost_accumulator += eve::if_else(mask, trial_min, eve::zero);
     });
-    
+
     // Reduce the wide vector to a single scalar cost
     return eve::reduce(cost_accumulator);
 }
@@ -71,10 +81,10 @@ std::vector<PointType> greedy_kmeans_pp_init(
 
     std::vector<PointType> centroids;
     if (points.empty() || num_clusters <= 0) return centroids;
-    
+
     centroids.reserve(num_clusters);
     std::mt19937 gen(seed);
-    
+
     // First centroid: Choose uniformly at random
     std::uniform_int_distribution<std::size_t> uni_dist(0, points.size() - 1);
     centroids.push_back(points.get(uni_dist(gen)));
@@ -85,9 +95,9 @@ std::vector<PointType> greedy_kmeans_pp_init(
     std::vector<float, eve::aligned_allocator<float>> min_sq_dist(
         points.size(), std::numeric_limits<float>::infinity()
     );
-    
+
     auto min_dist_view = eve::algo::as_range(
-        eve::as_aligned(min_sq_dist.data()), 
+        eve::as_aligned(min_sq_dist.data()),
         min_sq_dist.data() + min_sq_dist.size()
     );
 
@@ -109,7 +119,7 @@ std::vector<PointType> greedy_kmeans_pp_init(
         }
 
         std::uniform_real_distribution<float> prob_dist(0.0f, total_weight);
-        
+
         float best_cost = std::numeric_limits<float>::infinity();
         std::size_t best_candidate_idx = 0;
 
