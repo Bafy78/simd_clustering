@@ -9,6 +9,7 @@
 #include <ranges>
 #include <array>
 
+#include <eve/arch.hpp>
 #include <eve/module/core.hpp>
 #include <eve/wide.hpp>
 #include <eve/memory/aligned_allocator.hpp>
@@ -30,6 +31,25 @@ inline constexpr std::size_t simd_cardinal() {
 
 inline std::size_t round_up_to_multiple(std::size_t n, std::size_t multiple) {
     return ((n + multiple - 1) / multiple) * multiple;
+}
+
+template<std::size_t K_TILE>
+inline constexpr std::size_t centroid_tiles_at_once() {
+    constexpr std::size_t register_count = static_cast<std::size_t>(eve::register_count::simd);
+    constexpr std::size_t kernel_register_overhead = 4;
+
+    constexpr std::size_t accumulator_registers =
+        register_count > kernel_register_overhead
+        ? register_count - kernel_register_overhead
+        : K_TILE;
+
+    constexpr std::size_t tiles = accumulator_registers / K_TILE;
+
+    if constexpr (tiles == 0) {
+        return 1;
+    } else {
+        return tiles;
+    }
 }
 
 // Static-D feature-major point view:
@@ -185,13 +205,27 @@ struct centroids_storage {
     }
 };
 
-// Process one full compile-time centroid tile
-// This is the high-D replacement for: `compute_simd_dist_sq(pt, centroid[k])`
-// D is compile-time, but dimensions are still streamed one at a time.
-// We do NOT materialize a kumi::tuple<wide_f, ..., wide_f> point.
-// Each feature vector is loaded, used for all K_TILE accumulators, then discarded.
-template<std::size_t D, std::size_t K_TILE, typename Ignore>
-inline void process_centroid_tile(
+inline void update_best_centroid(
+    wide_f dist,
+    std::size_t candidate_k,
+    wide_f& best_dist,
+    wide_i& best_k
+) {
+    auto closer = eve::is_less(dist, best_dist);
+
+    best_dist = eve::min(best_dist, dist);
+
+    best_k = eve::if_else(
+        closer,
+        wide_i(static_cast<int>(candidate_k)),
+        best_k
+    );
+}
+
+// Process N_TILES consecutive full compile-time centroid tiles while reusing each
+// loaded point feature across all tile groups.
+template<std::size_t D, std::size_t K_TILE, std::size_t N_TILES, typename Ignore>
+inline void process_centroid_tiles(
     points_soa_view<D> points,
     const centroids_storage<D>& centroids,
     std::size_t sample_i,
@@ -200,7 +234,8 @@ inline void process_centroid_tile(
     wide_f& best_dist,
     wide_i& best_k
 ) {
-    auto distances = kumi::fill<K_TILE>(eve::zero(eve::as<wide_f>()));
+    constexpr std::size_t TOTAL_TILE = K_TILE * N_TILES;
+    auto distances = kumi::fill<TOTAL_TILE>(eve::zero(eve::as<wide_f>()));
 
     kmeans::for_each_feature<D>([&](auto feature_index) {
         constexpr std::size_t d = decltype(feature_index)::value;
@@ -215,8 +250,7 @@ inline void process_centroid_tile(
 
         const float* centroid_feature = centroids.template feature_centroids<d>() + k0;
 
-        kumi::for_each_index(
-            [&](auto index, auto& dist) {
+        kumi::for_each_index([&](auto index, auto& dist) {
             constexpr std::size_t t = decltype(index)::value;
 
             auto c = wide_f(centroid_feature[t]);
@@ -224,27 +258,61 @@ inline void process_centroid_tile(
 
             dist = eve::fma(diff, diff, dist);
         },
-            distances
+                             distances
         );
     });
 
-    kumi::for_each_index(
-        [&](auto index, auto dist) {
+    kumi::for_each_index([&](auto index, auto dist) {
         constexpr std::size_t t = decltype(index)::value;
 
-        const auto candidate_k = static_cast<int>(k0 + t);
-        auto closer = dist < best_dist;
-
-        best_dist = eve::min(best_dist, dist);
-
-        best_k = eve::if_else(
-            closer,
-            wide_i(candidate_k),
+        update_best_centroid(
+            dist,
+            k0 + t,
+            best_dist,
             best_k
         );
     },
-        distances
+                         distances
     );
+}
+
+template<std::size_t D, std::size_t K_TILE, std::size_t N_TILES, typename Ignore>
+inline void process_full_centroid_tile_groups(
+    points_soa_view<D> points,
+    const centroids_storage<D>& centroids,
+    std::size_t sample_i,
+    std::size_t& k0,
+    std::size_t K,
+    Ignore ignore,
+    wide_f& best_dist,
+    wide_i& best_k
+) {
+    constexpr std::size_t K_GROUP_TILE = N_TILES * K_TILE;
+
+    for (; k0 + K_GROUP_TILE <= K; k0 += K_GROUP_TILE) {
+        process_centroid_tiles<D, K_TILE, N_TILES>(
+            points,
+            centroids,
+            sample_i,
+            k0,
+            ignore,
+            best_dist,
+            best_k
+        );
+    }
+
+    if constexpr (N_TILES > 1) {
+        process_full_centroid_tile_groups<D, K_TILE, N_TILES - 1>(
+            points,
+            centroids,
+            sample_i,
+            k0,
+            K,
+            ignore,
+            best_dist,
+            best_k
+        );
+    }
 }
 
 // Compile-time exact tail dispatch
@@ -262,7 +330,7 @@ inline void process_centroid_tail_exact(
     static_assert(TAIL > 0);
 
     if (remaining == TAIL) {
-        process_centroid_tile<D, TAIL>(
+        process_centroid_tiles<D, TAIL, 1>(
             points,
             centroids,
             sample_i,
@@ -306,17 +374,18 @@ inline bool assign_one_sample_block_tiled(
 
     std::size_t k0 = 0;
 
-    for (; k0 + K_TILE <= K; k0 += K_TILE) {
-        process_centroid_tile<D, K_TILE>(
-            points,
-            centroids,
-            sample_i,
-            k0,
-            ignore,
-            best_dist,
-            best_k
-        );
-    }
+    constexpr std::size_t N_TILES_AT_ONCE = centroid_tiles_at_once<K_TILE>();
+
+    process_full_centroid_tile_groups<D, K_TILE, N_TILES_AT_ONCE>(
+        points,
+        centroids,
+        sample_i,
+        k0,
+        K,
+        ignore,
+        best_dist,
+        best_k
+    );
 
     if constexpr (K_TILE > 1) {
         const std::size_t remaining = K - k0;
@@ -411,7 +480,7 @@ bool assign_points_to_centroids_tiled_impl(
 }
 
 // Static-D high-D assignment kernel.
-// Register pressure depends on K_TILE, not on D.
+// The main grouped loop keeps centroid_tiles_at_once<K_TILE>() * K_TILE distance accumulators live; D is streamed.
 // The main loop is unmasked; only the final tail block uses ignore_last.
 // assignments.data() must be SIMD-aligned
 template<std::size_t D, std::size_t K_TILE, class Label>
