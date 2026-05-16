@@ -6,6 +6,7 @@
 #include <numeric>
 #include <span>
 #include <type_traits>
+#include <array>
 
 #include <eve/module/core.hpp>
 #include <eve/module/algo.hpp>
@@ -35,7 +36,7 @@ auto compute_simd_assignment_score(
         );
     }, centroid);
 
-    return wide_dist(centroid_norm_sq) - wide_dist(2.0f) * dot;
+    return eve::fma(dot, wide_dist(-2.0f), wide_dist(centroid_norm_sq));
 }
 
 template <eve::product_type PointType>
@@ -249,22 +250,24 @@ struct kumi_kmeans_backend {
 
     static constexpr label_type invalid_label = kmeans::invalid_label_v<label_type>;
 
-    const eve::algo::soa_vector<PointType>& points;
+    const eve::algo::soa_vector<PointType>& original_points;
+
+    eve::algo::soa_vector<PointType> points;
     std::vector<PointType>& centroids;
 
     std::vector<PointType> sum;
     std::vector<float> centroid_norms;
+    std::array<float, kumi::size_v<PointType>> feature_mean{};
 
     kumi_kmeans_backend(
         const eve::algo::soa_vector<PointType>& points_,
         std::vector<PointType>& centroids_
     )
-        : points(points_),
+        : original_points(points_),
+        points(),
         centroids(centroids_),
         sum(centroids_.size()),
-        centroid_norms(centroids_.size()) {
-        recompute_centroid_norms();
-    }
+        centroid_norms(centroids_.size()) {}
 
     void recompute_centroid_norms() {
         centroid_norms.resize(centroids.size());
@@ -280,22 +283,116 @@ struct kumi_kmeans_backend {
         }
     }
 
+    void compute_feature_mean_from_original() {
+        constexpr std::size_t D = kumi::size_v<PointType>;
+
+        if (original_points.size() == 0) {
+            feature_mean.fill(0.0f);
+            return;
+        }
+
+        kmeans::for_each_feature<D>([&](auto feature_index) {
+            constexpr std::size_t d = decltype(feature_index)::value;
+
+            float sum = 0.0f;
+            for (std::size_t i = 0; i < original_points.size(); ++i) {
+                sum += kumi::get<d>(original_points.get(i));
+            }
+
+            feature_mean[d] = sum / static_cast<float>(original_points.size());
+        });
+    }
+
+    float center_points_in_place_and_compute_scaled_tolerance(float tol) {
+        constexpr std::size_t D = kumi::size_v<PointType>;
+
+        std::array<float, D> variance_sums{};
+
+        eve::algo::for_each(
+            points,
+            [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
+            auto pt = eve::load[ignore](it);
+
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                using wide_component = std::remove_cvref_t<decltype(get<d>(pt))>;
+
+                auto centered = get<d>(pt) - wide_component(feature_mean[d]);
+                get<d>(pt) = centered;
+
+                if (tol != 0.0f) {
+                    variance_sums[d] += eve::sum[ignore](centered* centered);
+                }
+            });
+
+            eve::store[ignore](pt, it);
+        }
+        );
+
+        if (tol == 0.0f || points.size() == 0) {
+            return 0.0f;
+        }
+
+        float total_variance = 0.0f;
+        for (float variance_sum : variance_sums) {
+            total_variance += variance_sum / static_cast<float>(points.size());
+        }
+
+        return tol * (total_variance / static_cast<float>(D));
+    }
+
+    void subtract_feature_mean_from_centroids() {
+        constexpr std::size_t D = kumi::size_v<PointType>;
+
+        for (auto& centroid : centroids) {
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                kumi::get<d>(centroid) -= feature_mean[d];
+            });
+        }
+    }
+
+    void add_feature_mean_to_centroids() {
+        constexpr std::size_t D = kumi::size_v<PointType>;
+
+        for (auto& centroid : centroids) {
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                kumi::get<d>(centroid) += feature_mean[d];
+            });
+        }
+    }
+
+    float prepare_data_for_fit(float tol) {
+        compute_feature_mean_from_original();
+
+        points = original_points;
+
+        const float scaled_tol = center_points_in_place_and_compute_scaled_tolerance(tol);
+
+        subtract_feature_mean_from_centroids();
+        recompute_centroid_norms();
+
+        return scaled_tol;
+    }
+
+    void finish_fit_after_final_assignment() {
+        add_feature_mean_to_centroids();
+    }
+
     void check_cluster_count() const {
         kmeans::check_cluster_count_fits<label_type>(centroids.size());
-        kmeans::check_cluster_count(centroids.size(), points.size());
+        kmeans::check_cluster_count(centroids.size(), original_points.size());
     }
 
     assignment_vector make_assignment_vector(label_type initial_value) const {
-        return assignment_vector(points.size(), initial_value);
+        return assignment_vector(original_points.size(), initial_value);
     }
 
     counts_vector make_counts_vector() const {
         return counts_vector(centroids.size(), 0);
     }
 
-    float compute_tolerance(float tol) const {
-        return ::compute_sklearn_tolerance(points, tol);
-    }
 
     centroid_snapshot make_centroid_snapshot() const {
         return centroid_snapshot(centroids.size());

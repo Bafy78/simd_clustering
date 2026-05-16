@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <array>
 #include <vector>
+#include <utility>
 
 #ifndef KMEANS_MAX_CLUSTERS
 #define KMEANS_MAX_CLUSTERS 255
@@ -67,15 +68,15 @@ inline constexpr void for_each_feature(Function&& f) {
 }
 
 template<std::size_t D, typename SampleValue>
-inline float compute_sklearn_tolerance_common(
+inline std::pair<std::array<float, D>, float>
+compute_feature_mean_and_sklearn_tolerance_common(
     std::size_t n_samples,
     SampleValue&& sample_value,
     float tol
 ) {
-    if (tol == 0.0f) return 0.0f;
-    if (n_samples == 0) return 0.0f;
-
     std::array<float, D> means{};
+
+    if (n_samples == 0) return { means, 0.0f };
 
     for_each_feature<D>([&](auto feature_index) {
         constexpr std::size_t d = decltype(feature_index)::value;
@@ -88,6 +89,8 @@ inline float compute_sklearn_tolerance_common(
 
         means[d] = sum / static_cast<float>(n_samples);
     });
+
+    if (tol == 0.0f) return { means, 0.0f };
 
     float total_variance = 0.0f;
 
@@ -107,7 +110,20 @@ inline float compute_sklearn_tolerance_common(
 
     const float mean_variance = total_variance / static_cast<float>(D);
 
-    return mean_variance * tol;
+    return { means, mean_variance * tol };
+}
+
+template<std::size_t D, typename SampleValue>
+inline float compute_sklearn_tolerance_common(
+    std::size_t n_samples,
+    SampleValue&& sample_value,
+    float tol
+) {
+    return compute_feature_mean_and_sklearn_tolerance_common<D>(
+        n_samples,
+        std::forward<SampleValue>(sample_value),
+        tol
+    ).second;
 }
 
 template<std::size_t D, typename OldCentroidValue, typename NewCentroidValue>
@@ -272,9 +288,10 @@ auto k_means_core(
     auto counts = backend.make_counts_vector();
     auto previous_centroids = backend.make_centroid_snapshot();
 
-    const float scaled_tol = backend.compute_tolerance(tol);
+    const float scaled_tol = backend.prepare_data_for_fit(tol);
 
     bool converged = false;
+    bool strict_convergence = false;
     int iterations = 0;
 
     while (!converged && iterations < max_iterations) {
@@ -285,6 +302,7 @@ auto k_means_core(
         backend.update_centroids(assignments, counts);
 
         if (!labels_changed) {
+            strict_convergence = true;
             converged = true;
         } else {
             const float shift_sq = backend.centroid_shift_sq(previous_centroids);
@@ -299,8 +317,14 @@ auto k_means_core(
 
     out_iterations = iterations;
 
-    // Final label refresh against final centroid positions.
-    backend.assign(assignments);
+    // sklearn-like final label refresh:
+    // If Lloyd stopped by strict label convergence, labels already match the final centers.
+    // If it stopped by tolerance or max_iterations, rerun the E-step while still centered.
+    if (!strict_convergence) {
+        backend.assign(assignments);
+    }
+
+    backend.finish_fit_after_final_assignment();
 
     return assignments;
 }

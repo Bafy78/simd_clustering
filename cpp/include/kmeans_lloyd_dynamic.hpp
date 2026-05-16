@@ -63,17 +63,17 @@ template<std::size_t D>
 struct points_soa_view {
     static constexpr std::size_t n_features = D;
 
-    const float* data = nullptr;
+    float* data = nullptr;
 
     std::size_t n_samples = 0;
     std::size_t stride = 0;
 
-    const float* feature(std::size_t d) const {
+    float* feature(std::size_t d) const {
         return data + d * stride;
     }
 
     template<std::size_t Feature>
-    const float* feature() const {
+    float* feature() const {
         static_assert(Feature < D);
         return data + Feature * stride;
     }
@@ -119,9 +119,17 @@ struct points_soa_storage {
         return data.data() + Feature * stride;
     }
 
-    points_soa_view<D> view() const {
+    points_soa_view<D> view() {
         return points_soa_view<D>{
             .data = data.data(),
+                .n_samples = n_samples,
+                .stride = stride,
+        };
+    }
+
+    points_soa_view<D> view() const {
+        return points_soa_view<D>{
+            .data = const_cast<float*>(data.data()),
                 .n_samples = n_samples,
                 .stride = stride,
         };
@@ -307,9 +315,7 @@ inline void process_centroid_tiles(
             auto neg_two_c = wide_f(centroid_feature[t]);
 
             score = eve::fma(x, neg_two_c, score);
-        },
-                             scores
-        );
+        }, scores);
     });
 
     kumi::for_each_index([&](auto index, auto score) {
@@ -322,9 +328,7 @@ inline void process_centroid_tiles(
             best_dist,
             best_k
         );
-    },
-                         scores
-    );
+    }, scores);
 }
 
 template<std::size_t D, std::size_t K_TILE, std::size_t N_TILES, typename Ignore>
@@ -755,16 +759,114 @@ struct tiled_kmeans_backend {
 
     static constexpr label_type invalid_label = kmeans::invalid_label_v<label_type>;
 
+    points_soa_view<D> original_points;
+
+    points_soa_storage<D> centered_points_storage;
     points_soa_view<D> points;
     centroids_storage<D>& centroids;
 
     aligned_float_vector sums_row_major;
+    std::array<float, D> feature_mean{};
 
     tiled_kmeans_backend(
         points_soa_view<D> points_,
         centroids_storage<D>& centroids_
-    ) : points(points_), centroids(centroids_), sums_row_major(centroids_.n_clusters* D, 0.0f) {
+    )
+        : original_points(points_),
+        centered_points_storage(points_.n_samples),
+        points(centered_points_storage.view()),
+        centroids(centroids_),
+        sums_row_major(centroids_.n_clusters* D, 0.0f) {}
+
+    void compute_feature_mean_from_original() {
+        if (original_points.n_samples == 0) {
+            feature_mean.fill(0.0f);
+            return;
+        }
+
+        kmeans::for_each_feature<D>([&](auto feature_index) {
+            constexpr std::size_t d = decltype(feature_index)::value;
+
+            const float* src = original_points.template feature<d>();
+
+            float sum = 0.0f;
+            for (std::size_t i = 0; i < original_points.n_samples; ++i) {
+                sum += src[i];
+            }
+
+            feature_mean[d] = sum / static_cast<float>(original_points.n_samples);
+        });
+    }
+
+    float copy_centered_points_from_original_and_compute_scaled_tolerance(float tol) {
+        if (points.n_samples == 0) {
+            return 0.0f;
+        }
+
+        float total_variance = 0.0f;
+
+        kmeans::for_each_feature<D>([&](auto feature_index) {
+            constexpr std::size_t d = decltype(feature_index)::value;
+
+            const float* src = original_points.template feature<d>();
+            float* dst = points.template feature<d>();
+            const float mean = feature_mean[d];
+
+            float variance = 0.0f;
+
+            if (tol == 0.0f) {
+                for (std::size_t i = 0; i < points.n_samples; ++i) {
+                    dst[i] = src[i] - mean;
+                }
+            } else {
+                for (std::size_t i = 0; i < points.n_samples; ++i) {
+                    const float centered = src[i] - mean;
+                    dst[i] = centered;
+                    variance += centered * centered;
+                }
+
+                total_variance += variance / static_cast<float>(points.n_samples);
+            }
+        });
+
+        if (tol == 0.0f) {
+            return 0.0f;
+        }
+
+        return tol * (total_variance / static_cast<float>(D));
+    }
+
+    float prepare_data_for_fit(float tol) {
+        compute_feature_mean_from_original();
+        const float scaled_tol =
+            copy_centered_points_from_original_and_compute_scaled_tolerance(tol);
+
+        subtract_feature_mean_from_centroids();
         centroids.sync_assignment_layout_from_row_major();
+
+        return scaled_tol;
+    }
+
+    void finish_fit_after_final_assignment() {
+        add_feature_mean_to_centroids();
+    }
+
+    void subtract_feature_mean_from_centroids() {
+        for (std::size_t k = 0; k < centroids.n_clusters; ++k) {
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                centroids.row(k, d) -= feature_mean[d];
+            });
+        }
+    }
+
+    void add_feature_mean_to_centroids() {
+        for (std::size_t k = 0; k < centroids.n_clusters; ++k) {
+            kmeans::for_each_feature<D>([&](auto feature_index) {
+                constexpr std::size_t d = decltype(feature_index)::value;
+                centroids.row(k, d) += feature_mean[d];
+            });
+        }
     }
 
     void check_cluster_count() const {
@@ -780,9 +882,6 @@ struct tiled_kmeans_backend {
         return counts_vector(centroids.n_clusters, 0);
     }
 
-    float compute_tolerance(float tol) const {
-        return ::compute_sklearn_tolerance<D>(points, tol);
-    }
 
     centroid_snapshot make_centroid_snapshot() const {
         return centroid_snapshot(centroids.row_major.size(), 0.0f);
