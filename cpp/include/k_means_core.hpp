@@ -1,52 +1,17 @@
 #pragma once
 
-#include <ranges>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <span>
 #include <stdexcept>
-#include <type_traits>
 #include <array>
 #include <vector>
 #include <utility>
 
-#ifndef KMEANS_MAX_CLUSTERS
-#define KMEANS_MAX_CLUSTERS 255
-#endif
-
 namespace kmeans {
 
-template<std::size_t MaxClusters>
-using label_for_max_clusters_t =
-std::conditional_t<
-    MaxClusters <= 255,
-    std::uint8_t,
-    std::conditional_t<
-    MaxClusters <= 65535,
-    std::uint16_t,
-    std::uint32_t
-    >
->;
-
-using default_label_t = label_for_max_clusters_t<KMEANS_MAX_CLUSTERS>;
-
-template<class Label>
-inline constexpr Label invalid_label_v = std::numeric_limits<Label>::max();
-
-template<class Label>
-inline constexpr std::size_t max_clusters_for_label_v =
-static_cast<std::size_t>(std::numeric_limits<Label>::max());
-
-template<class Label>
-inline void check_cluster_count_fits(std::size_t n_clusters) {
-    static_assert(std::is_integral_v<Label>);
-
-    if (n_clusters > max_clusters_for_label_v<Label>) {
-        throw std::invalid_argument("n_clusters exceeds label_t capacity");
-    }
-}
 
 inline void check_cluster_count(std::size_t n_clusters, std::size_t n_samples) {
     if (n_clusters == 0) {
@@ -147,22 +112,22 @@ inline float calculate_centroid_shift_sq_common(
     return shift_sq;
 }
 
-template<class Ops, class Label>
+template<class Ops>
 void resolve_dead_centroids_common(
     Ops& ops,
-    std::span<const Label> assignments,
+    std::span<const int> assignments,
     std::span<int> counts
 ) {
     const std::size_t n_samples = ops.n_samples();
     const std::size_t n_clusters = counts.size();
 
     // Find empty clusters, in cluster-id order, matching np.where(counts == 0)[0].
-    std::vector<Label> empty_clusters;
+    std::vector<int> empty_clusters;
     empty_clusters.reserve(n_clusters);
 
     for (std::size_t k = 0; k < n_clusters; ++k) {
         if (counts[k] == 0) {
-            empty_clusters.push_back(static_cast<Label>(k));
+            empty_clusters.push_back(static_cast<int>(k));
         }
     }
 
@@ -186,8 +151,8 @@ void resolve_dead_centroids_common(
     std::vector<candidate_t> farthest_candidates;
 
     for (std::size_t i = 0; i < n_samples; ++i) {
-        const std::size_t label = static_cast<std::size_t>(assignments[i]);
-        const float dist = ops.distance_to_old_centroid(i, label);
+        const std::size_t assigned_cluster = static_cast<std::size_t>(assignments[i]);
+        const float dist = ops.distance_to_old_centroid(i, assigned_cluster);
 
         if (farthest_candidates.empty()) {
             if (dist == 0.0f) continue;
@@ -244,10 +209,10 @@ void resolve_dead_centroids_common(
     }
 }
 
-template<class Ops, class Label>
+template<class Ops>
 void update_centroids_common(
     Ops& ops,
-    std::span<const Label> assignments,
+    std::span<const int> assignments,
     std::span<int> counts
 ) {
     ops.reset_sums();
@@ -278,13 +243,7 @@ auto k_means_core(
     int max_iterations = 300,
     float tol = 1e-4f
 ) -> typename Backend::assignment_vector {
-    using label_type = typename Backend::label_type;
-
-    if constexpr (requires(const Backend & b) { b.check_cluster_count(); }) {
-        backend.check_cluster_count();
-    }
-
-    auto assignments = backend.make_assignment_vector(invalid_label_v<label_type>);
+    auto assignments = backend.make_assignment_vector(-1);
     auto counts = backend.make_counts_vector();
     auto previous_centroids = backend.make_centroid_snapshot();
 

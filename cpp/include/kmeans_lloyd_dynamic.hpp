@@ -1,12 +1,9 @@
 #pragma once
 
 #include <algorithm>
-#include <bit>
 #include <cstddef>
 #include <span>
 #include <vector>
-#include <numeric>
-#include <ranges>
 #include <array>
 
 #include <eve/arch.hpp>
@@ -21,9 +18,6 @@ using wide_i = eve::wide<int, typename wide_f::cardinal_type>;
 
 using aligned_float_vector = std::vector<float, eve::aligned_allocator<float>>;
 using aligned_int_vector = std::vector<int, eve::aligned_allocator<int>>;
-
-template<class Label>
-using aligned_label_vector = std::vector<Label, eve::aligned_allocator<Label>>;
 
 inline constexpr std::size_t simd_cardinal() {
     return static_cast<std::size_t>(wide_f::size());
@@ -408,20 +402,18 @@ inline void process_centroid_tail_exact(
     }
 }
 
-template<std::size_t D, std::size_t K_TILE, bool TrackChanges, class Label, typename Ignore>
+template<std::size_t D, std::size_t K_TILE, bool TrackChanges, typename Ignore>
 inline bool assign_one_sample_block_tiled(
     points_soa_view<D> points,
     const centroids_storage<D>& centroids,
     std::size_t sample_i,
     Ignore ignore,
-    Label* assignment_ptr
+    int* assignment_ptr
 ) {
     const std::size_t K = centroids.n_clusters;
 
-    using wide_label = eve::wide<Label, typename wide_f::cardinal_type>;
-
     auto assignment_aligned_ptr = eve::as_aligned(
-        assignment_ptr, typename wide_label::cardinal_type{}
+        assignment_ptr, typename wide_i::cardinal_type{}
     );
 
     auto best_dist = eve::valmax(eve::as<wide_f>());
@@ -461,25 +453,23 @@ inline bool assign_one_sample_block_tiled(
 
     bool changed = false;
 
-    const wide_label best_label = eve::convert(best_k, eve::as<Label>());
-
     if constexpr (TrackChanges) {
-        const wide_label previous_label =
-            eve::load[ignore](assignment_aligned_ptr, eve::as<wide_label>{});
+        const wide_i previous_label =
+            eve::load[ignore](assignment_aligned_ptr, eve::as<wide_i>{});
 
-        changed = eve::any[ignore](best_label != previous_label);
+        changed = eve::any[ignore](best_k != previous_label);
     }
 
-    eve::store[ignore](best_label, assignment_aligned_ptr);
+    eve::store[ignore](best_k, assignment_aligned_ptr);
 
     return changed;
 }
 
-template<std::size_t D, std::size_t K_TILE, bool TrackChanges, class Label>
+template<std::size_t D, std::size_t K_TILE, bool TrackChanges>
 bool assign_points_to_centroids_tiled_impl(
     points_soa_view<D> points,
     const centroids_storage<D>& centroids,
-    std::span<Label> assignments
+    std::span<int> assignments
 ) {
     constexpr std::size_t card = simd_cardinal();
     const std::size_t n = points.n_samples;
@@ -538,11 +528,11 @@ bool assign_points_to_centroids_tiled_impl(
 // The main grouped loop keeps centroid_tiles_at_once<K_TILE>() * K_TILE dot accumulators live; D is streamed.
 // The main loop is unmasked; only the final tail block uses ignore_last.
 // assignments.data() must be SIMD-aligned
-template<std::size_t D, std::size_t K_TILE, class Label>
+template<std::size_t D, std::size_t K_TILE>
 void assign_points_to_centroids_tiled(
     points_soa_view<D> points,
     const centroids_storage<D>& centroids,
-    std::span<Label> assignments
+    std::span<int> assignments
 ) {
     (void)assign_points_to_centroids_tiled_impl<D, K_TILE, false>(
         points,
@@ -551,11 +541,11 @@ void assign_points_to_centroids_tiled(
     );
 }
 
-template<std::size_t D, std::size_t K_TILE, class Label>
+template<std::size_t D, std::size_t K_TILE>
 bool assign_points_to_centroids_tiled_and_check_changed(
     points_soa_view<D> points,
     const centroids_storage<D>& centroids,
-    std::span<Label> assignments
+    std::span<int> assignments
 ) {
     return assign_points_to_centroids_tiled_impl<D, K_TILE, true>(
         points,
@@ -601,10 +591,10 @@ inline float point_to_centroid_dist_sq(
     return dist;
 }
 
-template<std::size_t D, class Label>
+template<std::size_t D>
 inline void resolve_dead_centroids(
     points_soa_view<D> points,
-    std::span<const Label> assignments,
+    std::span<const int> assignments,
     std::span<const float> old_centroids_row_major,
     std::span<float> sums_row_major,
     std::span<int> counts
@@ -651,10 +641,10 @@ inline void resolve_dead_centroids(
     );
 }
 
-template<std::size_t D, class Label>
+template<std::size_t D>
 inline void update_centroids(
     points_soa_view<D> points,
-    std::span<const Label> assignments,
+    std::span<const int> assignments,
     centroids_storage<D>& centroids,
     aligned_float_vector& sums_row_major,
     aligned_int_vector& counts
@@ -690,7 +680,7 @@ inline void update_centroids(
             });
         }
 
-        void resolve_dead_centroids(std::span<const Label> assignments, std::span<int> counts) {
+        void resolve_dead_centroids(std::span<const int> assignments, std::span<int> counts) {
             ::resolve_dead_centroids<D>(
                 points,
                 assignments,
@@ -750,14 +740,11 @@ inline float calculate_centroid_shift_sq(
     );
 }
 
-template<std::size_t D, std::size_t K_TILE, class Label = kmeans::default_label_t>
+template<std::size_t D, std::size_t K_TILE>
 struct tiled_kmeans_backend {
-    using label_type = Label;
-    using assignment_vector = aligned_label_vector<label_type>;
+    using assignment_vector = aligned_int_vector;
     using counts_vector = aligned_int_vector;
     using centroid_snapshot = aligned_float_vector;
-
-    static constexpr label_type invalid_label = kmeans::invalid_label_v<label_type>;
 
     points_soa_view<D> original_points;
 
@@ -892,11 +879,10 @@ struct tiled_kmeans_backend {
     }
 
     void check_cluster_count() const {
-        kmeans::check_cluster_count_fits<label_type>(centroids.n_clusters);
         kmeans::check_cluster_count(centroids.n_clusters, points.n_samples);
     }
 
-    assignment_vector make_assignment_vector(label_type initial_value) const {
+    assignment_vector make_assignment_vector(int initial_value) const {
         return assignment_vector(points.n_samples, initial_value);
     }
 
@@ -917,14 +903,14 @@ struct tiled_kmeans_backend {
         ::assign_points_to_centroids_tiled<D, K_TILE>(
             points,
             centroids,
-            std::span<label_type>(assignments.data(), assignments.size())
+            std::span<int>(assignments.data(), assignments.size())
         );
     }
     bool assign_and_check_changed(assignment_vector& assignments) const {
         return ::assign_points_to_centroids_tiled_and_check_changed<D, K_TILE>(
             points,
             centroids,
-            std::span<label_type>(assignments.data(), assignments.size())
+            std::span<int>(assignments.data(), assignments.size())
         );
     }
 
@@ -934,7 +920,7 @@ struct tiled_kmeans_backend {
     ) {
         ::update_centroids<D>(
             points,
-            std::span<const label_type>(assignments.data(), assignments.size()),
+            std::span<const int>(assignments.data(), assignments.size()),
             centroids,
             sums_row_major,
             counts
@@ -951,8 +937,8 @@ struct tiled_kmeans_backend {
     }
 };
 
-template<std::size_t D, std::size_t K_TILE, class Label = kmeans::default_label_t>
-aligned_label_vector<Label> k_means_tiled(
+template<std::size_t D, std::size_t K_TILE>
+aligned_int_vector k_means_tiled(
     points_soa_view<D> points,
     centroids_storage<D>& centroids,
     int& out_iterations,
@@ -961,7 +947,7 @@ aligned_label_vector<Label> k_means_tiled(
 ) {
     static_assert(D > 0);
     static_assert(K_TILE > 0);
-    tiled_kmeans_backend<D, K_TILE, Label> backend{ points, centroids };
+    tiled_kmeans_backend<D, K_TILE> backend{ points, centroids };
 
     return kmeans::k_means_core(
         backend,

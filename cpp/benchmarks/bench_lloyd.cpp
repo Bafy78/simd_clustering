@@ -38,17 +38,13 @@ int main(int argc, char* argv[]) {
         .output(nullptr);
 
     std::vector<PointType> final_centroids;
-    using Label = kmeans::default_label_t;
-    using Backend = kumi_kmeans_backend<PointType, Label>;
-    using assignment_vector = typename Backend::assignment_vector;
-
-    assignment_vector final_assignments;
+    kumi_kmeans_backend<PointType>::assignment_vector final_assignments;
     int iterations_to_converge = 0;
 
     bench.run("kmeans_lloyd", [&] {
         // Crucial: Copy the initial state for every epoch
         std::vector<PointType> current_centroids = initial_centroids;
-        auto centroid_assignments = k_means<Label>(points, current_centroids, iterations_to_converge);
+        auto centroid_assignments = k_means(points, current_centroids, iterations_to_converge);
 
         ankerl::nanobench::doNotOptimizeAway(current_centroids.data());
         ankerl::nanobench::doNotOptimizeAway(centroid_assignments.data());

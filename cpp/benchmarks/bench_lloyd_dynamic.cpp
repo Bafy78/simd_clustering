@@ -137,8 +137,7 @@ int main(int argc, char* argv[]) {
         .output(nullptr);
 
     centroids_storage<TUPLE_SIZE> final_dynamic_centroids;
-    using Label = kmeans::default_label_t;
-    aligned_label_vector<Label> final_assignments;
+    aligned_int_vector final_assignments;
     int iterations_to_converge = 0;
 
     bench.run("kmeans_lloyd_staticD_streamed_tiled", [&] {
@@ -146,7 +145,7 @@ int main(int argc, char* argv[]) {
         centroids_storage<TUPLE_SIZE> current_centroids =
             dynamic_initial_centroids;
 
-        auto centroid_assignments = k_means_tiled<TUPLE_SIZE, KMEANS_K_TILE, Label>(
+        auto centroid_assignments = k_means_tiled<TUPLE_SIZE, KMEANS_K_TILE>(
             dynamic_points,
             current_centroids,
             iterations_to_converge
