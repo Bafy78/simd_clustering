@@ -10,7 +10,7 @@
 #include <eve/wide.hpp>
 #include <eve/memory/aligned_allocator.hpp>
 
-#include "./k_means_core.hpp"
+#include "../core.hpp"
 
 
 template <typename SimdPoint, typename PointType>
@@ -197,8 +197,6 @@ void update_centroids(
                 cent = s / static_cast<float>(count);
             }, centroids[cluster_idx], sum[cluster_idx]);
         }
-
-        void after_centroids_updated() {}
     };
 
     ops_t ops{ points, centroids, sum };

@@ -10,8 +10,6 @@
 #include <eve/wide.hpp>
 #include <eve/memory/aligned_allocator.hpp>
 
-#include "./simd_common.hpp"
-
 // Computes SIMD squared distance between a block of points and a centroid
 constexpr auto compute_simd_dist_sq = [](const auto& pt, const auto& centroid) {
     auto dist_sq = eve::zero(eve::as<eve::wide<float>>());

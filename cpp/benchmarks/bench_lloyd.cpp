@@ -3,7 +3,7 @@
 #include <nanobench.h>
 #include <chrono>
 #include "../include/io_utils.hpp"
-#include "../include/kmeans_lloyd.hpp"
+#include "../include/k_means/static_d/backend.hpp"
 
 int main(int argc, char* argv[]) {
     if (argc < 9) {

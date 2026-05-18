@@ -232,8 +232,6 @@ void update_centroids_common(
             ops.write_centroid_from_sum(k, counts[k]);
         }
     }
-
-    ops.after_centroids_updated();
 }
 
 template<class Backend>
