@@ -243,6 +243,8 @@ auto k_means_core(
     int max_iterations = 300,
     float tol = 1e-4f
 ) -> typename Backend::assignment_vector {
+    backend.check_cluster_count();
+
     auto assignments = backend.make_assignment_vector(-1);
     auto counts = backend.make_counts_vector();
     auto previous_centroids = backend.make_centroid_snapshot();

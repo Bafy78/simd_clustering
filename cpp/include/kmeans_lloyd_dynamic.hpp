@@ -193,27 +193,8 @@ struct centroids_storage {
         return feature_major.data() + Feature * feature_major_stride;
     }
 
-    // Call this once after updating row_major centroids.
-    void sync_feature_major_from_row_major() {
-        std::fill(feature_major.begin(), feature_major.end(), 0.0f);
-
-        kmeans::for_each_feature<D>([&](auto feature_index) {
-            constexpr std::size_t d = decltype(feature_index)::value;
-
-            float* dst = feature_major.data() + d * feature_major_stride;
-
-            for (std::size_t k = 0; k < n_clusters; ++k) {
-                dst[k] = row_major[k * D + d];
-            }
-        });
-    }
-
     void recompute_centroid_norms_from_row_major() {
-        if (centroid_norm_sq.size() != n_clusters) {
-            centroid_norm_sq.assign(n_clusters, 0.0f);
-        } else {
-            std::fill(centroid_norm_sq.begin(), centroid_norm_sq.end(), 0.0f);
-        }
+        centroid_norm_sq.resize(n_clusters);
 
         for (std::size_t k = 0; k < n_clusters; ++k) {
             const float* centroid = row_major.data() + k * D;
@@ -282,12 +263,10 @@ inline void process_centroid_tiles(
     wide_i& best_k
 ) {
     constexpr std::size_t TOTAL_TILE = K_TILE * N_TILES;
-    auto scores = kumi::fill<TOTAL_TILE>(eve::zero(eve::as<wide_f>()));
-
-    kumi::for_each_index([&](auto index, auto& score) {
+    auto scores = kumi::generate<TOTAL_TILE>([&](auto index) {
         constexpr std::size_t t = decltype(index)::value;
-        score = wide_f(centroids.centroid_norm_sq[k0 + t]);
-    }, scores);
+        return wide_f(centroids.centroid_norm_sq[k0 + t]);
+    });
 
     kmeans::for_each_feature<D>([&](auto feature_index) {
         constexpr std::size_t d = decltype(feature_index)::value;
@@ -652,11 +631,11 @@ inline void update_centroids(
     const std::size_t n_clusters = centroids.n_clusters;
 
     if (sums_row_major.size() != n_clusters * D) {
-        sums_row_major.assign(n_clusters * D, 0.0f);
+        sums_row_major.resize(n_clusters * D);
     }
 
     if (counts.size() != n_clusters) {
-        counts.assign(n_clusters, 0);
+        counts.resize(n_clusters);
     }
 
     struct ops_t {

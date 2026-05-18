@@ -52,8 +52,6 @@ inline centroids_storage<TUPLE_SIZE> make_dynamic_centroids(
         );
     }
 
-    out.sync_feature_major_from_row_major();
-
     return out;
 }
 
@@ -77,19 +75,6 @@ inline std::vector<PointType> make_static_centroids(
     }
 
     return out;
-}
-
-template<std::size_t D>
-inline void swap_centroids_storage(
-    centroids_storage<D>& a,
-    centroids_storage<D>& b
-) noexcept {
-    using std::swap;
-
-    swap(a.row_major, b.row_major);
-    swap(a.feature_major, b.feature_major);
-    swap(a.n_clusters, b.n_clusters);
-    swap(a.feature_major_stride, b.feature_major_stride);
 }
 
 int main(int argc, char* argv[]) {
@@ -140,7 +125,7 @@ int main(int argc, char* argv[]) {
     aligned_int_vector final_assignments;
     int iterations_to_converge = 0;
 
-    bench.run("kmeans_lloyd_staticD_streamed_tiled", [&] {
+    bench.run("kmeans_lloyd", [&] {
         // Crucial: copy the initial state for every epoch.
         centroids_storage<TUPLE_SIZE> current_centroids =
             dynamic_initial_centroids;
@@ -155,8 +140,8 @@ int main(int argc, char* argv[]) {
         ankerl::nanobench::doNotOptimizeAway(current_centroids.feature_major.data());
         ankerl::nanobench::doNotOptimizeAway(centroid_assignments.data());
 
-        swap_centroids_storage(final_dynamic_centroids, current_centroids);
-        final_assignments.swap(centroid_assignments);
+        final_dynamic_centroids = std::move(current_centroids);
+        final_assignments = std::move(centroid_assignments);
     });
 
     std::ofstream bench_out(nanobench_out);
