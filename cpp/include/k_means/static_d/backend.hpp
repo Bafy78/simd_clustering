@@ -12,6 +12,8 @@
 
 #include "../core.hpp"
 
+using wide_f = kmeans::wide_f;
+using wide_i = kmeans::wide_i;
 
 template <typename SimdPoint, typename PointType>
 auto compute_simd_assignment_score(
@@ -19,40 +21,43 @@ auto compute_simd_assignment_score(
     const PointType& centroid,
     float centroid_norm_sq
 ) {
-    using wide_dist = std::remove_cvref_t<decltype(get<0>(pt))>;
+    auto dot = eve::zero(eve::as<wide_f>());
 
-    auto dot = eve::zero(eve::as<wide_dist>());
+    kumi::for_each([&](auto p, auto c) {
+        dot = eve::fma(p, wide_f(c), dot);
+    }, pt, centroid);
 
-    kumi::for_each_index([&](auto index, auto c) {
-        constexpr std::size_t d = decltype(index)::value;
-
-        dot = eve::fma(
-            get<d>(pt),
-            wide_dist(static_cast<float>(c)),
-            dot
-        );
-    }, centroid);
-
-    return eve::fma(dot, wide_dist(-2.0f), wide_dist(centroid_norm_sq));
+    return eve::fma(dot, wide_f(-2.0f), wide_f(centroid_norm_sq));
 }
 
-template <eve::product_type PointType>
-float compute_sklearn_tolerance(
-    const eve::algo::soa_vector<PointType>& points,
-    float tol
+template <typename SimdPoint, typename PointType>
+wide_i compute_closest_centroid_labels(
+    const SimdPoint& pt,
+    const std::vector<PointType>& centroids,
+    std::span<const float> centroid_norms
 ) {
-    constexpr std::size_t D = kumi::size_v<PointType>;
+    auto min_distances = eve::valmax(eve::as<wide_f>());
+    auto closest_centroid_labels = eve::zero(eve::as<wide_i>());
 
-    auto sample_value = [&](auto feature_index, std::size_t sample_i) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-        return kumi::get<d>(points.get(sample_i));
-    };
+    for (std::size_t k = 0; k < centroids.size(); ++k) {
+        auto assignment_score = compute_simd_assignment_score(
+            pt,
+            centroids[k],
+            centroid_norms[k]
+        );
 
-    return kmeans::compute_sklearn_tolerance_common<D>(
-        points.size(),
-        sample_value,
-        tol
-    );
+        auto is_closer = assignment_score < min_distances;
+
+        min_distances = eve::min(min_distances, assignment_score);
+
+        closest_centroid_labels = eve::if_else(
+            is_closer,
+            wide_i(static_cast<int>(k)),
+            closest_centroid_labels
+        );
+    }
+
+    return closest_centroid_labels;
 }
 
 template <bool TrackChanges = false, eve::algo::relaxed_range R, typename PointType>
@@ -70,35 +75,12 @@ bool assign_points_to_centroids(
         auto [pt_it, assign_it] = it;
         auto pt = eve::load[ignore](pt_it);
 
-        using wide_dist = decltype(compute_simd_assignment_score(
-            pt,
-            centroids[0],
-            centroid_norms[0]
-        ));
-        using wide_label = eve::wide<int, typename wide_dist::cardinal_type>;
-
-        auto min_distances = eve::valmax(eve::as<wide_dist>());
-        auto closest_centroid_labels = eve::zero(eve::as<wide_label>());
-
-        for (std::size_t k = 0; k < centroids.size(); ++k) {
-            auto assignment_score = compute_simd_assignment_score(
-                pt,
-                centroids[k],
-                centroid_norms[k]
-            );
-
-            auto is_closer = assignment_score < min_distances;
-            min_distances = eve::min(min_distances, assignment_score);
-            closest_centroid_labels = eve::if_else(
-                is_closer,
-                wide_label(static_cast<int>(k)),
-                closest_centroid_labels
-            );
-        }
+        auto min_distances = eve::valmax(eve::as<wide_f>());
+        auto closest_centroid_labels = compute_closest_centroid_labels(pt, centroids, centroid_norms);
 
         if constexpr (TrackChanges) {
             if (!any_changed) {
-                const wide_label previous_centroid_labels = eve::load[ignore](assign_it);
+                const wide_i previous_centroid_labels = eve::load[ignore](assign_it);
 
                 any_changed = eve::any[ignore](
                     closest_centroid_labels != previous_centroid_labels
@@ -129,16 +111,16 @@ void resolve_dead_centroids(
         std::size_t n_samples() const { return points.size(); }
 
         float distance_to_old_centroid(std::size_t sample_i, std::size_t old_label) const {
-            const auto pt = points.get(sample_i);
-            const auto& centroid = old_centroids[old_label];
-
-            float dist = 0.0f;
-            kumi::for_each([&dist](auto p, auto c) {
-                const float diff = p - c;
-                dist += diff * diff;
-            }, pt, centroid);
-
-            return dist;
+            return kumi::inner_product(
+                points.get(sample_i),
+                old_centroids[old_label],
+                0.0f,
+                [](auto acc, auto x) { return acc + x; },
+                [](auto p, auto c) {
+                    auto diff = p - c;
+                    return diff * diff;
+                }
+            );
         }
 
         void relocate_empty_cluster(
@@ -148,7 +130,7 @@ void resolve_dead_centroids(
         ) {
             const auto pt = points.get(sample_i);
             kumi::for_each([](auto& dst, auto p) { dst -= p; }, sum[old_cluster_id], pt);
-            kumi::for_each([](auto& dst, auto p) { dst = p; }, sum[new_cluster_id], pt);
+            sum[new_cluster_id] = pt;
         }
     };
 
@@ -178,9 +160,7 @@ void update_centroids(
         std::size_t n_clusters() const { return centroids.size(); }
 
         void reset_sums() {
-            for (auto& row : sum) {
-                kumi::for_each([](auto& v) { v = 0.0f; }, row);
-            }
+            for (auto& row : sum) row = PointType{};
         }
 
         void add_point_to_sum(std::size_t cluster_idx, std::size_t sample_i) {
@@ -193,9 +173,11 @@ void update_centroids(
         }
 
         void write_centroid_from_sum(std::size_t cluster_idx, int count) {
-            kumi::for_each([count](auto& cent, auto s) {
-                cent = s / static_cast<float>(count);
-            }, centroids[cluster_idx], sum[cluster_idx]);
+            const float inv_count = 1.0f / static_cast<float>(count);
+            centroids[cluster_idx] = kumi::map(
+                    [inv_count](auto s) { return s * inv_count; },
+                    sum[cluster_idx]
+                );
         }
     };
 
@@ -213,29 +195,27 @@ float calculate_centroid_shift_sq(
     const std::vector<PointType>& old_centroids,
     const std::vector<PointType>& new_centroids
 ) {
-    constexpr std::size_t D = kumi::size_v<PointType>;
+    float shift_sq = 0.0f;
 
-    auto old_value = [&](std::size_t k, auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-        return kumi::get<d>(old_centroids[k]);
-    };
+    for (std::size_t k = 0; k < new_centroids.size(); ++k) {
+        shift_sq = kumi::inner_product(
+            old_centroids[k],
+            new_centroids[k],
+            shift_sq,
+            [](auto acc, auto x) { return acc + x;},
+            [](auto old_c, auto new_c) {
+                auto diff = new_c - old_c;
+                return diff * diff;
+            }
+        );
+    }
 
-    auto new_value = [&](std::size_t k, auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-        return kumi::get<d>(new_centroids[k]);
-    };
-
-    return kmeans::calculate_centroid_shift_sq_common<D>(
-        new_centroids.size(),
-        old_value,
-        new_value
-    );
+    return shift_sq;
 }
 
 
 template <eve::product_type PointType>
 struct kumi_kmeans_backend {
-    using assignment_cardinal = typename eve::wide<float>::cardinal_type;
     using assignment_vector = std::vector<int, eve::aligned_allocator<int>>;
     using counts_vector = std::vector<int>;
     using centroid_snapshot = std::vector<PointType>;
@@ -247,7 +227,7 @@ struct kumi_kmeans_backend {
 
     std::vector<PointType> sum;
     std::vector<float> centroid_norms;
-    std::array<float, kumi::size_v<PointType>> feature_mean{};
+    PointType feature_mean{};
 
     kumi_kmeans_backend(
         const eve::algo::soa_vector<PointType>& points_,
@@ -263,100 +243,81 @@ struct kumi_kmeans_backend {
         centroid_norms.resize(centroids.size());
 
         for (std::size_t k = 0; k < centroids.size(); ++k) {
-            float norm = 0.0f;
-
-            kumi::for_each([&](auto c) {
-                norm += c * c;
-            }, centroids[k]);
-
-            centroid_norms[k] = norm;
+            centroid_norms[k] = kumi::inner_product(centroids[k], centroids[k], 0.0f);
         }
     }
 
     void compute_feature_mean_from_original() {
-        constexpr std::size_t D = kumi::size_v<PointType>;
-
         if (original_points.size() == 0) {
-            feature_mean.fill(0.0f);
+            feature_mean = PointType{};
             return;
         }
 
-        kmeans::for_each_feature<D>([&](auto feature_index) {
-            constexpr std::size_t d = decltype(feature_index)::value;
+        PointType feature_sum{};
 
-            float sum = 0.0f;
-            for (std::size_t i = 0; i < original_points.size(); ++i) {
-                sum += kumi::get<d>(original_points.get(i));
-            }
+        for (std::size_t i = 0; i < original_points.size(); ++i) {
+            const auto pt = original_points.get(i);
+            kumi::for_each([](auto& s, auto x) { s += x; }, feature_sum, pt);
+        }
 
-            feature_mean[d] = sum / static_cast<float>(original_points.size());
-        });
+        const float inv_n = 1.0f / static_cast<float>(original_points.size());
+
+        feature_mean = kumi::map([inv_n](auto s) { return s * inv_n; }, feature_sum);
     }
 
     float copy_centered_points_from_original_and_compute_scaled_tolerance(float tol) {
-        constexpr std::size_t D = kumi::size_v<PointType>;
-
         points.resize(original_points.size());
 
-        std::array<float, D> variance_sums{};
-
-        auto zipped_points = eve::views::zip(original_points, points);
-
-        eve::algo::for_each(
-            zipped_points,
-            [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
-            auto [src_it, dst_it] = it;
-
-            const auto src_pt = eve::load[ignore](src_it);
-            auto dst_pt = src_pt;
-
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                using wide_component = std::remove_cvref_t<decltype(get<d>(src_pt))>;
-
-                auto centered = get<d>(src_pt) - wide_component(feature_mean[d]);
-                get<d>(dst_pt) = centered;
-
-                if (tol != 0.0f) {
-                    variance_sums[d] += eve::reduce[ignore](centered* centered);
-                }
-            });
-
-            eve::store[ignore](dst_pt, dst_it);
-        }
+        eve::algo::transform_to(
+            original_points, 
+            points,
+            [&](auto src_pt) {
+                using simd_point_t = std::remove_cvref_t<decltype(src_pt)>;
+                auto centered = kumi::map(
+                    [](auto x, auto mean) { return x - mean; },
+                    src_pt,
+                    feature_mean
+                );
+                return simd_point_t{centered};
+            }
         );
 
-        if (tol == 0.0f || points.size() == 0) {
-            return 0.0f;
-        }
+        if (tol == 0.0f || points.size() == 0) return 0.0f;
 
-        float total_variance = 0.0f;
-        for (float variance_sum : variance_sums) {
-            total_variance += variance_sum / static_cast<float>(points.size());
-        }
+        const float total_squared_centered_norm = 
+            eve::algo::transform_reduce[eve::algo::fuse_operations]( 
+                points,
+                [](auto pt, auto acc) {
+                    kumi::for_each([&](auto x) {
+                        acc = eve::fma(x, x, acc);
+                    }, pt); return acc; 
+                },
+                0.0f
+            );
 
-        return tol * (total_variance / static_cast<float>(D));
+        return tol
+            * total_squared_centered_norm
+            / static_cast<float>(points.size())
+            / static_cast<float>(kumi::size_v<PointType>);
     }
 
     void subtract_feature_mean_from_centroids() {
-        constexpr std::size_t D = kumi::size_v<PointType>;
-
         for (auto& centroid : centroids) {
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                kumi::get<d>(centroid) -= feature_mean[d];
-            });
+            kumi::for_each(
+                [](auto& c, auto mean) { c -= mean; },
+                centroid,
+                feature_mean
+            );
         }
     }
 
     void add_feature_mean_to_centroids() {
-        constexpr std::size_t D = kumi::size_v<PointType>;
-
         for (auto& centroid : centroids) {
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                kumi::get<d>(centroid) += feature_mean[d];
-            });
+            kumi::for_each(
+                [](auto& c, auto mean) { c += mean; },
+                centroid,
+                feature_mean
+            );
         }
     }
 
@@ -397,7 +358,7 @@ struct kumi_kmeans_backend {
     }
 
     void assign(assignment_vector& assignments) const {
-        auto aligned_ptr = eve::as_aligned(assignments.data(), assignment_cardinal{});
+        auto aligned_ptr = eve::as_aligned(assignments.data(), kmeans::cardinal{});
         auto unaligned_end = assignments.data() + assignments.size();
         auto assignments_range = eve::algo::as_range(aligned_ptr, unaligned_end);
         auto zipped_data = eve::views::zip(points, assignments_range);
@@ -408,7 +369,7 @@ struct kumi_kmeans_backend {
         );
     }
     bool assign_and_check_changed(assignment_vector& assignments) const {
-        auto aligned_ptr = eve::as_aligned(assignments.data(), assignment_cardinal{});
+        auto aligned_ptr = eve::as_aligned(assignments.data(), kmeans::cardinal{});
         auto unaligned_end = assignments.data() + assignments.size();
         auto assignments_range = eve::algo::as_range(aligned_ptr, unaligned_end);
         auto zipped_data = eve::views::zip(points, assignments_range);

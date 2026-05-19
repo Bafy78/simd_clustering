@@ -6,12 +6,16 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
-#include <array>
 #include <vector>
 #include <utility>
 
+#include <eve/wide.hpp>
+
 namespace kmeans {
 
+using wide_f = eve::wide<float>;
+using cardinal = typename wide_f::cardinal_type;
+using wide_i = eve::wide<int, cardinal>;
 
 inline void check_cluster_count(std::size_t n_clusters, std::size_t n_samples) {
     if (n_clusters == 0) {
@@ -21,95 +25,6 @@ inline void check_cluster_count(std::size_t n_clusters, std::size_t n_samples) {
     if (n_clusters > n_samples) {
         throw std::invalid_argument("n_clusters must be <= n_samples");
     }
-}
-
-template<std::size_t D, typename Function>
-inline constexpr void for_each_feature(Function&& f) {
-    auto&& fn = f;
-    kumi::for_each_index(
-        [&](auto index, auto) { fn(index); },
-        kumi::fill<D>(0)
-    );
-}
-
-template<std::size_t D, typename SampleValue>
-inline std::pair<std::array<float, D>, float>
-compute_feature_mean_and_sklearn_tolerance_common(
-    std::size_t n_samples,
-    SampleValue&& sample_value,
-    float tol
-) {
-    std::array<float, D> means{};
-
-    if (n_samples == 0) return { means, 0.0f };
-
-    for_each_feature<D>([&](auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-
-        float sum = 0.0f;
-
-        for (std::size_t i = 0; i < n_samples; ++i) {
-            sum += sample_value(feature_index, i);
-        }
-
-        means[d] = sum / static_cast<float>(n_samples);
-    });
-
-    if (tol == 0.0f) return { means, 0.0f };
-
-    float total_variance = 0.0f;
-
-    for_each_feature<D>([&](auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-
-        const float mean = means[d];
-        float variance = 0.0f;
-
-        for (std::size_t i = 0; i < n_samples; ++i) {
-            const float diff = sample_value(feature_index, i) - mean;
-            variance += diff * diff;
-        }
-
-        total_variance += variance / static_cast<float>(n_samples);
-    });
-
-    const float mean_variance = total_variance / static_cast<float>(D);
-
-    return { means, mean_variance * tol };
-}
-
-template<std::size_t D, typename SampleValue>
-inline float compute_sklearn_tolerance_common(
-    std::size_t n_samples,
-    SampleValue&& sample_value,
-    float tol
-) {
-    return compute_feature_mean_and_sklearn_tolerance_common<D>(
-        n_samples,
-        std::forward<SampleValue>(sample_value),
-        tol
-    ).second;
-}
-
-template<std::size_t D, typename OldCentroidValue, typename NewCentroidValue>
-inline float calculate_centroid_shift_sq_common(
-    std::size_t n_clusters,
-    OldCentroidValue&& old_centroid_value,
-    NewCentroidValue&& new_centroid_value
-) {
-    float shift_sq = 0.0f;
-
-    for (std::size_t k = 0; k < n_clusters; ++k) {
-        for_each_feature<D>([&](auto feature_index) {
-            const float diff =
-                new_centroid_value(k, feature_index)
-                - old_centroid_value(k, feature_index);
-
-            shift_sq += diff * diff;
-        });
-    }
-
-    return shift_sq;
 }
 
 template<class Ops>

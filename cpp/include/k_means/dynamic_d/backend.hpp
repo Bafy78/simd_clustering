@@ -14,8 +14,8 @@
 
 #include "../core.hpp"
 
-using wide_f = eve::wide<float>;
-using wide_i = eve::wide<int, typename wide_f::cardinal_type>;
+using wide_f = kmeans::wide_f;
+using wide_i = kmeans::wide_i;
 
 using aligned_float_vector = std::vector<float, eve::aligned_allocator<float>>;
 using aligned_int_vector = std::vector<int, eve::aligned_allocator<int>>;
@@ -26,6 +26,14 @@ inline constexpr std::size_t simd_cardinal() {
 
 inline std::size_t round_up_to_multiple(std::size_t n, std::size_t multiple) {
     return ((n + multiple - 1) / multiple) * multiple;
+}
+
+template<std::size_t D, typename Function>
+inline constexpr void for_each_feature(Function&& f) {
+    kumi::for_each_index(
+        [&](auto index, auto) { f(index); },
+        kumi::fill<D>(0)
+    );
 }
 
 template<std::size_t K_TILE>
@@ -201,9 +209,8 @@ struct centroids_storage {
             const float* centroid = row_major.data() + k * D;
 
             float norm = 0.0f;
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                const float c = centroid[d];
+            for_each_feature<D>([&](auto feature_index) {
+                const float c = centroid[feature_index];
                 norm += c * c;
             });
 
@@ -211,7 +218,7 @@ struct centroids_storage {
         }
     }
 
-    void sync_fused_assignment_layout_from_row_major() {
+    void sync_centroid_tiled_assignment_layout_from_row_major() {
         std::fill(feature_major.begin(), feature_major.end(), 0.0f);
 
         if (centroid_norm_sq.size() != n_clusters) {
@@ -220,13 +227,11 @@ struct centroids_storage {
             std::fill(centroid_norm_sq.begin(), centroid_norm_sq.end(), 0.0f);
         }
 
-        kmeans::for_each_feature<D>([&](auto feature_index) {
-            constexpr std::size_t d = decltype(feature_index)::value;
-
-            float* dst = feature_major.data() + d * feature_major_stride;
+        for_each_feature<D>([&](auto feature_index) {
+            float* dst = feature_major.data() + feature_index * feature_major_stride;
 
             for (std::size_t k = 0; k < n_clusters; ++k) {
-                const float c = row_major[k * D + d];
+                const float c = row_major[k * D + feature_index];
                 dst[k] = -2.0f * c;
                 centroid_norm_sq[k] += c * c;
             }
@@ -235,23 +240,6 @@ struct centroids_storage {
 };
 
 #include "./assignment_fused.hpp"
-
-template<std::size_t D>
-inline float compute_sklearn_tolerance(
-    points_soa_view<D> points,
-    float tol
-) {
-    auto sample_value = [&](auto feature_index, std::size_t sample_i) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-        return points.template feature<d>()[sample_i];
-    };
-
-    return kmeans::compute_sklearn_tolerance_common<D>(
-        points.n_samples,
-        sample_value,
-        tol
-    );
-}
 
 template<std::size_t D>
 inline float point_to_centroid_dist_sq(
@@ -264,9 +252,8 @@ inline float point_to_centroid_dist_sq(
 
     float dist = 0.0f;
 
-    kmeans::for_each_feature<D>([&](auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-        const float diff = points.template feature<d>()[sample_i] - centroid[d];
+    for_each_feature<D>([&](auto feature_index) {
+        const float diff = points.template feature<feature_index>()[sample_i] - centroid[feature_index];
         dist += diff * diff;
     });
 
@@ -305,11 +292,10 @@ inline void resolve_dead_centroids(
             float* old_sum = sums_row_major.data() + old_cluster_id * D;
             float* new_sum = sums_row_major.data() + new_cluster_id * D;
 
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                const float x = points.template feature<d>()[sample_i];
-                old_sum[d] -= x;
-                new_sum[d] = x;
+            for_each_feature<D>([&](auto feature_index) {
+                const float x = points.template feature<feature_index>()[sample_i];
+                old_sum[feature_index] -= x;
+                new_sum[feature_index] = x;
             });
         }
     };
@@ -356,9 +342,8 @@ inline void update_centroids(
         void add_point_to_sum(std::size_t cluster_idx, std::size_t sample_i) {
             float* dst = sums_row_major.data() + cluster_idx * D;
 
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                dst[d] += points.template feature<d>()[sample_i];
+            for_each_feature<D>([&](auto feature_index) {
+                dst[feature_index] += points.template feature<feature_index>()[sample_i];
             });
         }
 
@@ -378,9 +363,8 @@ inline void update_centroids(
             const float* src = sums_row_major.data() + cluster_idx * D;
             float* dst = centroids.row_major.data() + cluster_idx * D;
 
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                dst[d] = src[d] * inv_count;
+            for_each_feature<D>([&](auto feature_index) {
+                dst[feature_index] = src[feature_index] * inv_count;
             });
         }
     };
@@ -401,21 +385,21 @@ inline float calculate_centroid_shift_sq(
 ) {
     const std::size_t n_clusters = new_centroids_row_major.size() / D;
 
-    auto old_value = [&](std::size_t k, auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-        return old_centroids_row_major[k * D + d];
-    };
+    float shift_sq = 0.0f;
 
-    auto new_value = [&](std::size_t k, auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-        return new_centroids_row_major[k * D + d];
-    };
+    for (std::size_t k = 0; k < n_clusters; ++k) {
+        const std::size_t base = k * D;
 
-    return kmeans::calculate_centroid_shift_sq_common<D>(
-        n_clusters,
-        old_value,
-        new_value
-    );
+        for (std::size_t j = 0; j < D; ++j) {
+            const float diff =
+                new_centroids_row_major[base + j]
+                - old_centroids_row_major[base + j];
+
+            shift_sq += diff * diff;
+        }
+    }
+
+    return shift_sq;
 }
 
 template<std::size_t D, class AssignmentBackend>
@@ -453,17 +437,15 @@ struct dynamic_kmeans_backend {
             return;
         }
 
-        kmeans::for_each_feature<D>([&](auto feature_index) {
-            constexpr std::size_t d = decltype(feature_index)::value;
-
-            const float* src = original_points.template feature<d>();
+        for_each_feature<D>([&](auto feature_index) {
+            const float* src = original_points.template feature<feature_index>();
 
             float sum = 0.0f;
             for (std::size_t i = 0; i < original_points.n_samples; ++i) {
                 sum += src[i];
             }
 
-            feature_mean[d] = sum / static_cast<float>(original_points.n_samples);
+            feature_mean[feature_index] = sum / static_cast<float>(original_points.n_samples);
         });
     }
 
@@ -477,12 +459,10 @@ struct dynamic_kmeans_backend {
 
         float total_variance = 0.0f;
 
-        kmeans::for_each_feature<D>([&](auto feature_index) {
-            constexpr std::size_t d = decltype(feature_index)::value;
-
-            const float* src = original_points.template feature<d>();
-            float* dst = points.template feature<d>();
-            const float mean = feature_mean[d];
+        for_each_feature<D>([&](auto feature_index) {
+            const float* src = original_points.template feature<feature_index>();
+            float* dst = points.template feature<feature_index>();
+            const float mean = feature_mean[feature_index];
             const wide_f mean_v(mean);
 
             std::size_t i = 0;
@@ -544,18 +524,16 @@ struct dynamic_kmeans_backend {
 
     void subtract_feature_mean_from_centroids() {
         for (std::size_t k = 0; k < centroids.n_clusters; ++k) {
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                centroids.row(k, d) -= feature_mean[d];
+            for_each_feature<D>([&](auto feature_index) {
+                centroids.row(k, feature_index) -= feature_mean[feature_index];
             });
         }
     }
 
     void add_feature_mean_to_centroids() {
         for (std::size_t k = 0; k < centroids.n_clusters; ++k) {
-            kmeans::for_each_feature<D>([&](auto feature_index) {
-                constexpr std::size_t d = decltype(feature_index)::value;
-                centroids.row(k, d) += feature_mean[d];
+            for_each_feature<D>([&](auto feature_index) {
+                centroids.row(k, feature_index) += feature_mean[feature_index];
             });
         }
     }
