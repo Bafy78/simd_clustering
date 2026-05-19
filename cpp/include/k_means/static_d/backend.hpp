@@ -75,7 +75,6 @@ bool assign_points_to_centroids(
         auto [pt_it, assign_it] = it;
         auto pt = eve::load[ignore](pt_it);
 
-        auto min_distances = eve::valmax(eve::as<wide_f>());
         auto closest_centroid_labels = compute_closest_centroid_labels(pt, centroids, centroid_norms);
 
         if constexpr (TrackChanges) {

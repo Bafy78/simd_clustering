@@ -29,36 +29,30 @@ inline void process_centroid_tiles(
 ) {
     constexpr std::size_t TOTAL_TILE = K_TILE * N_TILES;
     auto scores = kumi::generate<TOTAL_TILE>([&](auto index) {
-        constexpr std::size_t t = decltype(index)::value;
-        return wide_f(centroids.centroid_norm_sq[k0 + t]);
+        return wide_f(centroids.centroid_norm_sq[k0 + index]);
     });
 
-    kmeans::for_each_feature<D>([&](auto feature_index) {
-        constexpr std::size_t d = decltype(feature_index)::value;
-
+    for_each_feature<D>([&](auto feature_index) {
         // points are feature-major:
         //     points[d][sample_i : sample_i + SIMD_WIDTH]
         //
         // feature_major stores the assignment coefficient -2*c:
         //     score = ||c||^2 + sum_d x[d] * (-2*c[d])
         auto x = eve::load[ignore](
-            eve::as_aligned(points.template feature<d>() + sample_i)
+            eve::as_aligned(points.template feature<feature_index>() + sample_i)
         );
 
-        const float* centroid_feature = centroids.template feature_centroids<d>() + k0;
+        const float* centroid_feature = centroids.template feature_centroids<feature_index>() + k0;
 
         kumi::for_each_index([&](auto index, auto& score) {
-            constexpr std::size_t t = decltype(index)::value;
-
-            auto neg_two_c = wide_f(centroid_feature[t]);
+            auto neg_two_c = wide_f(centroid_feature[index]);
 
             score = eve::fma(x, neg_two_c, score);
         }, scores);
     });
 
     kumi::for_each_index([&](auto index, auto score) {
-        constexpr std::size_t t = decltype(index)::value;
-        const std::size_t k = k0 + t;
+        const std::size_t k = k0 + index;
 
         update_best_centroid(
             score,
@@ -120,8 +114,6 @@ inline void process_centroid_tail_exact(
     wide_f& best_dist,
     wide_i& best_k
 ) {
-    static_assert(TAIL > 0);
-
     if (remaining == TAIL) {
         process_centroid_tiles<D, TAIL, 1>(
             points,
@@ -299,9 +291,9 @@ bool assign_points_to_centroids_tiled_and_check_changed(
 }
 
 template<std::size_t D, std::size_t K_TILE>
-struct fused_assignment_backend {
+struct centroid_tiled_assignment_backend {
     void on_centroids_changed(centroids_storage<D>& centroids) const {
-        centroids.sync_fused_assignment_layout_from_row_major();
+        centroids.sync_centroid_tiled_assignment_layout_from_row_major();
     }
 
     void assign(

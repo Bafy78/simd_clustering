@@ -203,8 +203,6 @@ struct centroids_storage {
     }
 
     void recompute_centroid_norms_from_row_major() {
-        centroid_norm_sq.resize(n_clusters);
-
         for (std::size_t k = 0; k < n_clusters; ++k) {
             const float* centroid = row_major.data() + k * D;
 
@@ -219,13 +217,7 @@ struct centroids_storage {
     }
 
     void sync_centroid_tiled_assignment_layout_from_row_major() {
-        std::fill(feature_major.begin(), feature_major.end(), 0.0f);
-
-        if (centroid_norm_sq.size() != n_clusters) {
-            centroid_norm_sq.assign(n_clusters, 0.0f);
-        } else {
-            std::fill(centroid_norm_sq.begin(), centroid_norm_sq.end(), 0.0f);
-        }
+        std::fill(centroid_norm_sq.begin(), centroid_norm_sq.end(), 0.0f);
 
         for_each_feature<D>([&](auto feature_index) {
             float* dst = feature_major.data() + feature_index * feature_major_stride;
@@ -239,7 +231,8 @@ struct centroids_storage {
     }
 };
 
-#include "./assignment_fused.hpp"
+#include "./assignment_centroid_tiled.hpp"
+#include "./assignment_micro_gemm.hpp"
 
 template<std::size_t D>
 inline float point_to_centroid_dist_sq(
@@ -317,16 +310,6 @@ inline void update_centroids(
     aligned_float_vector& sums_row_major,
     aligned_int_vector& counts
 ) {
-    const std::size_t n_clusters = centroids.n_clusters;
-
-    if (sums_row_major.size() != n_clusters * D) {
-        sums_row_major.resize(n_clusters * D);
-    }
-
-    if (counts.size() != n_clusters) {
-        counts.resize(n_clusters);
-    }
-
     struct ops_t {
         points_soa_view<D> points;
         centroids_storage<D>& centroids;
@@ -351,8 +334,8 @@ inline void update_centroids(
             ::resolve_dead_centroids<D>(
                 points,
                 assignments,
-                std::span<const float>(centroids.row_major.data(), centroids.row_major.size()),
-                std::span<float>(sums_row_major.data(), sums_row_major.size()),
+                std::span<const float>{centroids.row_major},
+                std::span<float>{sums_row_major},
                 counts
             );
         }
@@ -374,7 +357,7 @@ inline void update_centroids(
     kmeans::update_centroids_common(
         ops,
         assignments,
-        std::span<int>(counts.data(), counts.size())
+        std::span<int>{counts}
     );
 }
 
@@ -415,7 +398,7 @@ struct dynamic_kmeans_backend {
     centroids_storage<D>& centroids;
 
     aligned_float_vector sums_row_major;
-    std::array<float, D> feature_mean{};
+    std::array<float, D> feature_mean;
 
     AssignmentBackend assignment_backend;
 
@@ -432,11 +415,6 @@ struct dynamic_kmeans_backend {
       assignment_backend(std::move(assignment_backend_)) {}
 
     void compute_feature_mean_from_original() {
-        if (original_points.n_samples == 0) {
-            feature_mean.fill(0.0f);
-            return;
-        }
-
         for_each_feature<D>([&](auto feature_index) {
             const float* src = original_points.template feature<feature_index>();
 
@@ -450,10 +428,6 @@ struct dynamic_kmeans_backend {
     }
 
     float copy_centered_points_from_original_and_compute_scaled_tolerance(float tol) {
-        if (points.n_samples == 0) {
-            return 0.0f;
-        }
-
         constexpr std::size_t card = simd_cardinal();
         const std::size_t n = points.n_samples;
 
@@ -500,9 +474,7 @@ struct dynamic_kmeans_backend {
             }
         });
 
-        if (tol == 0.0f) {
-            return 0.0f;
-        }
+        if (tol == 0.0f) return 0.0f;
 
         return tol * (total_variance / static_cast<float>(D));
     }
@@ -559,28 +531,17 @@ struct dynamic_kmeans_backend {
     }
 
     void assign(assignment_vector& assignments) const {
-        assignment_backend.assign(
-            points,
-            centroids,
-            std::span<int>(assignments.data(), assignments.size())
-        );
+        assignment_backend.assign(points, centroids, assignments);
     }
 
     bool assign_and_check_changed(assignment_vector& assignments) const {
-        return assignment_backend.assign_and_check_changed(
-            points,
-            centroids,
-            std::span<int>(assignments.data(), assignments.size())
-        );
+        return assignment_backend.assign_and_check_changed(points, centroids, assignments);
     }
 
-    void update_centroids(
-        assignment_vector& assignments,
-        counts_vector& counts
-    ) {
+    void update_centroids(assignment_vector& assignments, counts_vector& counts) {
         ::update_centroids<D>(
             points,
-            std::span<const int>(assignments.data(), assignments.size()),
+            std::span<const int>{assignments},
             centroids,
             sums_row_major,
             counts
@@ -593,20 +554,20 @@ struct dynamic_kmeans_backend {
         const centroid_snapshot& previous_centroids
     ) const {
         return ::calculate_centroid_shift_sq<D>(
-            std::span<const float>(previous_centroids.data(), previous_centroids.size()),
-            std::span<const float>(centroids.row_major.data(), centroids.row_major.size())
+            std::span<const float>{previous_centroids},
+            std::span<const float>{centroids.row_major}
         );
     }
 };
 
 template<std::size_t D, std::size_t K_TILE>
-using fused_kmeans_backend = dynamic_kmeans_backend<
+using centroid_tiled_kmeans_backend = dynamic_kmeans_backend<
     D,
-    fused_assignment_backend<D, K_TILE>
+    centroid_tiled_assignment_backend<D, K_TILE>
 >;
 
 template<std::size_t D, std::size_t K_TILE>
-aligned_int_vector k_means_tiled(
+aligned_int_vector k_means_centroid_tiled(
     points_soa_view<D> points,
     centroids_storage<D>& centroids,
     int& out_iterations,
@@ -615,10 +576,42 @@ aligned_int_vector k_means_tiled(
 ) {
     static_assert(D > 0);
     static_assert(K_TILE > 0);
-    fused_kmeans_backend<D, K_TILE> backend{
+    centroid_tiled_kmeans_backend<D, K_TILE> backend{
         points,
         centroids,
-        fused_assignment_backend<D, K_TILE>{}
+        centroid_tiled_assignment_backend<D, K_TILE>{}
+    };
+
+    return kmeans::k_means_core(
+        backend,
+        out_iterations,
+        max_iterations,
+        tol
+    );
+}
+
+template<std::size_t D, std::size_t K_TILE, std::size_t M_VECTORS>
+using micro_gemm_kmeans_backend = dynamic_kmeans_backend<
+    D,
+    micro_gemm_assignment_backend<D, K_TILE, M_VECTORS>
+>;
+
+template<std::size_t D, std::size_t K_TILE, std::size_t M_VECTORS>
+aligned_int_vector k_means_micro_gemm(
+    points_soa_view<D> points,
+    centroids_storage<D>& centroids,
+    int& out_iterations,
+    int max_iterations = 300,
+    float tol = 1e-4f
+) {
+    static_assert(D > 0);
+    static_assert(K_TILE > 0);
+    static_assert(M_VECTORS > 0);
+
+    micro_gemm_kmeans_backend<D, K_TILE, M_VECTORS> backend{
+        points,
+        centroids,
+        micro_gemm_assignment_backend<D, K_TILE, M_VECTORS>{}
     };
 
     return kmeans::k_means_core(
