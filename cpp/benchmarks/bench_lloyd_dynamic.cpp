@@ -11,9 +11,12 @@
 #include "../include/k_means/dynamic_d/backend.hpp"
 
 #ifndef KMEANS_K_TILE
-#define KMEANS_K_TILE 4
+#define KMEANS_K_TILE 5
 #endif
 
+#ifndef KMEANS_M_GROUP
+#define KMEANS_M_GROUP 2
+#endif
 
 template<typename StaticPoints>
 points_soa_storage<TUPLE_SIZE> make_dynamic_points(
@@ -130,7 +133,7 @@ int main(int argc, char* argv[]) {
         centroids_storage<TUPLE_SIZE> current_centroids =
             dynamic_initial_centroids;
 
-        auto centroid_assignments = k_means_tiled<TUPLE_SIZE, KMEANS_K_TILE>(
+        auto centroid_assignments = k_means_centroid_tiled<TUPLE_SIZE, KMEANS_K_TILE>(
             dynamic_points,
             current_centroids,
             iterations_to_converge

@@ -25,7 +25,7 @@ inline void sync_micro_gemm_assignment_layout_from_row_major(
         0.0f
     );
 
-    // Runtime D loop as it's probably better for high D (need to benchmark)
+    // Runtime D loop is much faster than compile-time
     for (std::size_t d = 0; d < D; ++d) {
         float* dst = centroids.feature_major.data()
                    + d * centroids.feature_major_stride;
@@ -59,11 +59,8 @@ inline void process_micro_gemm_centroid_tile_full_vectors(
     }
 
     // Micro-GEMM shape:
-    //
     //   M_VECTORS SIMD sample vectors
     //   K_COUNT   centroid columns
-    //   runtime D loop (to benchmark!)
-    //
     // No B x K score block is materialized.
     for (std::size_t d = 0; d < D; ++d) {
         const float* point_feature = points.feature(d);

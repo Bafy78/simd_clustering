@@ -32,24 +32,25 @@ inline void process_centroid_tiles(
         return wide_f(centroids.centroid_norm_sq[k0 + index]);
     });
 
-    for_each_feature<D>([&](auto feature_index) {
+    for (std::size_t d = 0; d < D; ++d) {
         // points are feature-major:
         //     points[d][sample_i : sample_i + SIMD_WIDTH]
         //
         // feature_major stores the assignment coefficient -2*c:
         //     score = ||c||^2 + sum_d x[d] * (-2*c[d])
         auto x = eve::load[ignore](
-            eve::as_aligned(points.template feature<feature_index>() + sample_i)
+            eve::as_aligned(points.feature(d) + sample_i)
         );
 
-        const float* centroid_feature = centroids.template feature_centroids<feature_index>() + k0;
+        const float* centroid_feature =
+            centroids.feature_centroids(d) + k0;
 
         kumi::for_each_index([&](auto index, auto& score) {
             auto neg_two_c = wide_f(centroid_feature[index]);
 
             score = eve::fma(x, neg_two_c, score);
         }, scores);
-    });
+    }
 
     kumi::for_each_index([&](auto index, auto score) {
         const std::size_t k = k0 + index;

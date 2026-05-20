@@ -131,6 +131,8 @@ def compile_cpp_binaries(dim: int):
             "-I../eve/include",
             "-I../nanobench/src/include",
             f"-DTUPLE_SIZE={dim}",
+            "-DKMEANS_K_TILE=5",
+            "-DKMEANS_M_GROUP=2",
             target["src"],
             "-o",
             target["bin"],

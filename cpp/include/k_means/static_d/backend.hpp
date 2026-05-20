@@ -267,7 +267,7 @@ struct kumi_kmeans_backend {
     float copy_centered_points_from_original_and_compute_scaled_tolerance(float tol) {
         points.resize(original_points.size());
 
-        eve::algo::transform_to(
+        eve::algo::transform_to[eve::algo::no_unrolling]( // unrolling tested
             original_points, 
             points,
             [&](auto src_pt) {
@@ -283,8 +283,8 @@ struct kumi_kmeans_backend {
 
         if (tol == 0.0f || points.size() == 0) return 0.0f;
 
-        const float total_squared_centered_norm = 
-            eve::algo::transform_reduce[eve::algo::fuse_operations]( 
+        const float total_squared_centered_norm =  // unrolling tested
+            eve::algo::transform_reduce[eve::algo::fuse_operations][eve::algo::no_unrolling]( 
                 points,
                 [](auto pt, auto acc) {
                     kumi::for_each([&](auto x) {
