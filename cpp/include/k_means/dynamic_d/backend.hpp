@@ -28,27 +28,7 @@ inline std::size_t round_up_to_multiple(std::size_t n, std::size_t multiple) {
     return ((n + multiple - 1) / multiple) * multiple;
 }
 
-template<std::size_t K_TILE>
-inline constexpr std::size_t centroid_tiles_at_once() {
-    constexpr std::size_t register_count = static_cast<std::size_t>(eve::register_count::simd);
-    constexpr std::size_t kernel_register_overhead = 4;
-
-    constexpr std::size_t accumulator_registers =
-        register_count > kernel_register_overhead
-        ? register_count - kernel_register_overhead
-        : K_TILE;
-
-    constexpr std::size_t tiles = accumulator_registers / K_TILE;
-
-    if constexpr (tiles == 0) {
-        return 1;
-    } else {
-        return tiles;
-    }
-}
-
 // Static-D feature-major point view:
-//
 //     points[d][i]
 //
 // D is compile-time.
@@ -87,7 +67,8 @@ struct points_soa_storage {
         n_samples = samples;
         stride = round_up_to_multiple(samples, simd_cardinal());
 
-        data.assign(D * stride, 0.0f);
+        data.resize(D * stride);
+        std::fill(data.begin(), data.end(), 0.0f);
     }
 
     float& operator()(std::size_t sample, std::size_t feature) {
@@ -119,37 +100,27 @@ struct points_soa_storage {
     }
 };
 
-// Static-D dual centroid storage.
+// Static-D centroid storage.
 //
-// row_major:
+// row_major is the single source of truth:
 //     centroids[k][d]
-//     Useful for update/dead-centroid/scalar logic.
 //
-// feature_major:
-//     centroids_T[d][k]
-//     Useful for the tiled assignment kernel.
+// Assignment-specific layouts are owned and refreshed by the assignment
+// backends when on_centroids_changed() is called.
 template<std::size_t D>
 struct centroids_storage {
     static constexpr std::size_t n_features = D;
 
     aligned_float_vector row_major;
-    aligned_float_vector feature_major;
-    aligned_float_vector centroid_norm_sq;
 
     std::size_t n_clusters = 0;
-    std::size_t feature_major_stride = 0;
 
     centroids_storage() = default;
 
-    template<std::size_t K_TILE>
-    void resize_for_tile(std::size_t clusters) {
-        static_assert(K_TILE > 0);
+    void resize(std::size_t clusters) {
         n_clusters = clusters;
-        feature_major_stride = round_up_to_multiple(n_clusters, K_TILE);
-
-        row_major.assign(n_clusters * D, 0.0f);
-        feature_major.assign(D * feature_major_stride, 0.0f);
-        centroid_norm_sq.assign(n_clusters, 0.0f);
+        row_major.resize(n_clusters * D);
+        std::fill(row_major.begin(), row_major.end(), 0.0f);
     }
 
     float& row(std::size_t k, std::size_t d) {
@@ -170,44 +141,6 @@ struct centroids_storage {
     float row(std::size_t k) const {
         static_assert(Feature < D);
         return row_major[k * D + Feature];
-    }
-
-    const float* feature_centroids(std::size_t d) const {
-        return feature_major.data() + d * feature_major_stride;
-    }
-
-    template<std::size_t Feature>
-    const float* feature_centroids() const {
-        static_assert(Feature < D);
-        return feature_major.data() + Feature * feature_major_stride;
-    }
-
-    void recompute_centroid_norms_from_row_major() {
-        for (std::size_t k = 0; k < n_clusters; ++k) {
-            const float* centroid = row_major.data() + k * D;
-
-            float norm = 0.0f;
-            for (std::size_t d = 0; d < D; ++d) {
-                const float c = centroid[d];
-                norm += c * c;
-            }
-
-            centroid_norm_sq[k] = norm;
-        }
-    }
-
-    void sync_centroid_tiled_assignment_layout_from_row_major() {
-        std::fill(centroid_norm_sq.begin(), centroid_norm_sq.end(), 0.0f);
-
-        for (std::size_t d = 0; d < D; ++d) {
-            float* dst = feature_major.data() + d * feature_major_stride;
-
-            for (std::size_t k = 0; k < n_clusters; ++k) {
-                const float c = row_major[k * D + d];
-                dst[k] = -2.0f * c;
-                centroid_norm_sq[k] += c * c;
-            }
-        }
     }
 };
 
@@ -508,11 +441,11 @@ struct dynamic_kmeans_backend {
     }
 
     void assign(assignment_vector& assignments) const {
-        assignment_backend.assign(points, centroids, assignments);
+        assignment_backend.assign(points, assignments);
     }
 
     bool assign_and_check_changed(assignment_vector& assignments) const {
-        return assignment_backend.assign_and_check_changed(points, centroids, assignments);
+        return assignment_backend.assign_and_check_changed(points, assignments);
     }
 
     void update_centroids(assignment_vector& assignments, counts_vector& counts) {

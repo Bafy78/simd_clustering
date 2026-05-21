@@ -29,9 +29,9 @@ points_soa_storage<TUPLE_SIZE> make_dynamic_points(
 
         kumi::for_each_index(
             [&](auto index, auto value) {
-            constexpr std::size_t d = decltype(index)::value;
-            out(i, d) = value;
-        },
+                constexpr std::size_t d = decltype(index)::value;
+                out(i, d) = value;
+            },
             pt
         );
     }
@@ -43,14 +43,14 @@ inline centroids_storage<TUPLE_SIZE> make_dynamic_centroids(
     const std::vector<PointType>& static_centroids
 ) {
     centroids_storage<TUPLE_SIZE> out;
-    out.template resize_for_tile<KMEANS_K_TILE>(static_centroids.size());
+    out.resize(static_centroids.size());
 
     for (std::size_t k = 0; k < static_centroids.size(); ++k) {
         kumi::for_each_index(
             [&](auto index, auto value) {
-            constexpr std::size_t d = decltype(index)::value;
-            out.row(k, d) = value;
-        },
+                constexpr std::size_t d = decltype(index)::value;
+                out.row(k, d) = value;
+            },
             static_centroids[k]
         );
     }
@@ -68,9 +68,9 @@ inline std::vector<PointType> make_static_centroids(
 
         kumi::for_each_index(
             [&](auto index, auto& value) {
-            constexpr std::size_t d = decltype(index)::value;
-            value = dynamic_centroids.row(k, d);
-        },
+                constexpr std::size_t d = decltype(index)::value;
+                value = dynamic_centroids.row(k, d);
+            },
             pt
         );
 
@@ -133,15 +133,16 @@ int main(int argc, char* argv[]) {
         centroids_storage<TUPLE_SIZE> current_centroids =
             dynamic_initial_centroids;
 
-        auto centroid_assignments = k_means_centroid_tiled<TUPLE_SIZE, KMEANS_K_TILE>(
+        auto centroid_assignments = k_means_micro_gemm<TUPLE_SIZE, KMEANS_K_TILE, KMEANS_M_GROUP>(
             dynamic_points,
             current_centroids,
             iterations_to_converge
         );
 
         ankerl::nanobench::doNotOptimizeAway(current_centroids.row_major.data());
-        ankerl::nanobench::doNotOptimizeAway(current_centroids.feature_major.data());
+        ankerl::nanobench::doNotOptimizeAway(current_centroids.row_major.size());
         ankerl::nanobench::doNotOptimizeAway(centroid_assignments.data());
+        ankerl::nanobench::doNotOptimizeAway(centroid_assignments.size());
 
         final_dynamic_centroids = std::move(current_centroids);
         final_assignments = std::move(centroid_assignments);
