@@ -327,15 +327,36 @@ struct dynamic_kmeans_backend {
       assignment_backend(std::move(assignment_backend_)) {}
 
     void compute_feature_mean_from_original() {
+        constexpr std::size_t card = simd_cardinal();
+
+        const std::size_t n = original_points.n_samples;
+
+        if (n == 0) {
+            feature_mean.fill(0.0f);
+            return;
+        }
+
+        const float inv_n = 1.0f / static_cast<float>(n);
+
         for (std::size_t d = 0; d < D; ++d) {
             const float* src = original_points.feature(d);
 
-            float sum = 0.0f;
-            for (std::size_t i = 0; i < original_points.n_samples; ++i) {
+            wide_f sum_v = eve::zero(eve::as<wide_f>());
+
+            std::size_t i = 0;
+
+            for (; i + card <= n; i += card) {
+                const auto x = eve::load(eve::as_aligned(src + i));
+                sum_v += x;
+            }
+
+            float sum = eve::reduce(sum_v);
+
+            for (; i < n; ++i) {
                 sum += src[i];
             }
 
-            feature_mean[d] = sum / static_cast<float>(original_points.n_samples);
+            feature_mean[d] = sum * inv_n;
         }
     }
 
