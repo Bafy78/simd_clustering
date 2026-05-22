@@ -41,6 +41,24 @@ struct micro_gemm_assignment_layout {
         }
     }
 
+    void update_cluster_from_row_major(
+        const centroids_storage<D>& centroids,
+        std::size_t k
+    ) {
+        const std::size_t panel = k / K_TILE;
+        const std::size_t t = k % K_TILE;
+
+        float norm = 0.0f;
+
+        for (std::size_t d = 0; d < D; ++d) {
+            const float c = centroids.row_major[k * D + d];
+            panel_feature(panel, d)[t] = -2.0f * c;
+            norm += c * c;
+        }
+
+        centroid_norm_sq[k] = norm;
+    }
+
     float* panel_feature(std::size_t panel, std::size_t d) {
         return packed.data() + (panel * D + d) * K_TILE;
     }
@@ -513,6 +531,23 @@ struct micro_gemm_assignment_backend {
 
     void on_centroids_changed(const centroids_storage<D>& centroids) {
         layout.sync_from_row_major(centroids);
+    }
+
+    void on_centroids_changed_for_clusters(
+        const centroids_storage<D>& centroids,
+        std::span<const int> dirty_clusters
+    ) {
+        if (dirty_clusters.size() * 2 > centroids.n_clusters) {
+            on_centroids_changed(centroids);
+            return;
+        }
+
+        for (int cluster_idx : dirty_clusters) {
+            layout.update_cluster_from_row_major(
+                centroids,
+                static_cast<std::size_t>(cluster_idx)
+            );
+        }
     }
 
     void assign(
