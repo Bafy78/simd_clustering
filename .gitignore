@@ -6,4 +6,4 @@ datasets*/
 .vscode/
 *.html
 **/__pycache__/
-cachegrind_results/
+callgrind_results/

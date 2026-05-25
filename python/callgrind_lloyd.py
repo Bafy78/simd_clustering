@@ -1,5 +1,6 @@
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -8,12 +9,20 @@ from benchmark_pipeline.paths import BIN_DIR, REPO_ROOT, repo_path
 from benchmark_pipeline.runner import run_command
 from benchmark_pipeline.tasks import build_pipeline, config_id, dataset_path
 
+PROFILE_EVENTS = "Ir,Dr,D1mr,DLmr,Dw,D1mw,DLmw"
 
-def compile_cachegrind_binary(dim: int) -> Path:
+
+def require_tool(tool: str) -> None:
+    if shutil.which(tool) is None:
+        print(f"Required tool not found on PATH: {tool}")
+        sys.exit(1)
+
+
+def compile_profile_binary(dim: int) -> Path:
     os.makedirs(BIN_DIR, exist_ok=True)
 
-    src = repo_path("cpp", "benchmarks", "profile_lloyd_cachegrind.cpp")
-    out = BIN_DIR / f"profile_lloyd_cachegrind_{dim}D.bin"
+    src = repo_path("cpp", "benchmarks", "profile_lloyd_callgrind.cpp")
+    out = BIN_DIR / f"profile_lloyd_callgrind_{dim}D.bin"
 
     cmd = [
         "g++-14",
@@ -31,8 +40,8 @@ def compile_cachegrind_binary(dim: int) -> Path:
         str(out),
     ]
 
-    print(f"Compiling Cachegrind Lloyd binary for {dim}D...")
-    run_command("Compile Cachegrind Lloyd binary", cmd)
+    print(f"Compiling Callgrind Lloyd binary for {dim}D...")
+    run_command("Compile Callgrind Lloyd binary", cmd)
     return out
 
 
@@ -59,14 +68,25 @@ def run_and_capture(
         sys.exit(result.returncode)
 
 
+def add_cache_options(command: list[str], args: argparse.Namespace) -> None:
+    if args.I1:
+        command.append(f"--I1={args.I1}")
+    if args.D1:
+        command.append(f"--D1={args.D1}")
+    if args.LL:
+        command.append(f"--LL={args.LL}")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Run one Lloyd configuration under Callgrind with cache simulation enabled."
+    )
     parser.add_argument("--dim", type=int, required=True)
     parser.add_argument("--n-samples", type=int, required=True)
     parser.add_argument("--n-clusters", type=int, required=True)
     parser.add_argument("--skip-compile", action="store_true")
     parser.add_argument("--skip-generate", action="store_true")
-    parser.add_argument("--out-dir", default=repo_path("cachegrind_results"))
+    parser.add_argument("--out-dir", default=repo_path("callgrind_results"))
 
     # Optional explicit cache model. Example:
     # --D1 32768,8,64 --LL 33554432,16,64
@@ -76,14 +96,17 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    require_tool("valgrind")
+    require_tool("callgrind_annotate")
+
     case = config_id(args.dim, args.n_samples, args.n_clusters)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    binary = BIN_DIR / f"profile_lloyd_cachegrind_{args.dim}D.bin"
+    binary = BIN_DIR / f"profile_lloyd_callgrind_{args.dim}D.bin"
 
     if not args.skip_compile:
-        binary = compile_cachegrind_binary(args.dim)
+        binary = compile_profile_binary(args.dim)
 
     if not args.skip_generate:
         dataset_task = build_pipeline(
@@ -99,30 +122,23 @@ def main() -> None:
     dataset_bin = dataset_path(f"data_{case}.bin")
     init_bin = dataset_path(f"init_{case}.bin")
 
-    cg_out = out_dir / f"cachegrind.lloyd.{case}.out"
+    callgrind_out = out_dir / f"callgrind.lloyd.{case}.out"
     metrics_out = out_dir / f"lloyd_metrics_cpp.{case}.json"
-    valgrind_stdout = out_dir / f"valgrind.lloyd.{case}.stdout.txt"
-    valgrind_stderr = out_dir / f"valgrind.lloyd.{case}.stderr.txt"
-    annotate_out = out_dir / f"cachegrind.lloyd.{case}.annotate.txt"
-    annotate_err = out_dir / f"cachegrind.lloyd.{case}.annotate.stderr.txt"
+    valgrind_stdout = out_dir / f"valgrind.callgrind.lloyd.{case}.stdout.txt"
+    valgrind_stderr = out_dir / f"valgrind.callgrind.lloyd.{case}.stderr.txt"
+    annotate_out = out_dir / f"callgrind.lloyd.{case}.annotate.txt"
+    annotate_err = out_dir / f"callgrind.lloyd.{case}.annotate.stderr.txt"
 
-    valgrind_cmd = [
+    callgrind_cmd = [
         "valgrind",
-        "--tool=cachegrind",
+        "--tool=callgrind",
         "--cache-sim=yes",
         "--branch-sim=no",
-        "--instr-at-start=no",
-        f"--cachegrind-out-file={cg_out}",
+        "--instr-atstart=no",
+        f"--callgrind-out-file={callgrind_out}",
     ]
-
-    if args.I1:
-        valgrind_cmd.append(f"--I1={args.I1}")
-    if args.D1:
-        valgrind_cmd.append(f"--D1={args.D1}")
-    if args.LL:
-        valgrind_cmd.append(f"--LL={args.LL}")
-
-    valgrind_cmd.extend(
+    add_cache_options(callgrind_cmd, args)
+    callgrind_cmd.extend(
         [
             str(binary),
             dataset_bin,
@@ -134,33 +150,39 @@ def main() -> None:
     )
 
     run_and_capture(
-        "Cachegrind Lloyd",
-        valgrind_cmd,
+        "Callgrind Lloyd",
+        callgrind_cmd,
         valgrind_stdout,
         valgrind_stderr,
     )
 
-    annotate_cmd = [
-        "cg_annotate",
-        "--show=Ir,Dr,D1mr,DLmr,Dw,D1mw,DLmw",
+    callgrind_annotate_cmd = [
+        "callgrind_annotate",
+        f"--show={PROFILE_EVENTS}",
         "--sort=D1mr,D1mw,DLmr,DLmw,Ir",
+        "--inclusive=yes",
+        "--tree=both",
         "--threshold=0.0",
         "--context=8",
-        str(cg_out),
+        str(callgrind_out),
     ]
 
     run_and_capture(
-        "cg_annotate",
-        annotate_cmd,
+        "callgrind_annotate",
+        callgrind_annotate_cmd,
         annotate_out,
         annotate_err,
     )
 
     print("\nDone.")
-    print(f"Raw Cachegrind output: {cg_out}")
-    print(f"Annotated report:      {annotate_out}")
-    print(f"Metrics JSON:          {metrics_out}")
-    print(f"Valgrind stderr:       {valgrind_stderr}")
+    print(f"Callgrind raw output:      {callgrind_out}")
+    print(f"Callgrind annotated:       {annotate_out}")
+    print(f"Metrics JSON:              {metrics_out}")
+    print(f"Valgrind stdout:           {valgrind_stdout}")
+    print(f"Valgrind stderr:           {valgrind_stderr}")
+    print("")
+    print("Open the raw output directly in KCachegrind, for example:")
+    print(f"  kcachegrind {callgrind_out}")
 
 
 if __name__ == "__main__":
