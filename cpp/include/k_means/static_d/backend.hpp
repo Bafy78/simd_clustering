@@ -310,32 +310,36 @@ struct kumi_kmeans_backend {
     float copy_centered_points_from_original_and_compute_scaled_tolerance(float tol) {
         points.resize(original_points.size());
 
-        eve::algo::transform_to[eve::algo::no_unrolling]( // unrolling tested
-            original_points, 
-            points,
-            [&](auto src_pt) {
+        if (points.size() == 0) return 0.0f;
+
+        wide_f total_squared_centered_norm_w = eve::zero(eve::as<wide_f>());
+
+        eve::algo::for_each[eve::algo::no_unrolling](
+            eve::views::zip(original_points, points),
+            [&](eve::algo::iterator auto it,
+                eve::relative_conditional_expr auto ignore) {
+                auto [src_it, dst_it] = it;
+                auto src_pt = eve::load[ignore](src_it);
                 using simd_point_t = std::remove_cvref_t<decltype(src_pt)>;
                 auto centered = kumi::map(
-                    [](auto x, auto mean) { return x - mean; },
-                    src_pt,
-                    feature_mean
+                    [](auto x, auto mean) { return x - mean; }, src_pt, feature_mean
                 );
-                return simd_point_t{centered};
+
+                kumi::for_each(
+                    [&](auto x) {
+                        total_squared_centered_norm_w =
+                            eve::fma[ignore](x, x, total_squared_centered_norm_w);
+                    },
+                    centered
+                );
+
+                eve::store[ignore](simd_point_t{centered}, dst_it);
             }
         );
 
-        if (tol == 0.0f || points.size() == 0) return 0.0f;
+        if (tol == 0.0f) return 0.0f;
 
-        const float total_squared_centered_norm =  // unrolling tested
-            eve::algo::transform_reduce[eve::algo::fuse_operations][eve::algo::no_unrolling]( 
-                points,
-                [](auto pt, auto acc) {
-                    kumi::for_each([&](auto x) {
-                        acc = eve::fma(x, x, acc);
-                    }, pt); return acc; 
-                },
-                0.0f
-            );
+        const float total_squared_centered_norm = eve::reduce(total_squared_centered_norm_w);
 
         return tol
             * total_squared_centered_norm
