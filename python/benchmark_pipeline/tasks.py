@@ -2,13 +2,15 @@ import sys
 from dataclasses import dataclass
 from typing import Optional
 
-from benchmark_pipeline.paths import BIN_DIR, DATASETS_DIR, repo_path
+from benchmark_pipeline.cpp_cases import nanobench_binary_path
+from benchmark_pipeline.paths import DATASETS_DIR, repo_path
 
 
 @dataclass
 class Task:
     name: str
     command: list[str]
+    cpp_case: Optional[str] = None
     cpp_json_arg: Optional[int] = None
     cpp_metrics_arg: Optional[int] = None
 
@@ -19,10 +21,6 @@ def config_id(dim: int, n_samples: int, n_clusters: int) -> str:
 
 def dataset_path(filename: str) -> str:
     return str(DATASETS_DIR / filename)
-
-
-def binary_path(filename: str) -> str:
-    return str(BIN_DIR / filename)
 
 
 def build_pipeline(
@@ -58,57 +56,59 @@ def build_pipeline(
             ],
         ),
         Task(
-            name="C++: AoS to SoA Tax",
+            name="C++: AoS to Native Layout",
             command=[
-                binary_path("bench_soa.bin"),
+                nanobench_binary_path("soa_dynamic"),
                 dataset_bin,
                 str(n_samples),
                 dataset_path(f"soa_cpp_{case_id}.json"),
                 str(bench_values),
                 str(bench_min_time),
             ],
+            cpp_case="soa_dynamic",
             cpp_json_arg=3,
         ),
-        Task(
-            name="C++: K-Means++ Initialization",
-            command=[
-                binary_path("bench_pp.bin"),
-                dataset_bin,
-                str(n_samples),
-                str(n_clusters),
-                dataset_path(f"pp_cpp_{case_id}.json"),
-                str(bench_values),
-                str(bench_min_time),
-            ],
-            cpp_json_arg=4,
-        ),
-        Task(
-            name="Python: K-Means++ Initialization",
-            command=[
-                sys.executable,
-                repo_path("python", "benchmark_pipeline", "benches", "bench_pp.py"),
-                "--dataset-bin",
-                dataset_bin,
-                "--n-samples",
-                str(n_samples),
-                "--n-features",
-                str(dim),
-                "--n-clusters",
-                str(n_clusters),
-                "--processes",
-                str(bench_processes),
-                "--values",
-                str(bench_values),
-                "--min-time",
-                str(bench_min_time),
-                "--output",
-                dataset_path(f"pp_py_{case_id}.json"),
-            ],
-        ),
+        # Task(
+        #     name="C++: K-Means++ Initialization",
+        #     command=[
+        #         nanobench_binary_path("pp"),
+        #         dataset_bin,
+        #         str(n_samples),
+        #         str(n_clusters),
+        #         dataset_path(f"pp_cpp_{case_id}.json"),
+        #         str(bench_values),
+        #         str(bench_min_time),
+        #     ],
+        #     cpp_case="pp",
+        #     cpp_json_arg=4,
+        # ),
+        # Task(
+        #     name="Python: K-Means++ Initialization",
+        #     command=[
+        #         sys.executable,
+        #         repo_path("python", "benchmark_pipeline", "benches", "bench_pp.py"),
+        #         "--dataset-bin",
+        #         dataset_bin,
+        #         "--n-samples",
+        #         str(n_samples),
+        #         "--n-features",
+        #         str(dim),
+        #         "--n-clusters",
+        #         str(n_clusters),
+        #         "--processes",
+        #         str(bench_processes),
+        #         "--values",
+        #         str(bench_values),
+        #         "--min-time",
+        #         str(bench_min_time),
+        #         "--output",
+        #         dataset_path(f"pp_py_{case_id}.json"),
+        #     ],
+        # ),
         Task(
             name="C++: Lloyd Iterations",
             command=[
-                binary_path("bench_lloyd.bin"),
+                nanobench_binary_path("lloyd_dynamic"),
                 dataset_bin,
                 str(n_samples),
                 str(n_clusters),
@@ -118,6 +118,7 @@ def build_pipeline(
                 str(bench_values),
                 str(bench_min_time),
             ],
+            cpp_case="lloyd_dynamic",
             cpp_metrics_arg=5,
             cpp_json_arg=6,
         ),

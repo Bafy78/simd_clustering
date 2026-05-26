@@ -1,69 +1,32 @@
 #pragma once
-#include <iostream>
+
+#include <cstddef>
+#include <fstream>
 #include <iomanip>
 #include <limits>
-#include <stdexcept>
-#include <vector>
-#include <fstream>
+#include <ostream>
 #include <span>
+#include <stdexcept>
 #include <string>
-#include <eve/module/core.hpp>
+#include <utility>
+#include <vector>
+
 #include <eve/module/algo.hpp>
+#include <eve/module/core.hpp>
 
-#ifndef TUPLE_SIZE
-#define TUPLE_SIZE 2
-#endif
-
-using PointType = kumi::result::fill_t<TUPLE_SIZE, float>;
-
-// --- Helper: Read Raw Binary Data & Convert to SoA (For Setup) ---
-inline eve::algo::soa_vector<PointType> read_dataset_soa(const std::string& filename, std::size_t n_samples) {
-    std::vector<float> raw_aos_data(n_samples * TUPLE_SIZE);
-    std::ifstream file(filename, std::ios::binary);
-    if (!file)
-        throw std::runtime_error("Error: Could not open file " + filename);
-
-    file.read(reinterpret_cast<char*>(raw_aos_data.data()), raw_aos_data.size() * sizeof(float));
-
-    eve::algo::soa_vector<PointType> points(eve::algo::no_init, n_samples);
-    for (std::size_t i = 0; i < n_samples; ++i) {
-        PointType pt;
-        kumi::for_each_index([&](auto index, auto& element)
-        { element = raw_aos_data[i * TUPLE_SIZE + index]; }, pt);
-        points.set(i, pt);
-    }
-    return points;
-}
-
-// --- Helper: Read Orchestrator's Initial Centroids ---
-inline std::vector<PointType> read_initial_centroids_binary(const std::string& filename, int n_clusters) {
-    std::vector<PointType> centroids(n_clusters);
-    std::ifstream in(filename, std::ios::binary);
-    if (!in)
-        throw std::runtime_error("Error: Could not open initial centroids file " + filename);
-
-    for (auto& c : centroids) {
-        [&] <std::size_t... I>(std::index_sequence<I...>) {
-            (..., in.read(reinterpret_cast<char*>(&get<I>(c)), sizeof(float)));
-        }(std::make_index_sequence<TUPLE_SIZE>{});
-    }
-    return centroids;
-}
-
-
-// To compute inertia. We could also do it in SIMD by simply asking `assign_points_to_centroid` to
-// do a sum reduction and then get the result at the last iteration in k-means, but that would slow down the
-// algorithm. So we're keeping it as a separate step for now.
-// We're doing double because else the calculation is imprecise and doesn't match scikit
+// To compute inertia. We could also do it in SIMD by asking assignment to do a sum
+// reduction and then keeping the result from the last k-means iteration, but that
+// would slow down the algorithm. This stays as a separate scalar verification step.
+// Use double so the calculation is precise enough to match scikit-learn outputs.
 template <eve::product_type PointT>
 double compute_scalar_dist_sq(const PointT& point, const PointT& centroid) {
     double dist_sq = 0.0;
 
     kumi::for_each(
         [&dist_sq](auto p, auto c) {
-        double diff = static_cast<double>(p) - static_cast<double>(c);
-        dist_sq += diff * diff;
-    },
+            const double diff = static_cast<double>(p) - static_cast<double>(c);
+            dist_sq += diff * diff;
+        },
         point,
         centroid
     );
@@ -81,12 +44,12 @@ void write_point_json(std::ostream& out, const PointT& point) {
         (
             (
                 out << (column++ == 0 ? "" : ", ")
-                << std::setprecision(std::numeric_limits<float>::max_digits10)
-                << static_cast<float>(get<I>(point))
-                ),
+                    << std::setprecision(std::numeric_limits<float>::max_digits10)
+                    << static_cast<float>(get<I>(point))
+            ),
             ...
-            );
-    }(std::make_index_sequence<TUPLE_SIZE>{});
+        );
+    }(std::make_index_sequence<kumi::size_v<PointT>>{});
 
     out << "]";
 }
@@ -118,14 +81,13 @@ void write_lloyd_metrics(
     double total_inertia = 0.0;
 
     for (std::size_t i = 0; i < points.size(); ++i) {
-        const std::size_t cluster_id =
-            static_cast<std::size_t>(assignments[i]);
+        const std::size_t cluster_id = static_cast<std::size_t>(assignments[i]);
 
         if (cluster_id >= static_cast<std::size_t>(num_clusters)) {
             throw std::runtime_error("Invalid cluster assignment");
         }
 
-        double dist_sq = compute_scalar_dist_sq(
+        const double dist_sq = compute_scalar_dist_sq(
             points.get(i),
             centroids[cluster_id]
         );
@@ -137,7 +99,9 @@ void write_lloyd_metrics(
 
     std::ofstream out(filename);
 
-    if (!out) throw std::runtime_error("Could not open Lloyd metrics output file: " + filename);
+    if (!out) {
+        throw std::runtime_error("Could not open Lloyd metrics output file: " + filename);
+    }
 
     out << std::setprecision(std::numeric_limits<double>::max_digits10);
 

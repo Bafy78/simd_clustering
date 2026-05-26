@@ -1,3 +1,7 @@
+#pragma once
+
+#include "layout.hpp"
+
 template<std::size_t D, std::size_t K_TILE>
 struct centroid_tiled_assignment_layout {
     aligned_float_vector feature_major;

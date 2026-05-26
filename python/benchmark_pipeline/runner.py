@@ -2,13 +2,18 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 
 from benchmark_pipeline.metrics import (
     compute_lloyd_parity,
     validate_cpp_process_metrics,
     write_json,
 )
-from benchmark_pipeline.paths import BIN_DIR, DATASETS_DIR, REPO_ROOT, repo_path
+from benchmark_pipeline.cpp_cases import (
+    cpp_compile_command,
+    nanobench_binary_path,
+)
+from benchmark_pipeline.paths import DATASETS_DIR, REPO_ROOT, repo_path
 from benchmark_pipeline.tasks import Task, build_pipeline, config_id, dataset_path
 
 
@@ -108,41 +113,29 @@ def run_cpp_task_with_processes(task: Task, bench_processes: int) -> None:
         delete_if_exists(path, label=None)
 
 
-def compile_cpp_binaries(dim: int):
-    """Compiles the independent C++ benchmarks for a specific dimension."""
+def compile_cpp_binaries(dim: int, cpp_cases: Iterable[str]):
+    """Compiles the C++ nanobench cases for a specific dimension."""
+    cases = sorted(set(cpp_cases))
+
+    if not cases:
+        return
+
     print(f"\n{'=' * 50}")
     print(f"--- Compiling C++ Binaries for {dim}D ---")
     print(f"{'=' * 50}")
 
-    os.makedirs(BIN_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(nanobench_binary_path("lloyd_static")), exist_ok=True)
 
-    cpp_targets = [
-        {"src": repo_path("cpp", "benchmarks", "bench_soa.cpp"), "bin": str(BIN_DIR / "bench_soa.bin")},
-        {"src": repo_path("cpp", "benchmarks", "bench_pp.cpp"), "bin": str(BIN_DIR / "bench_pp.bin")},
-        {"src": repo_path("cpp", "benchmarks", "bench_lloyd.cpp"), "bin": str(BIN_DIR / "bench_lloyd.bin")},
-    ]
+    for alg in cases:
+        cmd = cpp_compile_command(dim=dim, alg=alg, mode="nanobench")
 
-    for target in cpp_targets:
-        cmd = [
-            "g++-14",
-            "-O3",
-            "-march=native",
-            "-std=c++20",
-            "-I../eve/include",
-            "-I../nanobench/src/include",
-            f"-DTUPLE_SIZE={dim}",
-            "-DKMEANS_K_TILE=5",
-            "-DKMEANS_M_GROUP=2",
-            target["src"],
-            "-o",
-            target["bin"],
-        ]
-
-        print(f"Compiling {target['src']}...")
+        print(f"Compiling C++ nanobench case '{alg}'...")
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
 
         if result.returncode != 0:
-            print(f"Compilation failed for {target['src']}:\n{result.stderr}")
+            print(
+                f"Compilation failed for C++ nanobench case '{alg}':\n{result.stderr}"
+            )
             sys.exit(1)
 
 

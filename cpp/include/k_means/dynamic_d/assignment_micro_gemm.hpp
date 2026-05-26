@@ -1,3 +1,7 @@
+#pragma once
+
+#include "layout.hpp"
+
 template<std::size_t D, std::size_t K_TILE>
 struct micro_gemm_assignment_layout {
     // Tile-major centroid coefficient pack:

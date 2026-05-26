@@ -17,19 +17,19 @@ class BenchmarkConfig:
 
 def default_config() -> BenchmarkConfig:
     return BenchmarkConfig(
-        test_dimensions=[2, 3, 5, 8, 12, 17, 23, 30, 40, 63, 70],
+        test_dimensions=[1, 2, 3, 5, 8, 12, 17, 23, 30, 40, 63, 80, 100],
         test_samples=[
             4_000,
-            10_000,
+            15_000,
             50_000,
             100_000,
-            400_000,
-            1_000_000,
-            4_000_000,
-            12_000_000,
+            300_000,
+            800_000,
+            2_000_000,
+            10_000_000,
         ],
-        test_clusters=[10, 30, 70],
-        bench_processes=3,
+        test_clusters=[10, 25, 50, 100],
+        bench_processes=5,
         bench_values=5,
         bench_min_time=0.05,
         lloyd_parity_tolerance_pct=1e-6,

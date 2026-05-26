@@ -11,6 +11,7 @@
 #include <eve/memory/aligned_allocator.hpp>
 
 #include "../core.hpp"
+#include "layout.hpp"
 
 using wide_f = kmeans::wide_f;
 using wide_i = kmeans::wide_i;
