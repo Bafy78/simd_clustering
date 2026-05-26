@@ -20,6 +20,32 @@ using wide_i = kmeans::wide_i;
 using aligned_float_vector = std::vector<float, eve::aligned_allocator<float>>;
 using aligned_int_vector = std::vector<int, eve::aligned_allocator<int>>;
 
+template<class T>
+struct no_init_aligned_allocator : eve::aligned_allocator<T> {
+    using value_type = T;
+
+    no_init_aligned_allocator() noexcept = default;
+
+    template<class U>
+    no_init_aligned_allocator(const no_init_aligned_allocator<U>&) noexcept {}
+
+    template<class U>
+    struct rebind {
+        using other = no_init_aligned_allocator<U>;
+    };
+
+    void construct(T* p) {
+        ::new (static_cast<void*>(p)) T; // default-init, not value-init
+    }
+
+    template<class... Args>
+    void construct(T* p, Args&&... args) {
+        ::new (static_cast<void*>(p)) T(std::forward<Args>(args)...);
+    }
+};
+
+using no_init_aligned_float_vector = std::vector<float, no_init_aligned_allocator<float>>;
+
 inline constexpr std::size_t simd_cardinal() {
     return static_cast<std::size_t>(wide_f::size());
 }
@@ -52,7 +78,7 @@ template<std::size_t D>
 struct points_soa_storage {
     static constexpr std::size_t n_features = D;
 
-    aligned_float_vector data;
+    no_init_aligned_float_vector data;
 
     std::size_t n_samples = 0;
     std::size_t stride = 0;
@@ -68,7 +94,6 @@ struct points_soa_storage {
         stride = round_up_to_multiple(samples, simd_cardinal());
 
         data.resize(D * stride);
-        std::fill(data.begin(), data.end(), 0.0f);
     }
 
     float& operator()(std::size_t sample, std::size_t feature) {

@@ -308,9 +308,16 @@ struct kumi_kmeans_backend {
     }
 
     float copy_centered_points_from_original_and_compute_scaled_tolerance(float tol) {
-        points.resize(original_points.size());
+        if (original_points.size() == 0) {
+            points.clear();
+            return 0.0f;
+        }
 
-        if (points.size() == 0) return 0.0f;
+        points = eve::algo::soa_vector<PointType>(
+            eve::algo::no_init,
+            original_points.size(),
+            points.get_allocator()
+        );
 
         wide_f total_squared_centered_norm_w = eve::zero(eve::as<wide_f>());
 
@@ -321,8 +328,11 @@ struct kumi_kmeans_backend {
                 auto [src_it, dst_it] = it;
                 auto src_pt = eve::load[ignore](src_it);
                 using simd_point_t = std::remove_cvref_t<decltype(src_pt)>;
+
                 auto centered = kumi::map(
-                    [](auto x, auto mean) { return x - mean; }, src_pt, feature_mean
+                    [](auto x, auto mean) { return x - mean; },
+                    src_pt,
+                    feature_mean
                 );
 
                 kumi::for_each(

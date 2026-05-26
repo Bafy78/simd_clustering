@@ -25,7 +25,7 @@ inline eve::algo::soa_vector<PointType> read_dataset_soa(const std::string& file
 
     file.read(reinterpret_cast<char*>(raw_aos_data.data()), raw_aos_data.size() * sizeof(float));
 
-    eve::algo::soa_vector<PointType> points(n_samples);
+    eve::algo::soa_vector<PointType> points(eve::algo::no_init, n_samples);
     for (std::size_t i = 0; i < n_samples; ++i) {
         PointType pt;
         kumi::for_each_index([&](auto index, auto& element)

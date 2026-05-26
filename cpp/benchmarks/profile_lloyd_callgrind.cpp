@@ -34,7 +34,6 @@ int main(int argc, char* argv[]) {
 
     CALLGRIND_STOP_INSTRUMENTATION;
 
-    // Metrics writing is also outside the measured region.
     write_lloyd_metrics(
         metrics_json_out,
         points,
@@ -44,6 +43,5 @@ int main(int argc, char* argv[]) {
         iterations_to_converge
     );
 
-    std::cout << "iterations=" << iterations_to_converge << "\n";
     return 0;
 }
