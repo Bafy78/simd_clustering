@@ -19,6 +19,7 @@ def cpp_cases_for_dimension(config, dim: int) -> set[str]:
                 config.bench_processes,
                 config.bench_values,
                 config.bench_min_time,
+                gmm_covariance_type=config.gmm_covariance_type,
             )
 
             for task in pipeline:
@@ -45,6 +46,7 @@ def main() -> None:
                     config.bench_values,
                     config.bench_min_time,
                     config.lloyd_parity_tolerance_pct,
+                    gmm_covariance_type=config.gmm_covariance_type,
                 )
 
     print("\nAll benchmarking finished successfully!")

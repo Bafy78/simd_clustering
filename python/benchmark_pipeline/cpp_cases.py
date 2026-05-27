@@ -12,6 +12,8 @@ class CppCase:
     needs_init: bool
     needs_metrics: bool
     needs_clusters_arg: bool
+    needs_gmm_init: bool = False
+    needs_covariance_type_arg: bool = False
 
 
 CPP_CASES: dict[str, CppCase] = {
@@ -30,6 +32,16 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=True,
         needs_metrics=True,
         needs_clusters_arg=True,
+    ),
+    "gmm_static": CppCase(
+        name="gmm_static",
+        case_struct="static_gmm_case",
+        case_header="cases/static_gmm_case.hpp",
+        needs_init=False,
+        needs_metrics=True,
+        needs_clusters_arg=True,
+        needs_gmm_init=True,
+        needs_covariance_type_arg=True,
     ),
     "pp": CppCase(
         name="pp",

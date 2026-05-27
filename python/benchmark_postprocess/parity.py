@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_postprocess.io import load_json
-from benchmark_postprocess.naming import LLOYD_PARITY_JSON_RE
+from benchmark_postprocess.naming import GMM_METRICS_JSON_RE, LLOYD_PARITY_JSON_RE
 
 
 def lloyd_iteration_count(
@@ -26,6 +26,23 @@ def lloyd_iteration_count(
         return int(parity["python_iterations"])
 
     raise RuntimeError(f"Unexpected Lloyd language key: {lang_key!r}")
+
+
+def gmm_iteration_count(
+    gmm_metrics: dict[tuple[str, str], dict[str, Any]],
+    *,
+    config_id: str,
+    lang_key: str,
+) -> int:
+    metrics = gmm_metrics.get((config_id, lang_key))
+
+    if metrics is None:
+        raise RuntimeError(
+            f"Missing GMM metrics file for {lang_key} {config_id}. "
+            "GMM timing needs the EM iteration count to report time_per_iteration_s."
+        )
+
+    return int(metrics["iterations"])
 
 
 def normalize_lloyd_parity_record(
@@ -67,6 +84,45 @@ def normalize_lloyd_parity_record(
         "inertia_diff_pct": float(record["inertia_diff_pct"]),
         "tolerance_pct": float(record["tolerance_pct"]),
         "status": str(record["status"]),
+    }
+
+
+def normalize_gmm_metrics_record(
+    record: dict[str, Any],
+    *,
+    config_id: str,
+    lang_key: str,
+) -> dict[str, Any]:
+    required_fields = [
+        "algorithm",
+        "language",
+        "covariance_type",
+        "iterations",
+        "converged",
+        "lower_bound",
+    ]
+
+    for field in required_fields:
+        if field not in record:
+            raise RuntimeError(f"Missing {field!r} in GMM metrics for {config_id}")
+
+    if record["algorithm"] != "gmm":
+        raise RuntimeError(f"Unexpected algorithm in GMM metrics for {config_id}")
+
+    if record["language"] != lang_key:
+        raise RuntimeError(
+            f"GMM metrics language mismatch: file is {lang_key}, "
+            f"record says {record['language']!r}"
+        )
+
+    return {
+        **record,
+        "config_id": config_id,
+        "language": lang_key,
+        "iterations": int(record["iterations"]),
+        "converged": bool(record["converged"]),
+        "lower_bound": float(record["lower_bound"]),
+        "covariance_type": str(record["covariance_type"]),
     }
 
 
@@ -120,3 +176,35 @@ def load_lloyd_parity_map(data_dir: Path) -> dict[str, dict[str, Any]]:
     )
 
     return parity_records
+
+
+def load_gmm_metrics_map(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    metrics_records: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for path in sorted(data_dir.glob("gmm_metrics_*.json")):
+        match = GMM_METRICS_JSON_RE.match(path.name)
+
+        if not match:
+            print(f"Skipping malformed GMM metrics filename: {path.name}")
+            continue
+
+        lang_key = match.group("lang")
+        dim = int(match.group("dim"))
+        samples = int(match.group("samples"))
+        clusters = int(match.group("clusters"))
+        config_id = f"{dim}D_{samples}S_{clusters}K"
+
+        metrics = normalize_gmm_metrics_record(
+            load_json(path),
+            config_id=config_id,
+            lang_key=lang_key,
+        )
+
+        if int(metrics.get("schema_version", 1)) != 1:
+            raise RuntimeError(f"Unsupported GMM metrics schema in {path}")
+
+        metrics_records[(config_id, lang_key)] = metrics
+
+    print(f"Loaded {len(metrics_records)} GMM metrics records.")
+
+    return metrics_records

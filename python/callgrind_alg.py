@@ -73,12 +73,17 @@ def main() -> None:
     parser.add_argument(
         "--alg",
         choices=sorted(CPP_CASES),
-        default="lloyd",
-        help="C++ case to profile. Defaults to static Lloyd for backward compatibility.",
+        default="lloyd_static",
+        help="C++ case to profile. Defaults to static Lloyd.",
     )
     parser.add_argument("--dim", type=int, required=True)
     parser.add_argument("--n-samples", type=int, required=True)
     parser.add_argument("--n-clusters", type=int, required=True)
+    parser.add_argument(
+        "--gmm-covariance-type",
+        choices=("full", "tied", "diag", "spherical"),
+        default="spherical",
+    )
     parser.add_argument("--skip-compile", action="store_true")
     parser.add_argument("--skip-generate", action="store_true")
     parser.add_argument("--out-dir", default=repo_path("callgrind_results"))
@@ -112,11 +117,15 @@ def main() -> None:
             bench_processes=1,
             bench_values=1,
             bench_min_time=0.0,
+            gmm_covariance_type=args.gmm_covariance_type,
         )[0]
         run_command(dataset_task.name, dataset_task.command)
 
     dataset_bin = dataset_path(f"data_{case}.bin")
     init_bin = dataset_path(f"init_{case}.bin")
+    gmm_weights_bin = dataset_path(f"gmm_weights_{case}.bin")
+    gmm_means_bin = dataset_path(f"gmm_means_{case}.bin")
+    gmm_precisions_bin = dataset_path(f"gmm_precisions_{case}.bin")
 
     callgrind_out = out_dir / f"callgrind.{args.alg}.{case}.out"
     metrics_out = out_dir / f"{args.alg}_metrics_cpp.{case}.json"
@@ -146,6 +155,16 @@ def main() -> None:
 
     if target.needs_init:
         case_args.append(init_bin)
+
+    if target.needs_gmm_init:
+        case_args.extend([
+            gmm_weights_bin,
+            gmm_means_bin,
+            gmm_precisions_bin,
+        ])
+
+    if target.needs_covariance_type_arg:
+        case_args.append(args.gmm_covariance_type)
 
     if target.needs_metrics:
         case_args.append(str(metrics_out))

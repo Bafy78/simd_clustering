@@ -58,6 +58,7 @@ def build_summary(
     ci_level: float,
     bootstrap_seed: int,
     lloyd_parity: dict[str, dict[str, Any]],
+    gmm_metrics: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     grouped = group_records(records)
 
@@ -151,6 +152,20 @@ def build_summary(
                     "status": parity["status"],
                 }
 
+            if phase_key == "gmm" and gmm_metrics is not None:
+                for lang_key, language_name in LANG_MAP.items():
+                    metrics = gmm_metrics.get((config_id, lang_key))
+                    if metrics is None:
+                        continue
+
+                    phase_entry["languages"].setdefault(language_name, {}).update(
+                        {
+                            "covariance_type": metrics["covariance_type"],
+                            "converged": metrics["converged"],
+                            "lower_bound": metrics["lower_bound"],
+                        }
+                    )
+
     return {
         "metadata": {
             "schema_version": 1,
@@ -160,8 +175,8 @@ def build_summary(
             ),
             "time_unit": "seconds",
             "time_per_iteration_definition": (
-                "For Lloyd, total benchmark time divided by Lloyd iteration count. "
-                "For non-Lloyd phases, identical to total time."
+                "For Lloyd and GMM, total benchmark time divided by algorithm iteration count. "
+                "For non-iterative phases, identical to total time."
             ),
             "speedup_definition": "python_time / cpp_time",
             "bootstrap": {

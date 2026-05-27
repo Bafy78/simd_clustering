@@ -152,6 +152,9 @@ def cleanup_config_inputs(case_id: str) -> None:
     for path in [
         dataset_path(f"data_{case_id}.bin"),
         dataset_path(f"init_{case_id}.bin"),
+        dataset_path(f"gmm_weights_{case_id}.bin"),
+        dataset_path(f"gmm_means_{case_id}.bin"),
+        dataset_path(f"gmm_precisions_{case_id}.bin"),
     ]:
         delete_if_exists(path, label="temporary input")
 
@@ -194,6 +197,7 @@ def execute_pipeline(
     bench_values: int,
     bench_min_time: float,
     lloyd_parity_tolerance_pct: float,
+    gmm_covariance_type: str = "spherical",
 ):
     print(
         f"\n--- Running Config: {dim}D | {n_samples} Samples | {n_clusters} Clusters ---"
@@ -206,6 +210,7 @@ def execute_pipeline(
         bench_processes,
         bench_values,
         bench_min_time,
+        gmm_covariance_type=gmm_covariance_type,
     )
 
     for task in pipeline:

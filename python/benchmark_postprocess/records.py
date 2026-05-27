@@ -3,7 +3,7 @@ from typing import Any
 
 from benchmark_postprocess.io import load_json
 from benchmark_postprocess.naming import parse_benchmark_filename
-from benchmark_postprocess.parity import lloyd_iteration_count
+from benchmark_postprocess.parity import gmm_iteration_count, lloyd_iteration_count
 
 
 def iter_pyperf_values(path: Path):
@@ -47,6 +47,7 @@ def load_process_aware_records(
     data_dir: Path,
     *,
     lloyd_parity: dict[str, dict[str, Any]],
+    gmm_metrics: dict[tuple[str, str], dict[str, Any]] | None = None,
     completed_config_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
@@ -57,6 +58,7 @@ def load_process_aware_records(
             known_artifact_prefixes = (
                 "lloyd_metrics_",
                 "lloyd_parity_",
+                "gmm_metrics_",
             )
 
             if json_path.name == "benchmark_summary.json" or json_path.name.startswith(
@@ -77,6 +79,15 @@ def load_process_aware_records(
         if phase_key == "lloyd":
             iterations = lloyd_iteration_count(
                 lloyd_parity,
+                config_id=config_id,
+                lang_key=lang_key,
+            )
+        elif phase_key == "gmm":
+            if gmm_metrics is None:
+                raise RuntimeError("GMM metrics map is required to process GMM records")
+
+            iterations = gmm_iteration_count(
+                gmm_metrics,
                 config_id=config_id,
                 lang_key=lang_key,
             )

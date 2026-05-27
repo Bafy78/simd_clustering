@@ -7,6 +7,7 @@ PHASE_MAP = {
     "soa": "AoS to SoA Tax",
     "pp": "K-Means++ Initialization",
     "lloyd": "Lloyd Iterations",
+    "gmm": "GaussianMixture EM",
 }
 
 LANG_MAP = {
@@ -16,10 +17,13 @@ LANG_MAP = {
 
 
 BENCHMARK_JSON_RE = re.compile(
-    r"^(?P<phase>soa|pp|lloyd)_(?P<lang>cpp|py)_(?P<dim>\d+)D_(?P<samples>\d+)S_(?P<clusters>\d+)K\.json$"
+    r"^(?P<phase>soa|pp|lloyd|gmm)_(?P<lang>cpp|py)_(?P<dim>\d+)D_(?P<samples>\d+)S_(?P<clusters>\d+)K\.json$"
 )
 LLOYD_PARITY_JSON_RE = re.compile(
     r"^lloyd_parity_(?P<dim>\d+)D_(?P<samples>\d+)S_(?P<clusters>\d+)K\.json$"
+)
+GMM_METRICS_JSON_RE = re.compile(
+    r"^gmm_metrics_(?P<lang>cpp|py)_(?P<dim>\d+)D_(?P<samples>\d+)S_(?P<clusters>\d+)K\.json$"
 )
 
 

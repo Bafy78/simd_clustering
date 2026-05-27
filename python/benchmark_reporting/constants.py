@@ -6,6 +6,7 @@ PHASE_MAP = {
     "soa": "AoS to SoA Tax",
     "pp": "K-Means++ Initialization",
     "lloyd": "Lloyd Iterations",
+    "gmm": "GaussianMixture EM",
 }
 
 PHASE_ORDER = list(PHASE_MAP.values())
