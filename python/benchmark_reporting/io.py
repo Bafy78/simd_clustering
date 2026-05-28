@@ -110,12 +110,8 @@ def load_benchmark_data(
 
     COL_TIME_S is the selected summary statistic, by default median total time.
 
-    For Lloyd:
-        COL_ITERATIONS comes from the summary JSON.
-        COL_TIME_PER_ITER can still be computed as COL_TIME_S / COL_ITERATIONS.
-
-    For non-Lloyd:
-        COL_ITERATIONS is 1.
+    Iterative phases such as Lloyd and GMM use their recorded algorithm
+    iteration count. Non-iterative phases use 1.
     """
     summary = load_benchmark_summary(data_dir, summary_filename)
     records: list[dict[str, Any]] = []
@@ -163,6 +159,9 @@ def load_benchmark_data(
                     COL_N_PROCESSES: language_entry.get("n_processes"),
                     COL_N_VALUES: language_entry.get("n_values"),
                     COL_INERTIA: language_entry.get("inertia"),
+                    COL_COVARIANCE_TYPE: language_entry.get("covariance_type"),
+                    COL_CONVERGED: language_entry.get("converged"),
+                    COL_LOWER_BOUND: language_entry.get("lower_bound"),
                 }
 
                 _copy_stats_with_prefix(
@@ -336,3 +335,76 @@ def load_lloyd_parity_summary(
         return df
 
     return df.sort_values(by="Diff (%)", ascending=False).reset_index(drop=True)
+
+
+def load_gmm_parity_summary(
+    data_dir=Path("./datasets"),
+    *,
+    summary_filename=SUMMARY_FILENAME,
+) -> pd.DataFrame:
+    """Load GMM C++/Python parity records from benchmark_summary.json."""
+    summary = load_benchmark_summary(data_dir, summary_filename)
+    records: list[dict[str, Any]] = []
+
+    for config in summary.get("configs", []):
+        dim = int(config["dimensions"])
+        samples = int(config["samples"])
+        clusters = int(config["clusters"])
+        configuration = config.get(
+            "configuration",
+            f"{dim}D | {samples}S | {clusters}K",
+        )
+
+        for phase_entry in config.get("phases", {}).values():
+            if phase_entry.get("phase_key") != "gmm":
+                continue
+
+            parity = phase_entry.get("parity")
+            if not parity:
+                continue
+
+            status = parity.get("status", "FAIL")
+            failure_reasons = parity.get("failure_reasons", [])
+
+            records.append(
+                {
+                    COL_CONFIGURATION: configuration,
+                    COL_DIMENSIONS: dim,
+                    COL_SAMPLES: samples,
+                    COL_CLUSTERS: clusters,
+                    "Status": "✅ PASS" if status == "PASS" else "❌ FAIL",
+                    "Failure Reasons": ", ".join(failure_reasons),
+                    "Covariance Type": parity.get("covariance_type"),
+                    "Converged Match": parity.get("converged_match"),
+                    "Covariance Type Match": parity.get("covariance_type_match"),
+                    "GMM C++ Iterations": parity.get("cpp_iterations"),
+                    "GMM Py Iterations": parity.get("python_iterations"),
+                    "Iteration Diff Abs": parity.get("iteration_diff_abs"),
+                    "C++ Converged": parity.get("cpp_converged"),
+                    "Py Converged": parity.get("python_converged"),
+                    "C++ Lower Bound": parity.get("cpp_lower_bound"),
+                    "Py Lower Bound": parity.get("python_lower_bound"),
+                    "Lower Bound Diff Abs": parity.get("lower_bound_diff_abs"),
+                    "Lower Bound Diff (%)": parity.get("lower_bound_diff_pct"),
+                    "Weights Max Abs Diff": parity.get("weights_max_abs_diff"),
+                    "Means Max Abs Diff": parity.get("means_max_abs_diff"),
+                    "Covariances Max Abs Diff": parity.get("covariances_max_abs_diff"),
+                    "Thresholds": parity.get("thresholds"),
+                }
+            )
+
+    df = pd.DataFrame(records)
+
+    if df.empty:
+        return df
+
+    return df.sort_values(
+        by=[
+            "Status",
+            "Lower Bound Diff Abs",
+            COL_DIMENSIONS,
+            COL_SAMPLES,
+            COL_CLUSTERS,
+        ],
+        ascending=[True, False, True, True, True],
+    ).reset_index(drop=True)

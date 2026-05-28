@@ -8,10 +8,10 @@
 #include <nanobench.h>
 
 #include "../../include/k_means/dynamic_d/backend.hpp"
-#include "../../include/k_means/dynamic_d/conversion.hpp"
-#include "../../include/k_means/io/binary.hpp"
-#include "../../include/k_means/io/metrics.hpp"
-#include "../../include/k_means/static_d/conversion.hpp"
+#include "../../include/k_means/dynamic_d/input.hpp"
+#include "../../include/io/binary.hpp"
+#include "../../include/k_means/metrics.hpp"
+#include "../../include/layout/static_soa.hpp"
 
 #ifndef KMEANS_K_TILE
 #define KMEANS_K_TILE 5

@@ -2,6 +2,7 @@ from collections import defaultdict
 from typing import Any
 
 from benchmark_postprocess.naming import LANG_MAP, PHASE_MAP
+from benchmark_postprocess.parity import compute_gmm_comparison
 from benchmark_postprocess.speedup import build_speedup_block, stable_child_seed
 from benchmark_postprocess.stats import summary_stats
 
@@ -166,6 +167,12 @@ def build_summary(
                         }
                     )
 
+                if (config_id, "cpp") in gmm_metrics and (config_id, "py") in gmm_metrics:
+                    phase_entry["parity"] = compute_gmm_comparison(
+                        gmm_metrics,
+                        config_id=config_id,
+                    )
+
     return {
         "metadata": {
             "schema_version": 1,
@@ -185,11 +192,18 @@ def build_summary(
                 "ci_level": float(ci_level),
                 "seed": int(bootstrap_seed),
             },
-            "lloyd_parity": {
-                "source": "precomputed lloyd_parity_*.json files",
+            "algorithm_metrics": {
+                "lloyd_source": "precomputed lloyd_parity_*.json files",
+                "gmm_source": "precomputed gmm_metrics_{cpp,py}_*.json files",
                 "inertia_note": (
-                    "Inertia is computed during per-config finalization from compact "
-                    "Lloyd metrics. The post-processing step does not read data_*.bin files."
+                    "Inertia is Lloyd-specific and is computed during per-config "
+                    "finalization from compact Lloyd metrics. The post-processing step "
+                    "does not read data_*.bin files."
+                ),
+                "gmm_note": (
+                    "GMM uses lower-bound/convergence/parameter metrics instead of "
+                    "inertia. Timing summaries and speedups use the same clustered "
+                    "aggregation path as Lloyd."
                 ),
             },
         },

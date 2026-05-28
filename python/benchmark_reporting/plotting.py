@@ -2,6 +2,9 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
+from collections.abc import Callable
+import seaborn as sns
+from typing import Any
 
 
 def create_subplot_grid(n_plots, cols=2, row_height=5, fig_width=12):
@@ -197,3 +200,122 @@ def style_facet_grid(
             ax.xaxis.set_major_locator(mtick.MaxNLocator(integer=True))
 
     return g
+
+
+from python.benchmark_reporting.constants import (
+    COL_DIMENSIONS,
+    COL_SAMPLES,
+    COL_CLUSTERS,
+)
+
+
+def make_cluster_pivot(
+    subset,
+    value_col: str,
+    *,
+    reference_pivot=None,
+):
+    pivot = subset.pivot(
+        index=COL_DIMENSIONS,
+        columns=COL_SAMPLES,
+        values=value_col,
+    )
+
+    if reference_pivot is not None:
+        pivot = pivot.reindex_like(reference_pivot)
+
+    formatted = pivot.copy()
+    formatted.columns = [format_abbrev(c) for c in formatted.columns]
+
+    return formatted, pivot
+
+
+def plot_clustered_heatmap_grid(
+    df,
+    *,
+    clusters,
+    value_col: str,
+    title: str,
+    heatmap_kwargs: dict[str, Any],
+    cbar_kws: dict[str, Any],
+    annot_col: str | None = None,
+    fmt: str = ".1f",
+    legend_handles=None,
+    post_heatmap: Callable | None = None,
+):
+    fig, axes = create_subplot_grid(
+        len(clusters),
+        cols=2,
+        row_height=6,
+        fig_width=14,
+    )
+
+    axes_flat = axes.flatten()
+
+    for i, cluster in enumerate(clusters):
+        ax = axes_flat[i]
+        subset = df[df[COL_CLUSTERS] == cluster]
+
+        heat, heat_raw = make_cluster_pivot(
+            subset,
+            value_col,
+        )
+
+        if annot_col is None:
+            annot_arg = True
+        else:
+            annot_arg, _ = make_cluster_pivot(
+                subset,
+                annot_col,
+                reference_pivot=heat_raw,
+            )
+
+        show_cbar = i % 2 == 1
+        cbar_ax = ax.inset_axes([1.04, 0, 0.05, 1]) if show_cbar else None
+
+        sns.heatmap(
+            heat,
+            annot=annot_arg,
+            fmt=fmt,
+            cmap="turbo",
+            ax=ax,
+            cbar=show_cbar,
+            cbar_ax=cbar_ax,
+            cbar_kws=cbar_kws if show_cbar else {},
+            linewidths=0.5,
+            **heatmap_kwargs,
+        )
+
+        if post_heatmap is not None:
+            post_heatmap(
+                ax=ax,
+                subset=subset,
+                heat=heat,
+                heat_raw=heat_raw,
+            )
+
+        ax.set_title(f"Clusters: {cluster}", bbox=SMALL_MULTIPLE_TITLE_STYLE)
+        ax.set_xlabel("Number of Samples")
+        ax.set_ylabel("Dimensions" if i % 2 == 0 else "")
+        ax.tick_params(axis="x", labelrotation=0)
+
+    for ax in axes_flat[len(clusters) :]:
+        ax.set_visible(False)
+
+    if legend_handles is not None:
+        fig.legend(
+            handles=legend_handles,
+            loc="lower center",
+            bbox_to_anchor=(0.5, -0.02),
+            frameon=False,
+        )
+
+    plt.suptitle(
+        title,
+        y=1.0,
+        fontsize=16,
+        fontweight="bold",
+    )
+
+    plt.tight_layout()
+    plt.show()

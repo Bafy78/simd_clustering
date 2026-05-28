@@ -1,8 +1,22 @@
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from benchmark_postprocess.io import load_json
 from benchmark_postprocess.naming import GMM_METRICS_JSON_RE, LLOYD_PARITY_JSON_RE
+
+REQUIRED_LANGUAGE_KEYS = ("cpp", "py")
+
+GMM_PARITY_THRESHOLDS = {
+    "lower_bound_diff_abs": 1e-4,
+    "weights_max_abs_diff": 1e-4,
+    "means_max_abs_diff": 1e-3,
+    "covariances_max_abs_diff": 1e-3,
+    "iteration_diff_abs": 1,
+}
 
 
 def lloyd_iteration_count(
@@ -208,3 +222,145 @@ def load_gmm_metrics_map(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]
     print(f"Loaded {len(metrics_records)} GMM metrics records.")
 
     return metrics_records
+
+
+def gmm_completed_config_ids(
+    gmm_metrics: dict[tuple[str, str], dict[str, Any]],
+    *,
+    required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
+) -> set[str]:
+    """Return configs with enough GMM metrics for timing and C++/Python speedups."""
+    by_config: dict[str, set[str]] = {}
+
+    for config_id, lang_key in gmm_metrics:
+        by_config.setdefault(config_id, set()).add(lang_key)
+
+    required = set(required_languages)
+    return {
+        config_id
+        for config_id, languages in by_config.items()
+        if required.issubset(languages)
+    }
+
+
+def _relative_diff_pct(a: float, b: float) -> float:
+    scale = max(abs(a), abs(b), 1.0)
+    return abs(a - b) / scale * 100.0
+
+
+def _max_abs_diff(candidate: Any, reference: Any) -> float | None:
+    if candidate is None or reference is None:
+        return None
+
+    cand = np.asarray(candidate, dtype=np.float64)
+    ref = np.asarray(reference, dtype=np.float64)
+
+    if cand.shape != ref.shape:
+        return None
+
+    if cand.size == 0:
+        return 0.0
+
+    return float(np.max(np.abs(cand - ref)))
+
+
+def _is_finite_and_within(value: float | None, tolerance: float) -> bool:
+    if value is None:
+        return False
+
+    return bool(np.isfinite(value) and value <= tolerance)
+
+
+def compute_gmm_comparison(
+    gmm_metrics: dict[tuple[str, str], dict[str, Any]],
+    *,
+    config_id: str,
+) -> dict[str, Any]:
+    """Build GMM parity info using fixed project-level tolerances.
+
+    Unlike Lloyd, GMM has no inertia. The main numerical target is the final
+    average lower bound, plus sanity checks on convergence, iteration count,
+    and learned parameters.
+    """
+    cpp = gmm_metrics.get((config_id, "cpp"))
+    py = gmm_metrics.get((config_id, "py"))
+
+    if cpp is None or py is None:
+        missing = [
+            lang_key
+            for lang_key, record in (("cpp", cpp), ("py", py))
+            if record is None
+        ]
+        raise RuntimeError(f"Missing GMM metrics for {config_id}: {', '.join(missing)}")
+
+    cpp_iterations = int(cpp["iterations"])
+    py_iterations = int(py["iterations"])
+    iteration_diff_abs = abs(cpp_iterations - py_iterations)
+
+    cpp_lower_bound = float(cpp["lower_bound"])
+    py_lower_bound = float(py["lower_bound"])
+
+    lower_bound_diff_abs = abs(cpp_lower_bound - py_lower_bound)
+    lower_bound_diff_pct = _relative_diff_pct(cpp_lower_bound, py_lower_bound)
+
+    weights_max_abs_diff = _max_abs_diff(cpp.get("weights"), py.get("weights"))
+    means_max_abs_diff = _max_abs_diff(cpp.get("means"), py.get("means"))
+    covariances_max_abs_diff = _max_abs_diff(
+        cpp.get("covariances"),
+        py.get("covariances"),
+    )
+
+    converged_match = bool(cpp["converged"]) == bool(py["converged"])
+    covariance_type_match = str(cpp["covariance_type"]) == str(py["covariance_type"])
+
+    checks = {
+        "converged_match": converged_match,
+        "covariance_type_match": covariance_type_match,
+        "iteration_diff_abs": (
+            iteration_diff_abs <= GMM_PARITY_THRESHOLDS["iteration_diff_abs"]
+        ),
+        "lower_bound_diff_abs": _is_finite_and_within(
+            lower_bound_diff_abs,
+            GMM_PARITY_THRESHOLDS["lower_bound_diff_abs"],
+        ),
+        "weights_max_abs_diff": _is_finite_and_within(
+            weights_max_abs_diff,
+            GMM_PARITY_THRESHOLDS["weights_max_abs_diff"],
+        ),
+        "means_max_abs_diff": _is_finite_and_within(
+            means_max_abs_diff,
+            GMM_PARITY_THRESHOLDS["means_max_abs_diff"],
+        ),
+        "covariances_max_abs_diff": _is_finite_and_within(
+            covariances_max_abs_diff,
+            GMM_PARITY_THRESHOLDS["covariances_max_abs_diff"],
+        ),
+    }
+
+    failure_reasons = [
+        check_name for check_name, passed in checks.items() if not passed
+    ]
+
+    status = "PASS" if not failure_reasons else "FAIL"
+
+    return {
+        "status": status,
+        "failure_reasons": failure_reasons,
+        "checks": checks,
+        "thresholds": GMM_PARITY_THRESHOLDS,
+        "cpp_iterations": cpp_iterations,
+        "python_iterations": py_iterations,
+        "iteration_diff_abs": iteration_diff_abs,
+        "cpp_converged": bool(cpp["converged"]),
+        "python_converged": bool(py["converged"]),
+        "converged_match": converged_match,
+        "covariance_type": str(cpp["covariance_type"]),
+        "covariance_type_match": covariance_type_match,
+        "cpp_lower_bound": cpp_lower_bound,
+        "python_lower_bound": py_lower_bound,
+        "lower_bound_diff_abs": lower_bound_diff_abs,
+        "lower_bound_diff_pct": lower_bound_diff_pct,
+        "weights_max_abs_diff": weights_max_abs_diff,
+        "means_max_abs_diff": means_max_abs_diff,
+        "covariances_max_abs_diff": covariances_max_abs_diff,
+    }

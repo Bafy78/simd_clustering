@@ -3,12 +3,15 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nanobench.h>
 
-#include "../../include/k_means/io/binary.hpp"
-#include "../../include/k_means/static_d/conversion.hpp"
+#include "../../include/io/binary.hpp"
+#include "../../include/gmm/metrics.hpp"
+#include "../../include/gmm/static_d/input.hpp"
+#include "../../include/gmm/static_d/spherical_em.hpp"
 
 struct static_gmm_case {
     static constexpr int nanobench_argc = 12;
@@ -74,20 +77,50 @@ struct static_gmm_case {
     double min_epoch_seconds() const { return min_epoch_seconds_; }
 
     void run_once() {
-        throw std::runtime_error(
-            "static_gmm_case is scaffold-only. Implement the static spherical EM backend "
-            "before enabling the C++ GMM benchmark task."
+        if (covariance_type_ != "spherical") {
+            throw std::runtime_error(
+                "static_gmm_case currently supports only spherical covariance"
+            );
+        }
+
+        auto result = spherical_em(
+            points_,
+            initial_weights_,
+            initial_means_,
+            initial_precisions_
         );
+
+        final_weights_ = std::move(result.weights);
+        final_means_ = std::move(result.means);
+        final_covariances_ = std::move(result.covariances);
+        final_precisions_ = std::move(result.precisions);
+        lower_bounds_ = std::move(result.lower_bounds);
+        iterations_to_converge_ = result.iterations;
+        converged_ = result.converged;
+        lower_bound_ = result.lower_bound;
     }
 
     void keep_alive() const {
         ankerl::nanobench::doNotOptimizeAway(points_.data());
-        ankerl::nanobench::doNotOptimizeAway(weights_.data());
-        ankerl::nanobench::doNotOptimizeAway(initial_means_.data());
-        ankerl::nanobench::doNotOptimizeAway(precisions_.data());
+        ankerl::nanobench::doNotOptimizeAway(final_weights_.data());
+        ankerl::nanobench::doNotOptimizeAway(final_means_.data());
+        ankerl::nanobench::doNotOptimizeAway(final_covariances_.data());
+        ankerl::nanobench::doNotOptimizeAway(final_precisions_.data());
     }
 
-    void write_outputs() const {}
+    void write_outputs() const {
+        write_gmm_metrics(
+            metrics_json_out_,
+            final_weights_,
+            final_means_,
+            final_covariances_,
+            lower_bounds_,
+            iterations_to_converge_,
+            converged_,
+            lower_bound_,
+            covariance_type_
+        );
+    }
 
 private:
     static std::size_t precision_value_count(
@@ -131,25 +164,16 @@ private:
             throw std::runtime_error("Invalid number of GMM components");
         }
 
-        auto raw_points = read_aos_f32(dataset_bin, n_samples_, TUPLE_SIZE);
-        points_ = make_static_points_from_aos<TUPLE_SIZE>(raw_points, n_samples_);
+        points_ = read_static_gmm_points_binary(dataset_bin, n_samples_);
 
-        weights_ = read_binary_f32(
+        initial_weights_ = read_binary_f32(
             gmm_weights_bin,
             static_cast<std::size_t>(n_clusters_)
         );
 
-        auto raw_means = read_aos_f32(
-            gmm_means_bin,
-            static_cast<std::size_t>(n_clusters_),
-            TUPLE_SIZE
-        );
-        initial_means_ = make_static_centroids_from_aos<TUPLE_SIZE>(
-            raw_means,
-            static_cast<std::size_t>(n_clusters_)
-        );
+        initial_means_ = read_static_gmm_means_binary(gmm_means_bin, n_clusters_);
 
-        precisions_ = read_binary_f32(
+        initial_precisions_ = read_binary_f32(
             gmm_precisions_bin,
             precision_value_count(covariance_type_, static_cast<std::size_t>(n_clusters_))
         );
@@ -164,7 +188,16 @@ private:
     double min_epoch_seconds_ = 0.0;
 
     static_points_soa_vector<TUPLE_SIZE> points_;
-    std::vector<float> weights_;
+    std::vector<float> initial_weights_;
     std::vector<PointType> initial_means_;
-    std::vector<float> precisions_;
+    std::vector<float> initial_precisions_;
+
+    std::vector<float> final_weights_;
+    std::vector<PointType> final_means_;
+    std::vector<float> final_covariances_;
+    std::vector<float> final_precisions_;
+    std::vector<float> lower_bounds_;
+    int iterations_to_converge_ = 0;
+    bool converged_ = false;
+    float lower_bound_ = 0.0f;
 };

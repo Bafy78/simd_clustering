@@ -38,6 +38,9 @@ COL_TIME_STATISTIC = "Time_Statistic"
 COL_N_PROCESSES = "N_Processes"
 COL_N_VALUES = "N_Values"
 COL_INERTIA = "Inertia"
+COL_COVARIANCE_TYPE = "Covariance_Type"
+COL_CONVERGED = "Converged"
+COL_LOWER_BOUND = "Lower_Bound"
 
 # Derived / analysis columns
 COL_SPEEDUP = "Speedup (x)"

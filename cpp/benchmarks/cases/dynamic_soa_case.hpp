@@ -6,8 +6,8 @@
 
 #include <nanobench.h>
 
-#include "../../include/k_means/dynamic_d/conversion.hpp"
-#include "../../include/k_means/io/binary.hpp"
+#include "../../include/k_means/dynamic_d/input.hpp"
+#include "../../include/io/binary.hpp"
 
 struct dynamic_soa_case {
     static constexpr int nanobench_argc = 6;

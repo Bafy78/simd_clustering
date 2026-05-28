@@ -6,8 +6,20 @@
 #include <string>
 #include <vector>
 
-#include "layout.hpp"
-#include "../io/binary.hpp"
+#include <eve/module/algo.hpp>
+#include <eve/module/core.hpp>
+
+#ifndef TUPLE_SIZE
+#define TUPLE_SIZE 2
+#endif
+
+template<std::size_t D>
+using static_point_type = kumi::result::fill_t<D, float>;
+
+using PointType = static_point_type<TUPLE_SIZE>;
+
+template<std::size_t D>
+using static_points_soa_vector = eve::algo::soa_vector<static_point_type<D>>;
 
 template<std::size_t D>
 void check_static_aos_size(std::span<const float> aos, std::size_t rows, const char* label) {
@@ -49,50 +61,23 @@ static_points_soa_vector<D> make_static_points_from_aos(
 }
 
 template<std::size_t D>
-std::vector<static_point_type<D>> make_static_centroids_from_aos(
+std::vector<static_point_type<D>> make_static_vectors_from_aos(
     std::span<const float> aos,
-    std::size_t n_clusters
+    std::size_t rows,
+    const char* label = "vectors"
 ) {
-    check_static_aos_size<D>(aos, n_clusters, "centroids");
+    check_static_aos_size<D>(aos, rows, label);
 
-    std::vector<static_point_type<D>> centroids(n_clusters);
+    std::vector<static_point_type<D>> vectors(rows);
 
-    for (std::size_t k = 0; k < n_clusters; ++k) {
+    for (std::size_t row = 0; row < rows; ++row) {
         kumi::for_each_index(
             [&](auto index, auto& element) {
-                element = aos[k * D + index];
+                element = aos[row * D + index];
             },
-            centroids[k]
+            vectors[row]
         );
     }
 
-    return centroids;
-}
-
-inline eve::algo::soa_vector<PointType> read_dataset_soa(
-    const std::string& filename,
-    std::size_t n_samples
-) {
-    auto raw_aos_data = read_aos_f32(filename, n_samples, TUPLE_SIZE);
-    return make_static_points_from_aos<TUPLE_SIZE>(raw_aos_data, n_samples);
-}
-
-inline std::vector<PointType> read_initial_centroids_binary(
-    const std::string& filename,
-    int n_clusters
-) {
-    if (n_clusters <= 0) {
-        throw std::runtime_error("Invalid number of clusters");
-    }
-
-    auto raw_centroids = read_aos_f32(
-        filename,
-        static_cast<std::size_t>(n_clusters),
-        TUPLE_SIZE
-    );
-
-    return make_static_centroids_from_aos<TUPLE_SIZE>(
-        raw_centroids,
-        static_cast<std::size_t>(n_clusters)
-    );
+    return vectors;
 }

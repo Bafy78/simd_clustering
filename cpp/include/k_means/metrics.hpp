@@ -4,15 +4,15 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <ostream>
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <eve/module/algo.hpp>
 #include <eve/module/core.hpp>
+
+#include "../io/json.hpp"
 
 // To compute inertia. We could also do it in SIMD by asking assignment to do a sum
 // reduction and then keeping the result from the last k-means iteration, but that
@@ -32,26 +32,6 @@ double compute_scalar_dist_sq(const PointT& point, const PointT& centroid) {
     );
 
     return dist_sq;
-}
-
-template <eve::product_type PointT>
-void write_point_json(std::ostream& out, const PointT& point) {
-    out << "[";
-
-    [&] <std::size_t... I>(std::index_sequence<I...>) {
-        std::size_t column = 0;
-
-        (
-            (
-                out << (column++ == 0 ? "" : ", ")
-                    << std::setprecision(std::numeric_limits<float>::max_digits10)
-                    << static_cast<float>(get<I>(point))
-            ),
-            ...
-        );
-    }(std::make_index_sequence<kumi::size_v<PointT>>{});
-
-    out << "]";
 }
 
 template <eve::product_type PointT, class Assignments>
@@ -146,3 +126,4 @@ void write_lloyd_metrics(
 
     out << "}\n";
 }
+

@@ -9,13 +9,13 @@
 #include <vector>
 #include <utility>
 
-#include <eve/wide.hpp>
+#include "../simd.hpp"
 
 namespace kmeans {
 
-using wide_f = eve::wide<float>;
-using cardinal = typename wide_f::cardinal_type;
-using wide_i = eve::wide<int, cardinal>;
+using ::wide_f;
+using ::wide_i;
+using ::cardinal;
 
 inline void check_cluster_count(std::size_t n_clusters, std::size_t n_samples) {
     if (n_clusters == 0) {

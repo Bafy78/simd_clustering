@@ -7,10 +7,10 @@
 
 #include <nanobench.h>
 
-#include "../../include/k_means/io/binary.hpp"
-#include "../../include/k_means/io/metrics.hpp"
+#include "../../include/io/binary.hpp"
+#include "../../include/k_means/metrics.hpp"
 #include "../../include/k_means/static_d/backend.hpp"
-#include "../../include/k_means/static_d/conversion.hpp"
+#include "../../include/k_means/static_d/input.hpp"
 
 struct static_lloyd_case {
     static constexpr int nanobench_argc = 9;

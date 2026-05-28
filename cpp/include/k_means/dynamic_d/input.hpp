@@ -6,9 +6,9 @@
 #include <string>
 #include <vector>
 
-#include "layout.hpp"
-#include "../io/binary.hpp"
-#include "../static_d/layout.hpp"
+#include "./layout.hpp"
+#include "../../io/binary.hpp"
+#include "../../layout/static_soa.hpp"
 
 template<std::size_t D>
 void check_dynamic_aos_size(std::span<const float> aos, std::size_t rows, const char* label) {

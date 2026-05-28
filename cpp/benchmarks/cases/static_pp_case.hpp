@@ -6,9 +6,9 @@
 
 #include <nanobench.h>
 
-#include "../../include/greedy_k-means_pp.hpp"
-#include "../../include/k_means/io/binary.hpp"
-#include "../../include/k_means/static_d/conversion.hpp"
+#include "../../include/k_means/greedy_pp.hpp"
+#include "../../include/io/binary.hpp"
+#include "../../include/k_means/static_d/input.hpp"
 
 struct static_pp_case {
     static constexpr int nanobench_argc = 7;

@@ -48,7 +48,7 @@ def load_process_aware_records(
     *,
     lloyd_parity: dict[str, dict[str, Any]],
     gmm_metrics: dict[tuple[str, str], dict[str, Any]] | None = None,
-    completed_config_ids: set[str] | None = None,
+    completed_config_ids_by_phase: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
 
@@ -73,8 +73,10 @@ def load_process_aware_records(
         lang_key = parsed["language_key"]
         config_id = parsed["config_id"]
 
-        if completed_config_ids is not None and config_id not in completed_config_ids:
-            continue
+        if completed_config_ids_by_phase is not None:
+            allowed_config_ids = completed_config_ids_by_phase.get(phase_key)
+            if allowed_config_ids is not None and config_id not in allowed_config_ids:
+                continue
 
         if phase_key == "lloyd":
             iterations = lloyd_iteration_count(

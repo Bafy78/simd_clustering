@@ -6,8 +6,8 @@
 
 #include <nanobench.h>
 
-#include "../../include/k_means/io/binary.hpp"
-#include "../../include/k_means/static_d/conversion.hpp"
+#include "../../include/io/binary.hpp"
+#include "../../include/layout/static_soa.hpp"
 
 struct static_soa_case {
     static constexpr int nanobench_argc = 6;

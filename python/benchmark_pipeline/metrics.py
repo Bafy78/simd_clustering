@@ -25,6 +25,77 @@ def assert_close(name: str, a: float, b: float, *, rel_tol=1e-10, abs_tol=1e-8):
         )
 
 
+
+def _assert_sequence_close(name: str, candidate, reference) -> None:
+    if len(candidate) != len(reference):
+        raise RuntimeError(
+            f"C++ metrics mismatch for {name}: length {len(candidate)} vs {len(reference)}"
+        )
+
+    for i, (a, b) in enumerate(zip(candidate, reference)):
+        assert_close(f"{name}[{i}]", float(a), float(b))
+
+
+def _assert_matrix_close(name: str, candidate, reference) -> None:
+    if len(candidate) != len(reference):
+        raise RuntimeError(
+            f"C++ metrics mismatch for {name}: row count {len(candidate)} vs {len(reference)}"
+        )
+
+    for row, (candidate_row, reference_row) in enumerate(zip(candidate, reference)):
+        if len(candidate_row) != len(reference_row):
+            raise RuntimeError(
+                f"C++ metrics mismatch for {name}[{row}]: "
+                f"length {len(candidate_row)} vs {len(reference_row)}"
+            )
+
+        for col, (a, b) in enumerate(zip(candidate_row, reference_row)):
+            assert_close(f"{name}[{row}][{col}]", float(a), float(b))
+
+
+def validate_gmm_process_metrics(candidate: dict, reference: dict, path: str) -> None:
+    if candidate.get("algorithm") != reference.get("algorithm"):
+        raise RuntimeError(f"algorithm mismatch in {path}")
+
+    if candidate.get("covariance_type") != reference.get("covariance_type"):
+        raise RuntimeError(f"covariance_type mismatch in {path}")
+
+    if int(candidate["iterations"]) != int(reference["iterations"]):
+        raise RuntimeError(
+            f"iteration mismatch in {path}: "
+            f"{candidate['iterations']} vs {reference['iterations']}"
+        )
+
+    if bool(candidate["converged"]) != bool(reference["converged"]):
+        raise RuntimeError(f"converged mismatch in {path}")
+
+    assert_close(
+        f"lower_bound in {path}",
+        float(candidate["lower_bound"]),
+        float(reference["lower_bound"]),
+    )
+
+    _assert_sequence_close(
+        f"lower_bounds in {path}",
+        candidate.get("lower_bounds", []),
+        reference.get("lower_bounds", []),
+    )
+    _assert_sequence_close(
+        f"weights in {path}",
+        candidate.get("weights", []),
+        reference.get("weights", []),
+    )
+    _assert_sequence_close(
+        f"covariances in {path}",
+        candidate.get("covariances", []),
+        reference.get("covariances", []),
+    )
+    _assert_matrix_close(
+        f"means in {path}",
+        candidate.get("means", []),
+        reference.get("means", []),
+    )
+
 def validate_cpp_process_metrics(process_metrics: list[str]) -> dict:
     if not process_metrics:
         raise RuntimeError("No C++ process metrics files to validate")
@@ -39,6 +110,10 @@ def validate_cpp_process_metrics(process_metrics: list[str]) -> dict:
 
         if candidate.get("language") != reference.get("language"):
             raise RuntimeError(f"language mismatch in {path}")
+
+        if reference.get("algorithm") == "gmm":
+            validate_gmm_process_metrics(candidate, reference, path)
+            continue
 
         if int(candidate["iterations"]) != int(reference["iterations"]):
             raise RuntimeError(

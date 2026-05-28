@@ -2,7 +2,11 @@ import argparse
 from pathlib import Path
 
 from benchmark_postprocess.io import write_json
-from benchmark_postprocess.parity import load_gmm_metrics_map, load_lloyd_parity_map
+from benchmark_postprocess.parity import (
+    gmm_completed_config_ids,
+    load_gmm_metrics_map,
+    load_lloyd_parity_map,
+)
 from benchmark_postprocess.records import load_process_aware_records
 from benchmark_postprocess.summary import build_summary
 
@@ -30,13 +34,22 @@ def main() -> None:
     gmm_metrics = load_gmm_metrics_map(args.data_dir)
 
     print(f"Step 2/4: Loading benchmark records from {args.data_dir}...")
-    completed_config_ids = set(lloyd_parity)
+    lloyd_config_ids = set(lloyd_parity)
+    gmm_config_ids = gmm_completed_config_ids(gmm_metrics)
+    completed_config_ids_by_phase = {
+        # AoS/SoA and k-means++ are shared setup phases. Keep them whenever
+        # at least one iterative algorithm for the config has complete metrics.
+        "soa": lloyd_config_ids | gmm_config_ids,
+        "pp": lloyd_config_ids | gmm_config_ids,
+        "lloyd": lloyd_config_ids,
+        "gmm": gmm_config_ids,
+    }
 
     records = load_process_aware_records(
         args.data_dir,
         lloyd_parity=lloyd_parity,
         gmm_metrics=gmm_metrics,
-        completed_config_ids=completed_config_ids,
+        completed_config_ids_by_phase=completed_config_ids_by_phase,
     )
 
     print("Step 3/4: Building summary and running bootstrap intervals...")
@@ -59,6 +72,7 @@ def main() -> None:
     print(f"Bootstrap iterations: {args.bootstrap_iterations}")
     print(f"Lloyd parity configs: {len(lloyd_parity)}")
     print(f"GMM metrics records: {len(gmm_metrics)}")
+    print(f"GMM completed configs: {len(gmm_config_ids)}")
 
 
 if __name__ == "__main__":
