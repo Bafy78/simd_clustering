@@ -5,6 +5,8 @@ import matplotlib.ticker as mtick
 from collections.abc import Callable
 import seaborn as sns
 from typing import Any
+import re
+from matplotlib.lines import Line2D
 
 
 def create_subplot_grid(n_plots, cols=2, row_height=5, fig_width=12):
@@ -230,6 +232,59 @@ def make_cluster_pivot(
     return formatted, pivot
 
 
+def add_initial_letter_annotations(
+    df,
+    *,
+    source_col: str,
+    annot_col: str,
+):
+    """Add a one-letter annotation column derived from source_col values."""
+    out = df.copy()
+
+    labels = list(dict.fromkeys(str(v) for v in out[source_col].dropna()))
+
+    def first_letter(label: str) -> str:
+        match = re.search(r"[A-Za-z]", label)
+        if match is None:
+            raise ValueError(f"Could not derive an annotation letter from {label!r}")
+        return match.group(0).lower()
+
+    label_to_letter = {label: first_letter(label) for label in labels}
+
+    letter_to_labels = {}
+    for label, letter in label_to_letter.items():
+        letter_to_labels.setdefault(letter, []).append(label)
+
+    collisions = {
+        letter: labels for letter, labels in letter_to_labels.items() if len(labels) > 1
+    }
+
+    if collisions:
+        raise ValueError(
+            "Duplicate annotation letters found. "
+            f"Please rename checks or provide an explicit mapping: {collisions}"
+        )
+
+    out[annot_col] = out[source_col].map(
+        lambda value: label_to_letter.get(str(value), "")
+    )
+
+    handles = [
+        Line2D(
+            [0],
+            [0],
+            marker=f"${letter}$",
+            linestyle="None",
+            color="black",
+            markersize=12,
+            label=label.replace("_", " "),
+        )
+        for label, letter in label_to_letter.items()
+    ]
+
+    return out, handles, label_to_letter
+
+
 def plot_clustered_heatmap_grid(
     df,
     *,
@@ -308,6 +363,7 @@ def plot_clustered_heatmap_grid(
             loc="lower center",
             bbox_to_anchor=(0.5, -0.02),
             frameon=False,
+            ncol=min(len(legend_handles), 6),
         )
 
     plt.suptitle(
