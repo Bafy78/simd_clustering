@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 
 
 def load_json(path: str):
@@ -53,6 +54,52 @@ def _assert_matrix_close(name: str, candidate, reference) -> None:
             assert_close(f"{name}[{row}][{col}]", float(a), float(b))
 
 
+def _is_non_string_sequence(value) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _shape_of(value) -> tuple[int, ...]:
+    if not _is_non_string_sequence(value):
+        return ()
+
+    child_shapes = [_shape_of(child) for child in value]
+    if not child_shapes:
+        return (0,)
+
+    first = child_shapes[0]
+    for child_shape in child_shapes[1:]:
+        if child_shape != first:
+            raise RuntimeError("ragged array")
+
+    return (len(value), *first)
+
+
+def _assert_array_close(name: str, candidate, reference) -> None:
+    try:
+        candidate_shape = _shape_of(candidate)
+        reference_shape = _shape_of(reference)
+    except RuntimeError as exc:
+        raise RuntimeError(f"C++ metrics mismatch for {name}: {exc}") from exc
+
+    if candidate_shape != reference_shape:
+        raise RuntimeError(
+            f"C++ metrics mismatch for {name}: "
+            f"shape {candidate_shape} vs {reference_shape}"
+        )
+
+    def visit(candidate_value, reference_value, suffix: str) -> None:
+        if not _is_non_string_sequence(candidate_value):
+            assert_close(f"{name}{suffix}", float(candidate_value), float(reference_value))
+            return
+
+        for i, (candidate_child, reference_child) in enumerate(
+            zip(candidate_value, reference_value)
+        ):
+            visit(candidate_child, reference_child, f"{suffix}[{i}]")
+
+    visit(candidate, reference, "")
+
+
 def validate_gmm_process_metrics(candidate: dict, reference: dict, path: str) -> None:
     if candidate.get("algorithm") != reference.get("algorithm"):
         raise RuntimeError(f"algorithm mismatch in {path}")
@@ -85,7 +132,7 @@ def validate_gmm_process_metrics(candidate: dict, reference: dict, path: str) ->
         candidate.get("weights", []),
         reference.get("weights", []),
     )
-    _assert_sequence_close(
+    _assert_array_close(
         f"covariances in {path}",
         candidate.get("covariances", []),
         reference.get("covariances", []),

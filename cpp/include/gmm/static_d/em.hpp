@@ -5,9 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
-#include <numbers>
 #include <stdexcept>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -20,7 +18,7 @@
 #include "../../simd.hpp"
 
 template <eve::product_type PointT>
-struct spherical_gmm_result {
+struct static_gmm_result {
     std::vector<float> weights;
     std::vector<PointT> means;
     std::vector<float> covariances;
@@ -31,82 +29,36 @@ struct spherical_gmm_result {
     float lower_bound = -std::numeric_limits<float>::infinity();
 };
 
-template <eve::product_type PointT>
-float point_norm_sq(const PointT& point) {
-    return kumi::inner_product(point, point, 0.0f);
-}
-
-template <eve::product_type SimdPointT, eve::product_type PointT>
-wide_f dot_simd_point_with_mean(const SimdPointT& point, const PointT& mean) {
-    auto dot = eve::zero(eve::as<wide_f>());
-
-    kumi::for_each(
-        [&](auto x, auto mu) {
-            dot = eve::fma(x, wide_f(mu), dot);
-        },
-        point,
-        mean
-    );
-
-    return dot;
-}
-
-template <eve::product_type SimdPointT>
-wide_f simd_point_norm_sq(const SimdPointT& point) {
-    auto norm_sq = eve::zero(eve::as<wide_f>());
-
-    kumi::for_each(
-        [&](auto x) {
-            norm_sq = eve::fma(x, x, norm_sq);
-        },
-        point
-    );
-
-    return norm_sq;
-}
-
-template <eve::product_type PointT>
-struct spherical_gmm_em_state {
+template <eve::product_type PointT, class CovarianceModel>
+struct static_gmm_em_state {
     using simd_sum_point = std::array<wide_f, kumi::size_v<PointT>>;
 
     const eve::algo::soa_vector<PointT>& points;
     std::vector<float> weights;
     std::vector<PointT> means;
-    std::vector<float> covariances;
-    std::vector<float> precisions;
-    std::vector<float> mean_norms;
-    std::vector<float> score_constants;
+    CovarianceModel covariance;
     std::vector<wide_f> score_scratch;
     std::vector<wide_f> unnormalized_resp_scratch;
     std::vector<wide_f> nk_w;
     std::vector<simd_sum_point> sum_x_w;
-    std::vector<wide_f> sum_x2_w;
 
-    float reg_covar = 1e-6f;
-
-    spherical_gmm_em_state(
+    static_gmm_em_state(
         const eve::algo::soa_vector<PointT>& points_,
         std::vector<float> weights_,
         std::vector<PointT> means_,
-        std::vector<float> precisions_,
-        float reg_covar_
+        CovarianceModel covariance_
     )
         : points(points_),
           weights(std::move(weights_)),
           means(std::move(means_)),
-          covariances(precisions_.size()),
-          precisions(std::move(precisions_)),
-          mean_norms(means.size()),
-          score_constants(means.size()),
+          covariance(std::move(covariance_)),
           score_scratch(means.size()),
           unnormalized_resp_scratch(means.size()),
           nk_w(means.size()),
-          sum_x_w(means.size()),
-          sum_x2_w(means.size()),
-          reg_covar(reg_covar_) {
+          sum_x_w(means.size()) {
         validate_inputs();
-        refresh_covariances_from_precisions();
-        refresh_score_data();
+        covariance.refresh_covariances_from_precisions();
+        covariance.refresh_score_data(weights, means);
     }
 
     std::size_t n_components() const {
@@ -128,72 +80,29 @@ struct spherical_gmm_em_state {
             throw std::runtime_error("GMM weights count does not match component count");
         }
 
-        if (precisions.size() != k) {
-            throw std::runtime_error("Spherical GMM precision count must match component count");
-        }
-
         for (std::size_t component = 0; component < k; ++component) {
             if (!(weights[component] > 0.0f)) {
                 throw std::runtime_error("GMM weights must be strictly positive");
             }
-
-            if (!(precisions[component] > 0.0f)) {
-                throw std::runtime_error("Spherical GMM precisions must be strictly positive");
-            }
         }
-    }
 
-    void refresh_covariances_from_precisions() {
-        for (std::size_t k = 0; k < n_components(); ++k) {
-            covariances[k] = 1.0f / precisions[k];
-        }
-    }
-
-    void refresh_score_data() {
-        const float log_2_pi = std::log(2.0f * std::numbers::pi_v<float>);
-        constexpr float half_features = 0.5f * static_cast<float>(kumi::size_v<PointT>);
-
-        for (std::size_t k = 0; k < n_components(); ++k) {
-            mean_norms[k] = point_norm_sq(means[k]);
-
-            // sklearn stores precisions_cholesky_ and computes, for spherical covariance:
-            //   log_det = D * log(sqrt(precision)) = 0.5 * D * log(precision)
-            //   log_prob = -0.5 * (D * log(2π) + precision * ||x - μ||²) + log_det
-            score_constants[k] =
-                std::log(weights[k])
-                + half_features * std::log(precisions[k])
-                - half_features * log_2_pi
-                - 0.5f * precisions[k] * mean_norms[k];
-        }
+        covariance.validate_inputs(k);
     }
 
     void reset_simd_accumulators() {
         const auto zero = eve::zero(eve::as<wide_f>());
 
         std::fill(nk_w.begin(), nk_w.end(), zero);
-        std::fill(sum_x2_w.begin(), sum_x2_w.end(), zero);
 
         for (auto& row : sum_x_w) {
             row.fill(zero);
         }
+
+        covariance.reset_simd_accumulators();
     }
 
-    template <eve::product_type SimdPointT>
-    wide_f compute_weighted_log_prob(
-        const SimdPointT& point,
-        wide_f point_norm,
-        std::size_t k
-    ) const {
-        const auto dot = dot_simd_point_with_mean(point, means[k]);
-
-        return eve::fma(
-            wide_f(-0.5f * precisions[k]),
-            point_norm,
-            eve::fma(wide_f(precisions[k]), dot, wide_f(score_constants[k]))
-        );
-    }
-
-    float e_step_and_accumulate_sufficient_statistics() {
+    // TODO: Investigate why this is not inlined by the compiler
+    __attribute__((always_inline)) float e_step_and_accumulate_sufficient_statistics() {
         reset_simd_accumulators();
 
         auto lower_bound_sum_w = eve::zero(eve::as<wide_f>());
@@ -202,12 +111,17 @@ struct spherical_gmm_em_state {
             points,
             [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
                 const auto point = eve::load[ignore](it);
-                const auto point_norm = simd_point_norm_sq(point);
+                const auto point_cache = covariance.make_point_cache(point);
 
                 auto max_score = wide_f(-std::numeric_limits<float>::infinity());
 
                 for (std::size_t k = 0; k < n_components(); ++k) {
-                    const auto score = compute_weighted_log_prob(point, point_norm, k);
+                    const auto score = covariance.compute_weighted_log_prob(
+                        point,
+                        point_cache,
+                        means[k],
+                        k
+                    );
                     score_scratch[k] = score;
                     max_score = eve::max(max_score, score);
                 }
@@ -233,7 +147,7 @@ struct spherical_gmm_em_state {
                     const auto resp = unnormalized_resp_scratch[k] * inv_denom;
 
                     nk_w[k] = eve::fma[ignore](resp, wide_f(1.0f), nk_w[k]);
-                    sum_x2_w[k] = eve::fma[ignore](resp, point_norm, sum_x2_w[k]);
+                    covariance.accumulate_second_order(k, resp, point, point_cache, ignore);
 
                     kumi::for_each_index(
                         [&](auto index, auto x) {
@@ -254,7 +168,6 @@ struct spherical_gmm_em_state {
 
     void m_step_from_accumulators() {
         constexpr float eps10 = 10.0f * std::numeric_limits<float>::epsilon();
-        constexpr float inv_features = 1.0f / static_cast<float>(kumi::size_v<PointT>);
 
         std::vector<float> nk(n_components());
         float nk_sum = 0.0f;
@@ -276,48 +189,34 @@ struct spherical_gmm_em_state {
                 means[k]
             );
 
-            const float mean_norm = point_norm_sq(means[k]);
-            const float avg_x2 = eve::reduce(sum_x2_w[k]) * inv_nk;
-            const float covariance = (avg_x2 - mean_norm) * inv_features + reg_covar;
-
-            if (!(covariance > 0.0f)) {
-                throw std::runtime_error(
-                    "Spherical GMM covariance became non-positive; try increasing reg_covar"
-                );
-            }
-
-            covariances[k] = covariance;
-            precisions[k] = 1.0f / covariance;
-            mean_norms[k] = mean_norm;
+            covariance.update_component_from_sufficient_statistics(k, nk[k], means[k]);
         }
 
-        refresh_score_data();
+        covariance.refresh_score_data(weights, means);
     }
 };
 
-template <eve::product_type PointT>
-spherical_gmm_result<PointT> spherical_em(
+template <eve::product_type PointT, class CovarianceModel>
+static_gmm_result<PointT> run_static_gmm_em(
     const eve::algo::soa_vector<PointT>& points,
     std::vector<float> weights,
     std::vector<PointT> means,
-    std::vector<float> precisions,
+    CovarianceModel covariance,
     int max_iterations = 100,
-    float tol = 1e-3f,
-    float reg_covar = 1e-6f
+    float tol = 1e-3f
 ) {
     if (max_iterations < 0) {
         throw std::runtime_error("GMM max_iterations must be non-negative");
     }
 
-    spherical_gmm_em_state<PointT> state{
+    static_gmm_em_state<PointT, CovarianceModel> state{
         points,
         std::move(weights),
         std::move(means),
-        std::move(precisions),
-        reg_covar
+        std::move(covariance)
     };
 
-    spherical_gmm_result<PointT> result;
+    static_gmm_result<PointT> result;
     result.lower_bounds.reserve(static_cast<std::size_t>(max_iterations));
 
     float lower_bound = -std::numeric_limits<float>::infinity();
@@ -340,8 +239,8 @@ spherical_gmm_result<PointT> spherical_em(
 
     result.weights = std::move(state.weights);
     result.means = std::move(state.means);
-    result.covariances = std::move(state.covariances);
-    result.precisions = std::move(state.precisions);
+    result.covariances = std::move(state.covariance.covariances);
+    result.precisions = std::move(state.covariance.precisions);
 
     return result;
 }

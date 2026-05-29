@@ -4,13 +4,91 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <eve/module/core.hpp>
 
+#include "covariance_type.hpp"
 #include "../io/json.hpp"
+
+template <eve::product_type PointT>
+void write_spherical_gmm_covariances_json(
+    std::ostream& out,
+    const std::vector<float>& covariances,
+    std::size_t n_components
+) {
+    if (covariances.size() != n_components) {
+        throw std::runtime_error("Spherical GMM covariance count must match component count");
+    }
+
+    out << "  \"covariances\": [";
+    for (std::size_t k = 0; k < covariances.size(); ++k) {
+        if (k != 0) {
+            out << ", ";
+        }
+        out << static_cast<double>(covariances[k]);
+    }
+    out << "],\n";
+}
+
+template <eve::product_type PointT>
+void write_diagonal_gmm_covariances_json(
+    std::ostream& out,
+    const std::vector<float>& covariances,
+    std::size_t n_components
+) {
+    constexpr std::size_t n_features = kumi::size_v<PointT>;
+
+    if (covariances.size() != n_components * n_features) {
+        throw std::runtime_error(
+            "Diagonal GMM covariance count must be component count times feature count"
+        );
+    }
+
+    out << "  \"covariances\": [\n";
+    for (std::size_t k = 0; k < n_components; ++k) {
+        out << "    [";
+        for (std::size_t d = 0; d < n_features; ++d) {
+            if (d != 0) {
+                out << ", ";
+            }
+            out << static_cast<double>(covariances[k * n_features + d]);
+        }
+        out << "]";
+
+        if (k + 1 != n_components) {
+            out << ",";
+        }
+
+        out << "\n";
+    }
+    out << "  ],\n";
+}
+
+template <eve::product_type PointT>
+void write_gmm_covariances_json(
+    std::ostream& out,
+    const std::vector<float>& covariances,
+    std::size_t n_components,
+    gmm_covariance_type covariance_type
+) {
+    switch (covariance_type) {
+    case gmm_covariance_type::spherical:
+        write_spherical_gmm_covariances_json<PointT>(out, covariances, n_components);
+        return;
+    case gmm_covariance_type::diag:
+        write_diagonal_gmm_covariances_json<PointT>(out, covariances, n_components);
+        return;
+    case gmm_covariance_type::full:
+    case gmm_covariance_type::tied:
+        throw std::runtime_error("GMM metrics support only spherical and diag covariance");
+    }
+
+    throw std::runtime_error("Unknown GMM covariance_type");
+}
 
 template <eve::product_type PointT>
 void write_gmm_metrics(
@@ -22,10 +100,20 @@ void write_gmm_metrics(
     int iterations,
     bool converged,
     float lower_bound,
-    const std::string& covariance_type
+    gmm_covariance_type covariance_type
 ) {
-    if (weights.size() != means.size() || weights.size() != covariances.size()) {
-        throw std::runtime_error("GMM metrics parameter sizes do not match");
+    if (weights.size() != means.size()) {
+        throw std::runtime_error("GMM metrics weight and mean counts do not match");
+    }
+
+    const std::size_t expected_covariance_count = gmm_covariance_value_count(
+        covariance_type,
+        weights.size(),
+        kumi::size_v<PointT>
+    );
+
+    if (covariances.size() != expected_covariance_count) {
+        throw std::runtime_error("GMM metrics covariance count does not match covariance type");
     }
 
     std::ofstream out(filename);
@@ -40,7 +128,7 @@ void write_gmm_metrics(
     out << "  \"schema_version\": 1,\n";
     out << "  \"algorithm\": \"gmm\",\n";
     out << "  \"language\": \"cpp\",\n";
-    out << "  \"covariance_type\": \"" << covariance_type << "\",\n";
+    out << "  \"covariance_type\": \"" << to_string(covariance_type) << "\",\n";
     out << "  \"iterations\": " << iterations << ",\n";
     out << "  \"converged\": " << (converged ? "true" : "false") << ",\n";
     out << "  \"lower_bound\": " << static_cast<double>(lower_bound) << ",\n";
@@ -76,14 +164,7 @@ void write_gmm_metrics(
     }
     out << "  ],\n";
 
-    out << "  \"covariances\": [";
-    for (std::size_t k = 0; k < covariances.size(); ++k) {
-        if (k != 0) {
-            out << ", ";
-        }
-        out << static_cast<double>(covariances[k]);
-    }
-    out << "],\n";
+    write_gmm_covariances_json<PointT>(out, covariances, weights.size(), covariance_type);
 
     out << "  \"sklearn_defaults\": {\n";
     out << "    \"tol\": 0.001,\n";

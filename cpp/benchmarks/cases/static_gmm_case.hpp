@@ -9,9 +9,12 @@
 #include <nanobench.h>
 
 #include "../../include/io/binary.hpp"
+#include "../../include/gmm/covariance_type.hpp"
 #include "../../include/gmm/metrics.hpp"
 #include "../../include/gmm/static_d/input.hpp"
-#include "../../include/gmm/static_d/spherical_em.hpp"
+#include "../../include/gmm/static_d/em.hpp"
+#include "../../include/gmm/static_d/spherical_covariance.hpp"
+#include "../../include/gmm/static_d/diagonal_covariance.hpp"
 
 struct static_gmm_case {
     static constexpr int nanobench_argc = 12;
@@ -77,27 +80,41 @@ struct static_gmm_case {
     double min_epoch_seconds() const { return min_epoch_seconds_; }
 
     void run_once() {
-        if (covariance_type_ != "spherical") {
+        switch (covariance_type_) {
+        case gmm_covariance_type::spherical: {
+            auto result = run_static_gmm_em(
+                points_,
+                initial_weights_,
+                initial_means_,
+                spherical_covariance_model<PointType>{
+                    initial_precisions_,
+                    static_cast<std::size_t>(n_clusters_)
+                }
+            );
+            store_result(std::move(result));
+            return;
+        }
+        case gmm_covariance_type::diag: {
+            auto result = run_static_gmm_em(
+                points_,
+                initial_weights_,
+                initial_means_,
+                diagonal_covariance_model<PointType>{
+                    initial_precisions_,
+                    static_cast<std::size_t>(n_clusters_)
+                }
+            );
+            store_result(std::move(result));
+            return;
+        }
+        case gmm_covariance_type::full:
+        case gmm_covariance_type::tied:
             throw std::runtime_error(
-                "static_gmm_case currently supports only spherical covariance"
+                "static_gmm_case supports only spherical and diag covariance"
             );
         }
 
-        auto result = spherical_em(
-            points_,
-            initial_weights_,
-            initial_means_,
-            initial_precisions_
-        );
-
-        final_weights_ = std::move(result.weights);
-        final_means_ = std::move(result.means);
-        final_covariances_ = std::move(result.covariances);
-        final_precisions_ = std::move(result.precisions);
-        lower_bounds_ = std::move(result.lower_bounds);
-        iterations_to_converge_ = result.iterations;
-        converged_ = result.converged;
-        lower_bound_ = result.lower_bound;
+        throw std::runtime_error("Unknown static GMM covariance_type");
     }
 
     void keep_alive() const {
@@ -123,27 +140,16 @@ struct static_gmm_case {
     }
 
 private:
-    static std::size_t precision_value_count(
-        const std::string& covariance_type,
-        std::size_t n_clusters
-    ) {
-        if (covariance_type == "spherical") {
-            return n_clusters;
-        }
-
-        if (covariance_type == "diag") {
-            return n_clusters * TUPLE_SIZE;
-        }
-
-        if (covariance_type == "full") {
-            return n_clusters * TUPLE_SIZE * TUPLE_SIZE;
-        }
-
-        if (covariance_type == "tied") {
-            return TUPLE_SIZE * TUPLE_SIZE;
-        }
-
-        throw std::runtime_error("Unsupported GMM covariance_type: " + covariance_type);
+    template <eve::product_type PointT>
+    void store_result(static_gmm_result<PointT>&& result) {
+        final_weights_ = std::move(result.weights);
+        final_means_ = std::move(result.means);
+        final_covariances_ = std::move(result.covariances);
+        final_precisions_ = std::move(result.precisions);
+        lower_bounds_ = std::move(result.lower_bounds);
+        iterations_to_converge_ = result.iterations;
+        converged_ = result.converged;
+        lower_bound_ = result.lower_bound;
     }
 
     static_gmm_case(
@@ -158,7 +164,7 @@ private:
     )
         : n_samples_(n_samples),
           n_clusters_(n_clusters),
-          covariance_type_(covariance_type),
+          covariance_type_(parse_gmm_covariance_type(covariance_type)),
           metrics_json_out_(metrics_json_out) {
         if (n_clusters_ <= 0) {
             throw std::runtime_error("Invalid number of GMM components");
@@ -175,13 +181,17 @@ private:
 
         initial_precisions_ = read_binary_f32(
             gmm_precisions_bin,
-            precision_value_count(covariance_type_, static_cast<std::size_t>(n_clusters_))
+            gmm_precision_value_count(
+                covariance_type_,
+                static_cast<std::size_t>(n_clusters_),
+                TUPLE_SIZE
+            )
         );
     }
 
     std::size_t n_samples_ = 0;
     int n_clusters_ = 0;
-    std::string covariance_type_;
+    gmm_covariance_type covariance_type_ = gmm_covariance_type::spherical;
     std::string metrics_json_out_;
     std::string nanobench_json_out_;
     std::size_t bench_epochs_ = 0;
