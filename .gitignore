@@ -7,3 +7,4 @@ datasets*/
 *.html
 **/__pycache__/
 callgrind_results/
+diagnostics/

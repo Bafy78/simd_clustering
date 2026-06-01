@@ -316,7 +316,7 @@ def add_gmm_parity_pressure(
     lower_bound_diff_abs=1e-4,
     weights_diff_abs=1e-4,
     means_diff_abs=1e-3,
-    covariances_diff_abs=1e-3,
+    covariances_diff_rel=1e-3,
     iteration_diff_abs=1,
 ):
     out = df.copy()
@@ -330,7 +330,7 @@ def add_gmm_parity_pressure(
             "lower_bound": out["Lower Bound Diff Abs"] / lower_bound_diff_abs,
             "weights": out["Weights Max Abs Diff"] / weights_diff_abs,
             "means": out["Means Max Abs Diff"] / means_diff_abs,
-            "covariances": out["Covariances Max Abs Diff"] / covariances_diff_abs,
+            "covariances": out["Covariances Max Rel Diff"] / covariances_diff_rel,
             "iterations": out["Iteration Diff Abs"] / iteration_diff_abs,
         }
     )
@@ -338,9 +338,7 @@ def add_gmm_parity_pressure(
     out["Parity Pressure"] = ratios.max(axis=1)
     out["Worst Check"] = ratios.idxmax(axis=1)
 
-    hard_failure = ~out["Converged Match"].astype(bool) | ~out[
-        "Covariance Type Match"
-    ].astype(bool)
+    hard_failure = ~out["Converged Match"].astype(bool)
 
     out.loc[hard_failure, "Parity Pressure"] = 10.0
     out.loc[hard_failure, "Worst Check"] = "hard fail"

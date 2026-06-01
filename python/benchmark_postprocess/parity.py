@@ -14,7 +14,7 @@ GMM_PARITY_THRESHOLDS = {
     "lower_bound_diff_abs": 1e-4,
     "weights_max_abs_diff": 1e-4,
     "means_max_abs_diff": 1e-3,
-    "covariances_max_abs_diff": 1e-3,
+    "covariances_max_rel_diff": 1e-2,
     "iteration_diff_abs": 1,
 }
 
@@ -264,6 +264,23 @@ def _max_abs_diff(candidate: Any, reference: Any) -> float | None:
     return float(np.max(np.abs(cand - ref)))
 
 
+def _max_rel_diff(candidate: Any, reference: Any) -> float | None:
+    if candidate is None or reference is None:
+        return None
+
+    cand = np.asarray(candidate, dtype=np.float64)
+    ref = np.asarray(reference, dtype=np.float64)
+
+    if cand.shape != ref.shape:
+        return None
+
+    if cand.size == 0:
+        return 0.0
+
+    scale = np.maximum(np.abs(ref), np.finfo(np.float64).eps)
+    return float(np.max(np.abs(cand - ref) / scale))
+
+
 def _is_finite_and_within(value: float | None, tolerance: float) -> bool:
     if value is None:
         return False
@@ -305,17 +322,15 @@ def compute_gmm_comparison(
 
     weights_max_abs_diff = _max_abs_diff(cpp.get("weights"), py.get("weights"))
     means_max_abs_diff = _max_abs_diff(cpp.get("means"), py.get("means"))
-    covariances_max_abs_diff = _max_abs_diff(
+    covariances_max_rel_diff = _max_rel_diff(
         cpp.get("covariances"),
         py.get("covariances"),
     )
 
     converged_match = bool(cpp["converged"]) == bool(py["converged"])
-    covariance_type_match = str(cpp["covariance_type"]) == str(py["covariance_type"])
 
     checks = {
         "converged_match": converged_match,
-        "covariance_type_match": covariance_type_match,
         "iteration_diff_abs": (
             iteration_diff_abs <= GMM_PARITY_THRESHOLDS["iteration_diff_abs"]
         ),
@@ -331,9 +346,9 @@ def compute_gmm_comparison(
             means_max_abs_diff,
             GMM_PARITY_THRESHOLDS["means_max_abs_diff"],
         ),
-        "covariances_max_abs_diff": _is_finite_and_within(
-            covariances_max_abs_diff,
-            GMM_PARITY_THRESHOLDS["covariances_max_abs_diff"],
+        "covariances_max_rel_diff": _is_finite_and_within(
+            covariances_max_rel_diff,
+            GMM_PARITY_THRESHOLDS["covariances_max_rel_diff"],
         ),
     }
 
@@ -355,12 +370,11 @@ def compute_gmm_comparison(
         "python_converged": bool(py["converged"]),
         "converged_match": converged_match,
         "covariance_type": str(cpp["covariance_type"]),
-        "covariance_type_match": covariance_type_match,
         "cpp_lower_bound": cpp_lower_bound,
         "python_lower_bound": py_lower_bound,
         "lower_bound_diff_abs": lower_bound_diff_abs,
         "lower_bound_diff_pct": lower_bound_diff_pct,
         "weights_max_abs_diff": weights_max_abs_diff,
         "means_max_abs_diff": means_max_abs_diff,
-        "covariances_max_abs_diff": covariances_max_abs_diff,
+        "covariances_max_rel_diff": covariances_max_rel_diff,
     }

@@ -376,7 +376,6 @@ def load_gmm_parity_summary(
                     "Failure Reasons": ", ".join(failure_reasons),
                     "Covariance Type": parity.get("covariance_type"),
                     "Converged Match": parity.get("converged_match"),
-                    "Covariance Type Match": parity.get("covariance_type_match"),
                     "GMM C++ Iterations": parity.get("cpp_iterations"),
                     "GMM Py Iterations": parity.get("python_iterations"),
                     "Iteration Diff Abs": parity.get("iteration_diff_abs"),
@@ -388,8 +387,7 @@ def load_gmm_parity_summary(
                     "Lower Bound Diff (%)": parity.get("lower_bound_diff_pct"),
                     "Weights Max Abs Diff": parity.get("weights_max_abs_diff"),
                     "Means Max Abs Diff": parity.get("means_max_abs_diff"),
-                    "Covariances Max Abs Diff": parity.get("covariances_max_abs_diff"),
-                    "Thresholds": parity.get("thresholds"),
+                    "Covariances Max Rel Diff": parity.get("covariances_max_rel_diff"),
                 }
             )
 
