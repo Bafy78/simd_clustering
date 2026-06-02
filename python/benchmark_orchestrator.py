@@ -8,7 +8,7 @@ from benchmark_pipeline.tasks import build_pipeline
 
 
 def cpp_cases_for_dimension(config, D: int) -> set[str]:
-    cases: set[str] = set()
+    cpp_cases: set[str] = set()
 
     for N in config.test_Ns:
         for K in config.test_Ks:
@@ -16,17 +16,17 @@ def cpp_cases_for_dimension(config, D: int) -> set[str]:
                 D,
                 N,
                 K,
-                config.bench_processes,
-                config.bench_values,
-                config.bench_min_time,
+                config.timing_processes,
+                config.timing_values,
+                config.timing_min_time,
                 gmm_covariance_type=config.gmm_covariance_type,
             )
 
             for task in pipeline:
                 if task.cpp_case is not None:
-                    cases.add(task.cpp_case)
+                    cpp_cases.add(task.cpp_case)
 
-    return cases
+    return cpp_cases
 
 
 def main() -> None:
@@ -42,9 +42,9 @@ def main() -> None:
                     D,
                     N,
                     K,
-                    config.bench_processes,
-                    config.bench_values,
-                    config.bench_min_time,
+                    config.timing_processes,
+                    config.timing_values,
+                    config.timing_min_time,
                     config.lloyd_parity_tolerance_pct,
                     gmm_covariance_type=config.gmm_covariance_type,
                 )

@@ -505,7 +505,7 @@ template<std::size_t D, std::size_t K_TILE>
 aligned_int_vector k_means_centroid_tiled(
     samples_soa_view<D> samples,
     centroids_storage<D>& centroids,
-    int& out_iterations,
+    int& out_algorithm_iterations,
     int max_iterations = 300,
     float tol = 1e-4f
 ) {
@@ -519,7 +519,7 @@ aligned_int_vector k_means_centroid_tiled(
 
     return kmeans::k_means_core(
         backend,
-        out_iterations,
+        out_algorithm_iterations,
         max_iterations,
         tol
     );
@@ -535,7 +535,7 @@ template<std::size_t D, std::size_t N_VECTORS, std::size_t K_TILE>
 aligned_int_vector k_means_micro_gemm(
     samples_soa_view<D> samples,
     centroids_storage<D>& centroids,
-    int& out_iterations,
+    int& out_algorithm_iterations,
     int max_iterations = 300,
     float tol = 1e-4f
 ) {
@@ -551,7 +551,7 @@ aligned_int_vector k_means_micro_gemm(
 
     return kmeans::k_means_core(
         backend,
-        out_iterations,
+        out_algorithm_iterations,
         max_iterations,
         tol
     );

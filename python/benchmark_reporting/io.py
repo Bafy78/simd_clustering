@@ -110,8 +110,8 @@ def load_benchmark_data(
 
     COL_TIME_S is the selected summary statistic, by default median total time.
 
-    Iterative phases such as Lloyd and GMM use their recorded algorithm
-    iteration count. Non-iterative phases use 1.
+    Iterative phases such as Lloyd and GMM use their recorded
+    algorithm-iteration count. Non-iterative phases use 1.
     """
     summary = load_benchmark_summary(data_dir, summary_filename)
     records: list[dict[str, Any]] = []
@@ -141,7 +141,9 @@ def load_benchmark_data(
                     statistic=statistic,
                 )
 
-                iterations = int(language_entry.get("iterations", 1))
+                algorithm_iterations = int(
+                    language_entry.get("algorithm_iterations", 1)
+                )
 
                 record = {
                     COL_PHASE: phase_name,
@@ -149,14 +151,16 @@ def load_benchmark_data(
                     COL_DIMENSIONS: D,
                     COL_SAMPLES: N,
                     COL_CLUSTERS: K,
-                    COL_ITERATIONS: iterations,
+                    COL_ALGORITHM_ITERATIONS: algorithm_iterations,
                     COL_TIME_S: selected_time,
                     COL_CONFIGURATION: configuration,
                     COL_CONFIG_ID: config_id,
                     COL_PHASE_KEY: phase_key,
                     COL_TIME_FIELD: time_field,
                     COL_TIME_STATISTIC: statistic,
-                    COL_PROCESS_COUNT: language_entry.get("process_count"),
+                    COL_TIMING_PROCESS_COUNT: language_entry.get(
+                        "timing_process_count"
+                    ),
                     COL_TIMING_VALUE_COUNT: language_entry.get("timing_value_count"),
                     COL_INERTIA: language_entry.get("inertia"),
                     COL_COVARIANCE_TYPE: language_entry.get("covariance_type"),
@@ -171,8 +175,8 @@ def load_benchmark_data(
                 )
                 _copy_stats_with_prefix(
                     record,
-                    prefix="time_per_iteration_s",
-                    stats=language_entry.get("time_per_iteration_s"),
+                    prefix="time_per_algorithm_iteration_s",
+                    stats=language_entry.get("time_per_algorithm_iteration_s"),
                 )
 
                 records.append(record)
@@ -203,14 +207,14 @@ def load_speedup_summary(
     data_dir=Path("./datasets"),
     *,
     summary_filename=SUMMARY_FILENAME,
-    time_field: str = "time_per_iteration_s",
+    time_field: str = "time_per_algorithm_iteration_s",
     ratio_statistic: str = "median_ratio",
 ) -> pd.DataFrame:
     """
     Load precomputed Python/C++ speedups and clustered-bootstrap CIs
     from benchmark_summary.json.
 
-    Default uses median speedup on time-per-iteration.
+    Default uses median speedup on time-per-algorithm-iteration.
     """
     summary = load_benchmark_summary(data_dir, summary_filename)
     records: list[dict[str, Any]] = []
@@ -320,8 +324,12 @@ def load_lloyd_parity_summary(
                     COL_CLUSTERS: K,
                     "Diff (%)": diff_pct,
                     "Status": "✅ PASS" if passed else "❌ FAIL",
-                    "Lloyd C++ Iteration": parity["cpp_iterations"],
-                    "Lloyd Py Iterations": parity["python_iterations"],
+                    "Lloyd C++ Algorithm Iterations": parity[
+                        "cpp_algorithm_iterations"
+                    ],
+                    "Lloyd Py Algorithm Iterations": parity[
+                        "python_algorithm_iterations"
+                    ],
                     "C++ Inertia": parity["cpp_inertia"],
                     "Py Inertia": parity["python_inertia"],
                     "Inertia Diff Abs": parity["inertia_diff_abs"],
@@ -376,9 +384,15 @@ def load_gmm_parity_summary(
                     "Failure Reasons": ", ".join(failure_reasons),
                     "Covariance Type": parity.get("covariance_type"),
                     "Converged Match": parity.get("converged_match"),
-                    "GMM C++ Iterations": parity.get("cpp_iterations"),
-                    "GMM Py Iterations": parity.get("python_iterations"),
-                    "Iteration Diff Abs": parity.get("iteration_diff_abs"),
+                    "GMM C++ Algorithm Iterations": parity.get(
+                        "cpp_algorithm_iterations"
+                    ),
+                    "GMM Py Algorithm Iterations": parity.get(
+                        "python_algorithm_iterations"
+                    ),
+                    "Algorithm Iteration Diff Abs": parity.get(
+                        "algorithm_iteration_diff_abs"
+                    ),
                     "C++ Converged": parity.get("cpp_converged"),
                     "Py Converged": parity.get("python_converged"),
                     "C++ Lower Bound": parity.get("cpp_lower_bound"),

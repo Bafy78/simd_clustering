@@ -335,7 +335,7 @@ bool update_centroids_incremental_or_full_common(
 template<class Backend>
 auto k_means_core(
     Backend& backend,
-    int& out_iterations,
+    int& out_algorithm_iterations,
     int max_iterations = 300,
     float tol = 1e-4f
 ) -> typename Backend::assignment_vector {
@@ -349,9 +349,9 @@ auto k_means_core(
 
     bool converged = false;
     bool strict_convergence = false;
-    int iterations = 0;
+    int algorithm_iterations = 0;
 
-    while (!converged && iterations < max_iterations) {
+    while (!converged && algorithm_iterations < max_iterations) {
         const bool labels_changed = backend.assign_and_check_changed(assignments);
 
         backend.save_centroids(previous_centroids);
@@ -369,10 +369,10 @@ auto k_means_core(
             }
         }
 
-        ++iterations;
+        ++algorithm_iterations;
     }
 
-    out_iterations = iterations;
+    out_algorithm_iterations = algorithm_iterations;
 
     // sklearn-like final label refresh:
     // If Lloyd stopped by strict label convergence, labels already match the final centers.

@@ -41,7 +41,7 @@ void write_lloyd_metrics(
     const std::vector<SampleT>& centroids,
     const Assignments& assignments,
     int K,
-    int iterations
+    int algorithm_iterations
 ) {
     if (K <= 0) {
         throw std::runtime_error("Invalid number of clusters");
@@ -87,8 +87,9 @@ void write_lloyd_metrics(
 
     out << "{\n";
     out << "  \"schema_version\": 1,\n";
+    out << "  \"phase\": \"lloyd\",\n";
     out << "  \"language\": \"cpp\",\n";
-    out << "  \"iterations\": " << iterations << ",\n";
+    out << "  \"algorithm_iterations\": " << algorithm_iterations << ",\n";
     out << "  \"inertia\": " << total_inertia << ",\n";
 
     out << "  \"cluster_counts\": [";

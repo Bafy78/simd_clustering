@@ -322,7 +322,7 @@ struct kumi_kmeans_backend {
 
         wide_f total_squared_centered_norm_w = eve::zero(eve::as<wide_f>());
 
-        eve::algo::for_each[eve::algo::no_unrolling](
+        eve::algo::for_each(
             eve::views::zip(original_samples, samples),
             [&](eve::algo::iterator auto it,
                 eve::relative_conditional_expr auto ignore) {
@@ -554,7 +554,7 @@ template <eve::product_type SampleType>
 auto k_means(
     const eve::algo::soa_vector<SampleType>& samples,
     std::vector<SampleType>& centroids,
-    int& out_iterations,
+    int& out_algorithm_iterations,
     int max_iterations = 300,
     float tol = 1e-4f
 ) {
@@ -562,7 +562,7 @@ auto k_means(
 
     return kmeans::k_means_core(
         backend,
-        out_iterations,
+        out_algorithm_iterations,
         max_iterations,
         tol
     );

@@ -210,9 +210,9 @@ void write_trace_json(
     const std::vector<float>& initial_weights,
     const std::vector<SampleT>& initial_means,
     const std::vector<float>& initial_precisions,
-    const std::vector<std::string>& iteration_jsons,
+    const std::vector<std::string>& algorithm_iteration_jsons,
     const std::vector<float>& lower_bounds,
-    int iterations,
+    int algorithm_iterations,
     bool converged,
     float lower_bound,
     const std::vector<float>& final_weights,
@@ -223,7 +223,8 @@ void write_trace_json(
     out << std::setprecision(std::numeric_limits<double>::max_digits10);
     out << "{\n";
     out << "  \"schema_version\": 1,\n";
-    out << "  \"algorithm\": \"gmm_diag_sufficient_statistics_trace\",\n";
+    out << "  \"phase\": \"gmm\",\n";
+    out << "  \"diagnostic\": \"gmm_diag_sufficient_statistics_trace\",\n";
     out << "  \"language\": \"cpp\",\n";
     out << "  \"D\": " << kumi::size_v<SampleType> << ",\n";
     out << "  \"N\": " << args.N << ",\n";
@@ -240,10 +241,10 @@ void write_trace_json(
     write_matrix_key<SampleT>(out, "precisions", initial_precisions, args.K, "\n");
     out << "  },\n";
 
-    out << "  \"iterations\": [\n";
-    for (std::size_t i = 0; i < iteration_jsons.size(); ++i) {
-        out << iteration_jsons[i];
-        if (i + 1 != iteration_jsons.size()) {
+    out << "  \"algorithm_iterations\": [\n";
+    for (std::size_t i = 0; i < algorithm_iteration_jsons.size(); ++i) {
+        out << algorithm_iteration_jsons[i];
+        if (i + 1 != algorithm_iteration_jsons.size()) {
             out << ",";
         }
         out << "\n";
@@ -251,7 +252,7 @@ void write_trace_json(
     out << "  ],\n";
 
     out << "  \"final\": {\n";
-    out << "    \"iterations\": " << iterations << ",\n";
+    out << "    \"algorithm_iterations\": " << algorithm_iterations << ",\n";
     out << "    \"converged\": " << (converged ? "true" : "false") << ",\n";
     out << "    \"lower_bound\": "; write_f64(out, lower_bound); out << ",\n";
     out << "    \"lower_bounds\": "; write_scalar_array_json(out, lower_bounds); out << ",\n";
@@ -363,27 +364,27 @@ int main(int argc, char** argv) {
             }
         };
 
-        std::vector<std::string> iteration_jsons;
+        std::vector<std::string> algorithm_iteration_jsons;
         std::vector<float> lower_bounds;
-        iteration_jsons.reserve(static_cast<std::size_t>(args.max_iter));
+        algorithm_iteration_jsons.reserve(static_cast<std::size_t>(args.max_iter));
         lower_bounds.reserve(static_cast<std::size_t>(args.max_iter));
 
         float lower_bound = -std::numeric_limits<float>::infinity();
         bool converged = false;
-        int iterations = 0;
+        int algorithm_iterations = 0;
 
         for (int iter = 1; iter <= args.max_iter; ++iter) {
             const float previous_lower_bound = lower_bound;
 
             lower_bound = state.e_step_and_accumulate_sufficient_statistics();
-            iteration_jsons.push_back(
+            algorithm_iteration_jsons.push_back(
                 make_iteration_json<SampleType>(iter, lower_bound, state, eps10)
             );
 
             state.m_step_from_accumulators();
 
             lower_bounds.push_back(lower_bound);
-            iterations = iter;
+            algorithm_iterations = iter;
 
             if (std::abs(lower_bound - previous_lower_bound) < args.tol) {
                 converged = true;
@@ -402,9 +403,9 @@ int main(int argc, char** argv) {
             initial_weights,
             initial_means,
             initial_precisions,
-            iteration_jsons,
+            algorithm_iteration_jsons,
             lower_bounds,
-            iterations,
+            algorithm_iterations,
             converged,
             lower_bound,
             state.weights,

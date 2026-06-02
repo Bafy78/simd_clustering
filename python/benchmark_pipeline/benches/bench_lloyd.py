@@ -105,8 +105,9 @@ def write_lloyd_metrics(path, *, X, kmeans, K):
 
     payload = {
         "schema_version": 1,
+        "phase": "lloyd",
         "language": "py",
-        "iterations": int(kmeans.n_iter_),
+        "algorithm_iterations": int(kmeans.n_iter_),
         "inertia": metrics["inertia"],
         "cluster_counts": metrics["cluster_counts"],
         "cluster_inertia": metrics["cluster_inertia"],

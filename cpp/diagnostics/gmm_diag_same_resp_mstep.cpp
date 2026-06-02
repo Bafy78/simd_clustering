@@ -457,7 +457,8 @@ void write_json(
 
     os << "{\n";
     os << "  \"schema_version\": 1,\n";
-    os << "  \"algorithm\": \"same_resp_diag_mstep\",\n";
+    os << "  \"phase\": \"gmm\",\n";
+    os << "  \"diagnostic\": \"same_resp_diag_mstep\",\n";
     os << "  \"language\": \"cpp\",\n";
     os << "  \"D\": " << D << ",\n";
     os << "  \"N\": " << N << ",\n";

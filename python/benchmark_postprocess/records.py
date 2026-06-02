@@ -3,47 +3,52 @@ from typing import Any
 
 from benchmark_postprocess.io import load_json
 from benchmark_postprocess.naming import parse_benchmark_filename
-from benchmark_postprocess.parity import gmm_iteration_count, lloyd_iteration_count
+from benchmark_postprocess.parity import (
+    gmm_algorithm_iteration_count,
+    lloyd_algorithm_iteration_count,
+)
 
 
-def iter_pyperf_values(path: Path):
+def iter_timing_values(path: Path):
     """
-    Yield values while preserving pyperf run/process grouping.
+    Yield timing values while preserving pyperf run/timing-process grouping.
 
     Output:
         {
             "benchmark_index": int,
-            "run_index": int,
-            "process_index": int,
-            "value_index": int,
+            "pyperf_run_index": int,
+            "timing_process_index": int,
+            "timing_value_index": int,
             "time_s": float,
         }
     """
     data = load_json(path)
 
     for benchmark_index, benchmark in enumerate(data.get("benchmarks", [])):
-        runs = benchmark.get("runs", [])
+        pyperf_runs = benchmark.get("runs", [])
 
-        for run_index, run in enumerate(runs):
-            metadata = run.get("metadata", {})
+        for pyperf_run_index, pyperf_run in enumerate(pyperf_runs):
+            metadata = pyperf_run.get("metadata", {})
 
-            # For merged C++ files, the merge script writes process_index.
-            # For native pyperf Python files, run_index is the process grouping.
-            process_index = metadata.get("process_index", run_index)
+            # For merged C++ files, the merge script writes timing_process_index.
+            # For native pyperf Python files, pyperf_run_index is the timing-process grouping.
+            timing_process_index = metadata.get(
+                "timing_process_index", pyperf_run_index
+            )
 
-            values = run.get("values", [])
+            timing_values = pyperf_run.get("values", [])
 
-            for value_index, value in enumerate(values):
+            for timing_value_index, timing_value in enumerate(timing_values):
                 yield {
                     "benchmark_index": benchmark_index,
-                    "run_index": run_index,
-                    "process_index": int(process_index),
-                    "value_index": value_index,
-                    "time_s": float(value),
+                    "pyperf_run_index": pyperf_run_index,
+                    "timing_process_index": int(timing_process_index),
+                    "timing_value_index": timing_value_index,
+                    "time_s": float(timing_value),
                 }
 
 
-def load_process_aware_records(
+def load_timing_process_aware_records(
     data_dir: Path,
     *,
     lloyd_parity: dict[str, dict[str, Any]],
@@ -79,7 +84,7 @@ def load_process_aware_records(
                 continue
 
         if phase_key == "lloyd":
-            iterations = lloyd_iteration_count(
+            algorithm_iterations = lloyd_algorithm_iteration_count(
                 lloyd_parity,
                 config_id=config_id,
                 lang_key=lang_key,
@@ -88,28 +93,28 @@ def load_process_aware_records(
             if gmm_metrics is None:
                 raise RuntimeError("GMM metrics map is required to process GMM records")
 
-            iterations = gmm_iteration_count(
+            algorithm_iterations = gmm_algorithm_iteration_count(
                 gmm_metrics,
                 config_id=config_id,
                 lang_key=lang_key,
             )
         else:
-            iterations = 1
+            algorithm_iterations = 1
 
-        for value_record in iter_pyperf_values(json_path):
-            time_s = value_record["time_s"]
+        for timing_value_record in iter_timing_values(json_path):
+            time_s = timing_value_record["time_s"]
 
             records.append(
                 {
                     **parsed,
                     "source_json": json_path.name,
-                    "benchmark_index": value_record["benchmark_index"],
-                    "run_index": value_record["run_index"],
-                    "process_index": value_record["process_index"],
-                    "value_index": value_record["value_index"],
-                    "iterations": iterations,
+                    "benchmark_index": timing_value_record["benchmark_index"],
+                    "pyperf_run_index": timing_value_record["pyperf_run_index"],
+                    "timing_process_index": timing_value_record["timing_process_index"],
+                    "timing_value_index": timing_value_record["timing_value_index"],
+                    "algorithm_iterations": algorithm_iterations,
                     "time_s": time_s,
-                    "time_per_iteration_s": time_s / iterations,
+                    "time_per_algorithm_iteration_s": time_s / algorithm_iterations,
                 }
             )
 

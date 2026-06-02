@@ -7,7 +7,7 @@ from benchmark_postprocess.parity import (
     load_gmm_metrics_map,
     load_lloyd_parity_map,
 )
-from benchmark_postprocess.records import load_process_aware_records
+from benchmark_postprocess.records import load_timing_process_aware_records
 from benchmark_postprocess.summary import build_summary
 
 
@@ -45,7 +45,7 @@ def main() -> None:
         "gmm": gmm_config_ids,
     }
 
-    records = load_process_aware_records(
+    records = load_timing_process_aware_records(
         args.data_dir,
         lloyd_parity=lloyd_parity,
         gmm_metrics=gmm_metrics,

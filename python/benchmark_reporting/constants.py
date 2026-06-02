@@ -5,7 +5,7 @@ LANG_PY = "Python (Scikit-Learn)"
 PHASE_MAP = {
     "soa": "AoS to SoA Tax",
     "pp": "K-Means++ Initialization",
-    "lloyd": "Lloyd Iterations",
+    "lloyd": "Lloyd Algorithm",
     "gmm": "GaussianMixture EM",
 }
 
@@ -27,7 +27,7 @@ COL_LANGUAGE_KEY = "Language_Key"
 COL_DIMENSIONS = "D"
 COL_SAMPLES = "N"
 COL_CLUSTERS = "K"
-COL_ITERATIONS = "Iterations"
+COL_ALGORITHM_ITERATIONS = "Algorithm_Iterations"
 COL_TIME_S = "Time_s"
 COL_CONFIGURATION = "Configuration"
 COL_CONFIG_ID = "Config_ID"
@@ -35,7 +35,7 @@ COL_CONFIG_ID = "Config_ID"
 # Summary-time metadata
 COL_TIME_FIELD = "Time_Field"
 COL_TIME_STATISTIC = "Time_Statistic"
-COL_PROCESS_COUNT = "Process_Count"
+COL_TIMING_PROCESS_COUNT = "Timing_Process_Count"
 COL_TIMING_VALUE_COUNT = "Timing_Value_Count"
 COL_INERTIA = "Inertia"
 COL_COVARIANCE_TYPE = "Covariance_Type"
@@ -52,27 +52,33 @@ COL_SPEEDUP_CI_LOWER_ERROR = "Speedup CI Lower Error"
 COL_SPEEDUP_CI_UPPER_ERROR = "Speedup CI Upper Error"
 COL_SPEEDUP_ERROR_WIDTH = "Speedup CI width"
 
-COL_TIME_PER_ITER_PER_SAMPLE_MS = "Time per iteration per sample (ms)"
-COL_TIME_PER_ITER_PER_SAMPLE_LOW_MS = "Time per iteration per sample low (ms)"
-COL_TIME_PER_ITER_PER_SAMPLE_HIGH_MS = "Time per iteration per sample high (ms)"
-COL_TIME_PER_ITER_PER_SAMPLE_LOWER_ERROR_MS = (
-    "Time per iteration per sample lower error (ms)"
+COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_MS = (
+    "Time per algorithm iteration per sample (ms)"
 )
-COL_TIME_PER_ITER_PER_SAMPLE_UPPER_ERROR_MS = (
-    "Time per iteration per sample upper error (ms)"
+COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_LOW_MS = (
+    "Time per algorithm iteration per sample low (ms)"
 )
-COL_RUN_TO_RUN_SPREAD = "Run-to-run spread"
+COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_HIGH_MS = (
+    "Time per algorithm iteration per sample high (ms)"
+)
+COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_LOWER_ERROR_MS = (
+    "Time per algorithm iteration per sample lower error (ms)"
+)
+COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_UPPER_ERROR_MS = (
+    "Time per algorithm iteration per sample upper error (ms)"
+)
+COL_TIMING_RUN_SPREAD = "Timing run spread"
 
 COL_CPP_POINT = "C++ Point"
 COL_PY_POINT = "Python Point"
 
-COL_TIME_PER_ITER = "Time_Per_Iter"
-COL_EQUIVALENT_ITERS = "Equivalent_Iters"
-COL_TIME_PER_ITER_MS = "Time_Per_Iter_ms"
+COL_TIME_PER_ALGORITHM_ITER = "Time_Per_Algorithm_Iter"
+COL_EQUIVALENT_ALGORITHM_ITERS = "Equivalent_Algorithm_Iters"
+COL_TIME_PER_ALGORITHM_ITER_MS = "Time_Per_Algorithm_Iter_ms"
 COL_PY_MEAN_TIME = "Py_Mean_Time"
 COL_BASE_SPEEDUP = "Base_Speedup"
 COL_RETENTION = "Performance Retention (%)"
-COL_ITERATION = "Iteration"
+COL_ALGORITHM_ITERATION = "Algorithm Iteration"
 
 # Common column groups
 CONFIG_COLS = [COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]

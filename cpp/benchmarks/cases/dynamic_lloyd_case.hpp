@@ -67,7 +67,7 @@ struct dynamic_lloyd_case {
             + std::to_string(D)
             + "D K_TILE="
             + std::to_string(KMEANS_K_TILE)
-            + " (Lloyd Iterations)";
+            + " (Lloyd Algorithm)";
     }
 
     std::string run_name() const {
@@ -84,7 +84,7 @@ struct dynamic_lloyd_case {
         auto assignments = k_means_micro_gemm<D, KMEANS_N_GROUP, KMEANS_K_TILE>(
             samples_storage_.view(),
             current_centroids,
-            iterations_to_converge_
+            algorithm_iterations_
         );
 
         final_centroids_ = std::move(current_centroids);
@@ -107,7 +107,7 @@ struct dynamic_lloyd_case {
             final_static_centroids,
             final_assignments_,
             K_,
-            iterations_to_converge_
+            algorithm_iterations_
         );
     }
 
@@ -156,5 +156,5 @@ private:
 
     centroids_storage<D> final_centroids_;
     aligned_int_vector final_assignments_;
-    int iterations_to_converge_ = 0;
+    int algorithm_iterations_ = 0;
 };

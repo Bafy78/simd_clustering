@@ -24,7 +24,7 @@ struct static_gmm_result {
     std::vector<float> covariances;
     std::vector<float> precisions;
     std::vector<float> lower_bounds;
-    int iterations = 0;
+    int algorithm_iterations = 0;
     bool converged = false;
     float lower_bound = -std::numeric_limits<float>::infinity();
 };
@@ -107,7 +107,7 @@ struct static_gmm_em_state {
 
         auto lower_bound_sum_w = eve::zero(eve::as<wide_f>());
 
-        eve::algo::for_each[eve::algo::no_unrolling](
+        eve::algo::for_each(
             samples,
             [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
                 const auto sample = eve::load[ignore](it);
@@ -228,7 +228,7 @@ static_gmm_result<SampleT> run_static_gmm_em(
         state.m_step_from_accumulators();
 
         result.lower_bounds.push_back(lower_bound);
-        result.iterations = iter;
+        result.algorithm_iterations = iter;
         result.lower_bound = lower_bound;
 
         if (std::abs(lower_bound - previous_lower_bound) < tol) {

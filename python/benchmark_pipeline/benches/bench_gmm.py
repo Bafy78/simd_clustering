@@ -93,10 +93,10 @@ def run_gmm_fit(X, K, covariance_type, weights, means, precisions):
 def write_gmm_metrics(path, *, gmm, covariance_type):
     payload = {
         "schema_version": 1,
-        "algorithm": "gmm",
+        "phase": "gmm",
         "language": "py",
         "covariance_type": covariance_type,
-        "iterations": int(gmm.n_iter_),
+        "algorithm_iterations": int(gmm.n_iter_),
         "converged": bool(gmm.converged_),
         "lower_bound": float(gmm.lower_bound_),
         "lower_bounds": [float(value) for value in gmm.lower_bounds_],

@@ -20,11 +20,11 @@ GMM_PARITY_THRESHOLDS = {
     "weights_max_abs_diff": 1e-4,
     "means_max_abs_diff": 1e-3,
     "covariances_max_rel_diff": 1e-2,
-    "iteration_diff_abs": 1,
+    "algorithm_iteration_diff_abs": 1,
 }
 
 
-def lloyd_iteration_count(
+def lloyd_algorithm_iteration_count(
     lloyd_parity: dict[str, dict[str, Any]],
     *,
     config_id: str,
@@ -39,15 +39,15 @@ def lloyd_iteration_count(
         )
 
     if lang_key == "cpp":
-        return int(parity["cpp_iterations"])
+        return int(parity["cpp_algorithm_iterations"])
 
     if lang_key == "py":
-        return int(parity["python_iterations"])
+        return int(parity["python_algorithm_iterations"])
 
     raise RuntimeError(f"Unexpected Lloyd language key: {lang_key!r}")
 
 
-def gmm_iteration_count(
+def gmm_algorithm_iteration_count(
     gmm_metrics: dict[tuple[str, str], dict[str, Any]],
     *,
     config_id: str,
@@ -58,10 +58,10 @@ def gmm_iteration_count(
     if metrics is None:
         raise RuntimeError(
             f"Missing GMM metrics file for {lang_key} {config_id}. "
-            "GMM timing needs the EM iteration count to report time_per_iteration_s."
+            "GMM timing needs the EM algorithm-iteration count to report time_per_algorithm_iteration_s."
         )
 
-    return int(metrics["iterations"])
+    return int(metrics["algorithm_iterations"])
 
 
 def normalize_lloyd_parity_record(
@@ -70,8 +70,8 @@ def normalize_lloyd_parity_record(
     config_id: str,
 ) -> dict[str, Any]:
     required_fields = [
-        "cpp_iterations",
-        "python_iterations",
+        "cpp_algorithm_iterations",
+        "python_algorithm_iterations",
         "cpp_inertia",
         "python_inertia",
         "inertia_diff_abs",
@@ -95,8 +95,8 @@ def normalize_lloyd_parity_record(
     return {
         **record,
         "config_id": config_id,
-        "cpp_iterations": int(record["cpp_iterations"]),
-        "python_iterations": int(record["python_iterations"]),
+        "cpp_algorithm_iterations": int(record["cpp_algorithm_iterations"]),
+        "python_algorithm_iterations": int(record["python_algorithm_iterations"]),
         "cpp_inertia": float(record["cpp_inertia"]),
         "python_inertia": float(record["python_inertia"]),
         "inertia_diff_abs": float(record["inertia_diff_abs"]),
@@ -113,10 +113,10 @@ def normalize_gmm_metrics_record(
     lang_key: str,
 ) -> dict[str, Any]:
     required_fields = [
-        "algorithm",
+        "phase",
         "language",
         "covariance_type",
-        "iterations",
+        "algorithm_iterations",
         "converged",
         "lower_bound",
     ]
@@ -125,8 +125,8 @@ def normalize_gmm_metrics_record(
         if field not in record:
             raise RuntimeError(f"Missing {field!r} in GMM metrics for {config_id}")
 
-    if record["algorithm"] != "gmm":
-        raise RuntimeError(f"Unexpected algorithm in GMM metrics for {config_id}")
+    if record["phase"] != "gmm":
+        raise RuntimeError(f"Unexpected phase in GMM metrics for {config_id}")
 
     if record["language"] != lang_key:
         raise RuntimeError(
@@ -138,7 +138,7 @@ def normalize_gmm_metrics_record(
         **record,
         "config_id": config_id,
         "language": lang_key,
-        "iterations": int(record["iterations"]),
+        "algorithm_iterations": int(record["algorithm_iterations"]),
         "converged": bool(record["converged"]),
         "lower_bound": float(record["lower_bound"]),
         "covariance_type": str(record["covariance_type"]),
@@ -297,7 +297,7 @@ def compute_gmm_comparison(
     """Build GMM parity info using fixed project-level tolerances.
 
     Unlike Lloyd, GMM has no inertia. The main numerical target is the final
-    average lower bound, plus sanity checks on convergence, iteration count,
+    average lower bound, plus sanity checks on convergence, algorithm-iteration count,
     and learned parameters.
     """
     cpp = gmm_metrics.get((config_id, "cpp"))
@@ -311,9 +311,11 @@ def compute_gmm_comparison(
         ]
         raise RuntimeError(f"Missing GMM metrics for {config_id}: {', '.join(missing)}")
 
-    cpp_iterations = int(cpp["iterations"])
-    py_iterations = int(py["iterations"])
-    iteration_diff_abs = abs(cpp_iterations - py_iterations)
+    cpp_algorithm_iterations = int(cpp["algorithm_iterations"])
+    py_algorithm_iterations = int(py["algorithm_iterations"])
+    algorithm_iteration_diff_abs = abs(
+        cpp_algorithm_iterations - py_algorithm_iterations
+    )
 
     cpp_lower_bound = float(cpp["lower_bound"])
     py_lower_bound = float(py["lower_bound"])
@@ -332,8 +334,9 @@ def compute_gmm_comparison(
 
     checks = {
         "converged_match": converged_match,
-        "iteration_diff_abs": (
-            iteration_diff_abs <= GMM_PARITY_THRESHOLDS["iteration_diff_abs"]
+        "algorithm_iteration_diff_abs": (
+            algorithm_iteration_diff_abs
+            <= GMM_PARITY_THRESHOLDS["algorithm_iteration_diff_abs"]
         ),
         "lower_bound_diff_abs": _is_finite_and_within(
             lower_bound_diff_abs,
@@ -364,9 +367,9 @@ def compute_gmm_comparison(
         "failure_reasons": failure_reasons,
         "checks": checks,
         "thresholds": GMM_PARITY_THRESHOLDS,
-        "cpp_iterations": cpp_iterations,
-        "python_iterations": py_iterations,
-        "iteration_diff_abs": iteration_diff_abs,
+        "cpp_algorithm_iterations": cpp_algorithm_iterations,
+        "python_algorithm_iterations": py_algorithm_iterations,
+        "algorithm_iteration_diff_abs": algorithm_iteration_diff_abs,
         "cpp_converged": bool(cpp["converged"]),
         "python_converged": bool(py["converged"]),
         "converged_match": converged_match,

@@ -4,16 +4,16 @@ Single-entry diagonal GMM scikit-parity explainer.
 It compiles a few narrow C++ helpers, runs the minimum probes needed to explain
 the scikit parity gap, and writes one Markdown/JSON report.
 
-The report tests four diagnosed-case claims:
-  1. A full EM run has a covariance gap vs scikit, already visible at iter 1.
+The report tests four diagnostic claims:
+  1. A full EM run has a covariance gap vs scikit, already visible at algorithm iteration 1.
   2. Raw scoring / normalization differences appear too small to be the primary
      explanation for that gap on a sampled subset.
   3. With the exact same scikit responsibilities, a current-like streaming
-     M-step reproduces most of the iter-1 covariance seed gap in both magnitude
+     M-step reproduces most of the algorithm-iteration-1 covariance seed gap in both magnitude
      and error-vector shape.
   4. With the same responsibilities, a C++ BLAS/SGEMM M-step matches NumPy's
      matmul M-step, supporting reduction semantics rather than a covariance
-     formula / precision interpretation bug as the explanation for this case.
+     formula / precision interpretation bug as the explanation for this diagnostic.
 """
 
 from __future__ import annotations
@@ -262,7 +262,7 @@ def estimate_diag_precisions(
 class Paths:
     repo: Path
     work: Path
-    case: str
+    config_id: str
     data: Path
     weights: Path
     means: Path
@@ -277,22 +277,24 @@ class Paths:
 
 
 def make_paths(repo: Path, work: Path, args: argparse.Namespace) -> Paths:
-    case = f"{args.D}D_{args.N}N_{args.K}K_seed{args.seed}"
+    config_id = f"{args.D}D_{args.N}N_{args.K}K_seed{args.seed}"
     return Paths(
         repo=repo,
         work=work,
-        case=case,
-        data=work / f"data_{case}.bin",
-        weights=work / f"gmm_weights_{case}.bin",
-        means=work / f"gmm_means_{case}.bin",
-        precisions=work / f"gmm_precisions_diag_{case}.bin",
-        cpp_trace_json=work / f"cpp_trace_diag_{case}.json",
-        py_trace_json=work / f"py_trace_diag_{case}.json",
-        cpp_score_json=work / f"cpp_score_dump_diag_{case}_score_N{args.score_N}.json",
-        sample_indices=work / f"score_sample_indices_{case}_score_N{args.score_N}.txt",
-        resp_bin=work / f"fixed_resp_diag_{case}_sklearn_private.bin",
-        cpp_same_json=work / f"cpp_same_resp_mstep_diag_{case}.json",
-        cpp_blas_json=work / f"cpp_blas_same_resp_mstep_diag_{case}.json",
+        config_id=config_id,
+        data=work / f"data_{config_id}.bin",
+        weights=work / f"gmm_weights_{config_id}.bin",
+        means=work / f"gmm_means_{config_id}.bin",
+        precisions=work / f"gmm_precisions_diag_{config_id}.bin",
+        cpp_trace_json=work / f"cpp_trace_diag_{config_id}.json",
+        py_trace_json=work / f"py_trace_diag_{config_id}.json",
+        cpp_score_json=work
+        / f"cpp_score_dump_diag_{config_id}_score_N{args.score_N}.json",
+        sample_indices=work
+        / f"score_sample_indices_{config_id}_score_N{args.score_N}.txt",
+        resp_bin=work / f"fixed_resp_diag_{config_id}_sklearn_private.bin",
+        cpp_same_json=work / f"cpp_same_resp_mstep_diag_{config_id}.json",
+        cpp_blas_json=work / f"cpp_blas_same_resp_mstep_diag_{config_id}.json",
     )
 
 
@@ -395,7 +397,7 @@ def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
     ).copy()
     covariances = (1.0 / precisions).astype(np.float32)
     precisions_chol = precision_cholesky_from_precisions(precisions)
-    iterations: list[dict[str, Any]] = []
+    algorithm_iterations: list[dict[str, Any]] = []
     lower_bounds: list[float] = []
     lower_bound = -math.inf
     converged = False
@@ -422,7 +424,7 @@ def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
             mean_sq = avg_x * avg_x
             cov_from_stats = avg_x2 - mean_sq + args.reg_covar
             weights_from_nk = nk / np.sum(nk)
-            iterations.append(
+            algorithm_iterations.append(
                 {
                     "iter": it,
                     "lower_bound": lower_bound,
@@ -460,13 +462,14 @@ def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
             body()
     trace = {
         "schema_version": 1,
-        "algorithm": "py_sklearn_diag_trace",
+        "phase": "gmm",
+        "diagnostic": "py_sklearn_diag_trace",
         "D": args.D,
         "N": args.N,
         "K": args.K,
-        "iterations": iterations,
+        "algorithm_iterations": algorithm_iterations,
         "final": {
-            "iterations": len(iterations),
+            "algorithm_iterations": len(algorithm_iterations),
             "converged": converged,
             "lower_bound": lower_bound,
             "lower_bounds": lower_bounds,
@@ -481,10 +484,10 @@ def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
 
 
 def compare_full_trace(cpp: dict[str, Any], py: dict[str, Any]) -> dict[str, Any]:
-    n = min(len(cpp["iterations"]), len(py["iterations"]))
+    n = min(len(cpp["algorithm_iterations"]), len(py["algorithm_iterations"]))
     per: list[dict[str, Any]] = []
     for i in range(n):
-        ci, pi = cpp["iterations"][i], py["iterations"][i]
+        ci, pi = cpp["algorithm_iterations"][i], py["algorithm_iterations"][i]
         row: dict[str, Any] = {
             "iter": int(ci["iter"]),
             "lower_bound_cpp_minus_py": float(ci["lower_bound"] - pi["lower_bound"]),
@@ -525,16 +528,16 @@ def compare_full_trace(cpp: dict[str, Any], py: dict[str, Any]) -> dict[str, Any
     if n > 0:
         raw = {
             "cpp_iter1_cov_from_stats": np.asarray(
-                cpp["iterations"][0]["cov_from_stats"]
+                cpp["algorithm_iterations"][0]["cov_from_stats"]
             ),
             "py_iter1_cov_from_stats": np.asarray(
-                py["iterations"][0]["cov_from_stats"]
+                py["algorithm_iterations"][0]["cov_from_stats"]
             ),
         }
     return {
-        "iterations": {
-            "cpp": cf["iterations"],
-            "py": pf["iterations"],
+        "algorithm_iterations": {
+            "cpp": cf["algorithm_iterations"],
+            "py": pf["algorithm_iterations"],
             "compared": n,
             "cpp_converged": cf.get("converged"),
             "py_converged": pf.get("converged"),
@@ -545,7 +548,7 @@ def compare_full_trace(cpp: dict[str, Any], py: dict[str, Any]) -> dict[str, Any
             "abs_diff": abs(float(cf["lower_bound"] - pf["lower_bound"])),
             "cpp_minus_py": float(cf["lower_bound"] - pf["lower_bound"]),
         },
-        "per_iteration": per,
+        "per_algorithm_iteration": per,
         "final": final,
         "raw": raw,
     }
@@ -822,7 +825,7 @@ def render_report(
     current_name: str,
     cov_error_vector: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
-    iter1 = full["per_iteration"][0]
+    iter1 = full["per_algorithm_iteration"][0]
     final = full["final"]
     iter1_p95 = nested(iter1, "covariance", "p95_abs")
     iter1_rel = nested(iter1, "covariance", "p95_rel")
@@ -868,13 +871,11 @@ def render_report(
         and (vector_sign_agreement is None or vector_sign_agreement >= 0.80)
     )
     blas_closes = blas_seed_ratio is not None and blas_seed_ratio < 0.05
-    diagnosed_case_supported = (
-        mstep_magnitude_matches and vector_matches and blas_closes
-    )
+    diagnostic_supported = mstep_magnitude_matches and vector_matches and blas_closes
 
-    if diagnosed_case_supported:
+    if diagnostic_supported:
         verdict = (
-            "For this diagnosed case, the scikit parity gap is best explained by "
+            "For this diagnostic, the scikit parity gap is best explained by "
             "M-step reduction semantics, not by an algebraic diagonal covariance "
             "formula bug."
         )
@@ -882,16 +883,16 @@ def render_report(
         failing = []
         if not mstep_magnitude_matches:
             failing.append(
-                "same-responsibility M-step magnitude does not match the iter-1 seed"
+                "same-responsibility M-step magnitude does not match the algorithm-iteration-1 seed"
             )
         if not vector_matches:
             failing.append(
-                "same-responsibility M-step error vector does not match the iter-1 error vector"
+                "same-responsibility M-step error vector does not match the algorithm-iteration-1 error vector"
             )
         if not blas_closes:
             failing.append("BLAS/SGEMM does not close the seed gap")
         verdict = (
-            "For this diagnosed case, the evidence does not support M-step "
+            "For this diagnostic, the evidence does not support M-step "
             "reduction semantics as the primary explanation for the scikit parity gap."
         )
         if failing:
@@ -909,7 +910,7 @@ def render_report(
 
     obj = {
         "schema_version": 3,
-        "case": {
+        "config": {
             "D": args.D,
             "N": args.N,
             "K": args.K,
@@ -919,7 +920,7 @@ def render_report(
             "reg_covar": args.reg_covar,
         },
         "verdict": verdict,
-        "diagnosed_case_supported": diagnosed_case_supported,
+        "diagnostic_supported": diagnostic_supported,
         "full_em": {
             "iter1_cov_p95_abs": iter1_p95,
             "iter1_cov_p95_rel": iter1_rel,
@@ -989,7 +990,7 @@ def render_report(
     md.append("| Check | Result | Interpretation |")
     md.append("|---|---:|---|")
     md.append(
-        f"| Full EM iter-1 covariance p95 abs diff | `{fnum(iter1_p95)}` | Initial seed gap |"
+        f"| Full EM algorithm-iteration-1 covariance p95 abs diff | `{fnum(iter1_p95)}` | Initial seed gap |"
     )
     md.append(
         f"| Full EM final covariance p95 abs diff | `{fnum(final_p95)}` | Gap after EM amplification (`{fnum(amplification)}×`) |"
@@ -1004,36 +1005,36 @@ def render_report(
         f"| Score-derived argmax changes | `{score_argmax}` | {'No assignment winner changes on selected samples' if score_argmax == 0 else 'Some winner changes'} |"
     )
     md.append(
-        f"| Same-resp current-like M-step cov p95 abs diff | `{fnum(current_p95)}` | `{pct(seed_ratio)}` of iter-1 seed using `{current_name}` |"
+        f"| Same-resp current-like M-step cov p95 abs diff | `{fnum(current_p95)}` | `{pct(seed_ratio)}` of algorithm-iteration-1 seed using `{current_name}` |"
     )
     md.append(
-        f"| Same-resp covariance error-vector residual p95 | `{fnum(cov_error_vector.get('residual_p95_abs'))}` | `{pct(vector_residual_ratio)}` of iter-1 seed p95 |"
+        f"| Same-resp covariance error-vector residual p95 | `{fnum(cov_error_vector.get('residual_p95_abs'))}` | `{pct(vector_residual_ratio)}` of algorithm-iteration-1 seed p95 |"
     )
     md.append(
-        f"| Same-resp covariance error-vector cosine | `{fnum(vector_cosine)}` | {'Error vector is aligned with iter-1 seed' if vector_matches else 'Error vector alignment check failed'} |"
+        f"| Same-resp covariance error-vector cosine | `{fnum(vector_cosine)}` | {'Error vector is aligned with algorithm-iteration-1 seed' if vector_matches else 'Error vector alignment check failed'} |"
     )
     md.append(
-        f"| BLAS oracle cov p95 abs diff | `{fnum(blas_p95)}` | `{pct(blas_seed_ratio)}` of iter-1 seed |"
+        f"| BLAS oracle cov p95 abs diff | `{fnum(blas_p95)}` | `{pct(blas_seed_ratio)}` of algorithm-iteration-1 seed |"
     )
     md.append("")
     md.append(
-        "## Why this supports the M-step explanation for this case"
-        if diagnosed_case_supported
-        else "## Why this does not establish the M-step explanation for this case"
+        "## Why this supports the M-step explanation for this diagnostic"
+        if diagnostic_supported
+        else "## Why this does not establish the M-step explanation for this diagnostic"
     )
     md.append("")
-    if diagnosed_case_supported:
+    if diagnostic_supported:
         md.append(
-            "The strongest comparison is the same-responsibility M-step test. Both implementations receive the exact same scikit-generated `resp` matrix. That bypasses scoring, exponentials, logsumexp, and cluster matching. The current-like streaming M-step reproduces the first-iteration covariance difference in both p95 magnitude and covariance error-vector shape. Then the BLAS oracle, using `sgemm` for `resp.T @ X` and `resp.T @ X²` with a loop-float `nk`, nearly removes that difference."
+            "The strongest comparison is the same-responsibility M-step test. Both implementations receive the exact same scikit-generated `resp` matrix. That bypasses scoring, exponentials, logsumexp, and cluster matching. The current-like streaming M-step reproduces the first algorithm iteration covariance difference in both p95 magnitude and covariance error-vector shape. Then the BLAS oracle, using `sgemm` for `resp.T @ X` and `resp.T @ X²` with a loop-float `nk`, nearly removes that difference."
         )
     else:
         md.append(
-            "The same-responsibility M-step test is the main causal check because both implementations receive the exact same scikit-generated `resp` matrix. In this run, one or more required checks failed, so the report should not claim that M-step reduction semantics explain the scikit parity gap for this case. Inspect the magnitude, error-vector residual, and BLAS rows above to see which part failed."
+            "The same-responsibility M-step test is the main causal check because both implementations receive the exact same scikit-generated `resp` matrix. In this run, one or more required checks failed, so the report should not claim that M-step reduction semantics explain the scikit parity gap for this diagnostic. Inspect the magnitude, error-vector residual, and BLAS rows above to see which part failed."
         )
     md.append("")
-    if diagnosed_case_supported:
+    if diagnostic_supported:
         md.append(
-            "So the remaining scikit mismatch in this case is best described as: fused streaming SIMD sufficient-stat accumulation follows a different float32 reduction order than scikit/NumPy's BLAS-backed matrix products. The covariance formula `E[x²] - E[x]² + reg_covar` then amplifies small mean/second-moment differences, and later EM iterations amplify the initial seed."
+            "So the remaining scikit mismatch in this diagnostic is best described as: fused streaming SIMD sufficient-stat accumulation follows a different float32 reduction order than scikit/NumPy's BLAS-backed matrix products. The covariance formula `E[x²] - E[x]² + reg_covar` then amplifies small mean/second-moment differences, and later EM algorithm iterations amplify the initial seed."
         )
     md.append("")
     md.append("## Notes")
@@ -1042,10 +1043,10 @@ def render_report(
         "- `nk` should not be BLAS-ified for parity here; the oracle intentionally uses SGEMM for `sum_x` / `sum_x2` and a float loop for `nk`."
     )
     md.append(
-        "- This report does not recommend switching the production path to BLAS. It only uses BLAS as a parity probe for this diagnosed case."
+        "- This report does not recommend switching the production path to BLAS. It only uses BLAS as a parity probe for this diagnostic."
     )
     md.append(
-        "- If the diagnosed-case checks pass, document this as a numerical reduction-semantics gap rather than a formula bug. If they fail, investigate the failed check before making that claim."
+        "- If the diagnostic checks pass, document this as a numerical reduction-semantics gap rather than a formula bug. If they fail, investigate the failed check before making that claim."
     )
     md.append("")
     return "\n".join(md) + "\n", obj

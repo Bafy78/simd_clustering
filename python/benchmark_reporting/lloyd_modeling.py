@@ -17,7 +17,7 @@ from .transforms import filter_bench
 COL_WORK_SIZE = "Work Size"
 COL_MODEL_NAME = "Model"
 COL_NUM_PARAMS = "Num Params"
-COL_PRED_TIME_PER_ITER_MS = "Predicted Time Per Iteration (ms)"
+COL_PRED_TIME_PER_ALGORITHM_ITER_MS = "Predicted Time Per Algorithm Iteration (ms)"
 COL_PRED_TOTAL_TIME_MS = "Predicted Total Lloyd Time (ms)"
 COL_TOTAL_TIME_MS = "Total Lloyd Time (ms)"
 COL_ABS_ERROR_PCT = "Abs Error (%)"
@@ -38,7 +38,7 @@ DEFAULT_SAMPLE_SCALE = 1_000.0
 ALL_COMBO_MODEL_NAME = (
     "amortized all-square-combinations model: "
     "setup(all D,N,K monomials up to squares) + "
-    "iterations × iter(all D,N,K monomials up to squares)"
+    "algorithm_iterations × algorithm_iter(all D,N,K monomials up to squares)"
 )
 
 
@@ -56,7 +56,7 @@ class _FittedLloydModel:
     predictions: pd.DataFrame
     terms: list[str]
     setup_coef: np.ndarray
-    iter_coef: np.ndarray
+    algorithm_iter_coef: np.ndarray
     full_coef: np.ndarray
     collinearity_removed: pd.DataFrame
     keep_mask: np.ndarray
@@ -67,18 +67,18 @@ def prepare_lloyd_model_data(df_lloyd: pd.DataFrame) -> pd.DataFrame:
     """Return the positive-valued Lloyd rows needed by the timing model."""
     df_model = df_lloyd.copy()
 
-    df_model[COL_TIME_PER_ITER_MS] = (
-        df_model[COL_TIME_S] / df_model[COL_ITERATIONS] * 1_000
+    df_model[COL_TIME_PER_ALGORITHM_ITER_MS] = (
+        df_model[COL_TIME_S] / df_model[COL_ALGORITHM_ITERATIONS] * 1_000
     )
     df_model[COL_TOTAL_TIME_MS] = df_model[COL_TIME_S] * 1_000
     df_model[COL_WORK_SIZE] = df_model[COL_DIMENSIONS] * df_model[COL_SAMPLES]
 
     return df_model[
-        df_model[COL_TIME_PER_ITER_MS].gt(0)
+        df_model[COL_TIME_PER_ALGORITHM_ITER_MS].gt(0)
         & df_model[COL_TOTAL_TIME_MS].gt(0)
         & df_model[COL_WORK_SIZE].gt(0)
         & df_model[COL_SAMPLES].gt(0)
-        & df_model[COL_ITERATIONS].gt(0)
+        & df_model[COL_ALGORITHM_ITERATIONS].gt(0)
     ].copy()
 
 
@@ -127,7 +127,7 @@ def fit_lloyd_timing_models(
                 model_name,
                 fit.terms,
                 fit.setup_coef,
-                fit.iter_coef,
+                fit.algorithm_iter_coef,
             )
             for language, fit in fits.items()
         ],
@@ -180,8 +180,8 @@ def _summary_frame(
 
     for language, fit in fits.items():
         df_lang = fit.predictions
-        y_true = df_lang[COL_TIME_PER_ITER_MS].to_numpy(dtype=float)
-        y_pred = df_lang[COL_PRED_TIME_PER_ITER_MS].to_numpy(dtype=float)
+        y_true = df_lang[COL_TIME_PER_ALGORITHM_ITER_MS].to_numpy(dtype=float)
+        y_pred = df_lang[COL_PRED_TIME_PER_ALGORITHM_ITER_MS].to_numpy(dtype=float)
 
         records.append(
             {
@@ -409,7 +409,7 @@ def _fit_amortized_model(
     D = df_lang[COL_DIMENSIONS].to_numpy(dtype=float)
     N = df_lang[COL_SAMPLES].to_numpy(dtype=float) / sample_scale
     K = df_lang[COL_CLUSTERS].to_numpy(dtype=float)
-    iterations = df_lang[COL_ITERATIONS].to_numpy(dtype=float)
+    algorithm_iterations = df_lang[COL_ALGORITHM_ITERATIONS].to_numpy(dtype=float)
 
     x_base, terms, powers_list = _build_all_square_combination_terms(
         [
@@ -424,7 +424,7 @@ def _fit_amortized_model(
     x_full = np.column_stack(
         [
             x_base,
-            x_base * iterations[:, None],
+            x_base * algorithm_iterations[:, None],
         ]
     )
 
@@ -437,7 +437,7 @@ def _fit_amortized_model(
         for term, powers in zip(terms, powers_list)
     ] + [
         {
-            "component": "True per-iteration component",
+            "component": "True per-algorithm-iteration component",
             "term": term,
             "powers": powers,
         }
@@ -447,7 +447,7 @@ def _fit_amortized_model(
     # Usually keep both intercept-like terms.
     mandatory_mask = np.zeros(x_full.shape[1], dtype=bool)
     mandatory_mask[0] = True  # setup intercept
-    mandatory_mask[term_count] = True  # iteration intercept
+    mandatory_mask[term_count] = True  # algorithm-iteration intercept
 
     keep_mask, df_collinearity_removed = _prune_collinear_columns(
         x_full,
@@ -465,23 +465,23 @@ def _fit_amortized_model(
     full_coef[keep_mask] = kept_coef
 
     setup_coef = full_coef[:term_count]
-    iter_coef = full_coef[term_count:]
+    algorithm_iter_coef = full_coef[term_count:]
 
     setup_y_hat = x_base @ setup_coef
-    iter_y_hat = x_base @ iter_coef
-    total_y_hat = setup_y_hat + iterations * iter_y_hat
-    per_iter_y_hat = total_y_hat / iterations
+    algorithm_iter_y_hat = x_base @ algorithm_iter_coef
+    total_y_hat = setup_y_hat + algorithm_iterations * algorithm_iter_y_hat
+    per_algorithm_iter_y_hat = total_y_hat / algorithm_iterations
 
     df_out = df_lang.copy()
     df_out[COL_PRED_TOTAL_TIME_MS] = total_y_hat
-    df_out[COL_PRED_TIME_PER_ITER_MS] = per_iter_y_hat
+    df_out[COL_PRED_TIME_PER_ALGORITHM_ITER_MS] = per_algorithm_iter_y_hat
     df_out[COL_MODEL_NAME] = model_name
 
     return _FittedLloydModel(
         predictions=df_out,
         terms=terms,
         setup_coef=setup_coef,
-        iter_coef=iter_coef,
+        algorithm_iter_coef=algorithm_iter_coef,
         full_coef=full_coef,
         collinearity_removed=df_collinearity_removed,
         keep_mask=keep_mask,
@@ -494,13 +494,13 @@ def _coefficient_frame(
     model_name: str,
     terms: Sequence[str],
     setup_coef: np.ndarray,
-    iter_coef: np.ndarray,
+    algorithm_iter_coef: np.ndarray,
 ) -> pd.DataFrame:
     records = []
 
     for component, coef_values in [
         ("Setup / amortized component", setup_coef),
-        ("True per-iteration component", iter_coef),
+        ("True per-algorithm-iteration component", algorithm_iter_coef),
     ]:
         for term, coef in zip(terms, coef_values):
             records.append(
@@ -529,7 +529,7 @@ __all__ = [
     "COL_MODEL_SLOPE_NS_PER_WORK",
     "COL_NUM_PARAMS",
     "COL_P90_ABS_ERROR_PCT",
-    "COL_PRED_TIME_PER_ITER_MS",
+    "COL_PRED_TIME_PER_ALGORITHM_ITER_MS",
     "COL_PRED_TOTAL_TIME_MS",
     "COL_TERM",
     "COL_TOTAL_TIME_MS",

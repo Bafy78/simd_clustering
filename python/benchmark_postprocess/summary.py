@@ -29,30 +29,37 @@ def group_records(records: list[dict[str, Any]]):
 
 
 def summarize_language_records(records: list[dict[str, Any]]) -> dict[str, Any]:
-    process_ids = sorted({record["process_index"] for record in records})
+    timing_process_ids = sorted({record["timing_process_index"] for record in records})
 
-    time_values_by_process: dict[int, list[float]] = defaultdict(list)
+    time_values_by_timing_process: dict[int, list[float]] = defaultdict(list)
 
     for record in records:
-        time_values_by_process[record["process_index"]].append(record["time_s"])
+        time_values_by_timing_process[record["timing_process_index"]].append(
+            record["time_s"]
+        )
 
-    value_counts_by_process = {
-        str(process_id): len(time_values_by_process[process_id])
-        for process_id in process_ids
+    timing_value_counts_by_process = {
+        str(timing_process_id): len(time_values_by_timing_process[timing_process_id])
+        for timing_process_id in timing_process_ids
     }
 
-    iterations = sorted({record["iterations"] for record in records})
-    if len(iterations) != 1:
-        raise RuntimeError(f"Expected exactly one iteration count, got {iterations}")
+    algorithm_iterations = sorted(
+        {record["algorithm_iterations"] for record in records}
+    )
+    if len(algorithm_iterations) != 1:
+        raise RuntimeError(
+            "Expected exactly one algorithm-iteration count, "
+            f"got {algorithm_iterations}"
+        )
 
     return {
-        "iterations": iterations[0],
-        "process_count": len(process_ids),
+        "algorithm_iterations": algorithm_iterations[0],
+        "timing_process_count": len(timing_process_ids),
         "timing_value_count": len(records),
-        "timing_values_per_process": value_counts_by_process,
+        "timing_values_per_process": timing_value_counts_by_process,
         "time_s": summary_stats([record["time_s"] for record in records]),
-        "time_per_iteration_s": summary_stats(
-            [record["time_per_iteration_s"] for record in records]
+        "time_per_algorithm_iteration_s": summary_stats(
+            [record["time_per_algorithm_iteration_s"] for record in records]
         ),
     }
 
@@ -148,8 +155,10 @@ def build_summary(
                 ]
 
                 phase_entry["parity"] = {
-                    "cpp_iterations": parity["cpp_iterations"],
-                    "python_iterations": parity["python_iterations"],
+                    "cpp_algorithm_iterations": parity["cpp_algorithm_iterations"],
+                    "python_algorithm_iterations": parity[
+                        "python_algorithm_iterations"
+                    ],
                     "cpp_inertia": parity["cpp_inertia"],
                     "python_inertia": parity["python_inertia"],
                     "inertia_diff_abs": parity["inertia_diff_abs"],
@@ -186,17 +195,17 @@ def build_summary(
             "schema_version": 1,
             "description": (
                 "Post-processed benchmark summary. "
-                "Raw pyperf/nanobench JSON values are grouped by process/run before aggregation."
+                "Raw pyperf/nanobench JSON values are grouped by timing process/pyperf run before aggregation."
             ),
             "time_unit": "seconds",
-            "time_per_iteration_definition": (
-                "For Lloyd and GMM, total benchmark time divided by algorithm iteration count. "
+            "time_per_algorithm_iteration_definition": (
+                "For Lloyd and GMM, total benchmark time divided by algorithm-iteration count. "
                 "For non-iterative phases, identical to total time."
             ),
             "speedup_definition": "python_time / cpp_time",
             "bootstrap": {
-                "method": "independent clustered bootstrap by process/run",
-                "iterations": int(bootstrap_iterations),
+                "method": "independent clustered bootstrap by timing process/pyperf run",
+                "bootstrap_iterations": int(bootstrap_iterations),
                 "ci_level": float(ci_level),
                 "seed": int(bootstrap_seed),
             },

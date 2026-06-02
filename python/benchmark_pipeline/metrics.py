@@ -103,17 +103,19 @@ def _assert_array_close(name: str, candidate, reference) -> None:
     visit(candidate, reference, "")
 
 
-def validate_gmm_process_metrics(candidate: dict, reference: dict, path: str) -> None:
-    if candidate.get("algorithm") != reference.get("algorithm"):
-        raise RuntimeError(f"algorithm mismatch in {path}")
+def validate_gmm_timing_process_metrics(
+    candidate: dict, reference: dict, path: str
+) -> None:
+    if candidate.get("phase") != reference.get("phase"):
+        raise RuntimeError(f"phase mismatch in {path}")
 
     if candidate.get("covariance_type") != reference.get("covariance_type"):
         raise RuntimeError(f"covariance_type mismatch in {path}")
 
-    if int(candidate["iterations"]) != int(reference["iterations"]):
+    if int(candidate["algorithm_iterations"]) != int(reference["algorithm_iterations"]):
         raise RuntimeError(
-            f"iteration mismatch in {path}: "
-            f"{candidate['iterations']} vs {reference['iterations']}"
+            f"algorithm-iteration mismatch in {path}: "
+            f"{candidate['algorithm_iterations']} vs {reference['algorithm_iterations']}"
         )
 
     if bool(candidate["converged"]) != bool(reference["converged"]):
@@ -147,13 +149,13 @@ def validate_gmm_process_metrics(candidate: dict, reference: dict, path: str) ->
     )
 
 
-def validate_cpp_process_metrics(process_metrics: list[str]) -> dict:
-    if not process_metrics:
-        raise RuntimeError("No C++ process metrics files to validate")
+def validate_cpp_timing_process_metrics(timing_process_metrics: list[str]) -> dict:
+    if not timing_process_metrics:
+        raise RuntimeError("No C++ timing-process metrics files to validate")
 
-    reference = load_json(process_metrics[0])
+    reference = load_json(timing_process_metrics[0])
 
-    for path in process_metrics[1:]:
+    for path in timing_process_metrics[1:]:
         candidate = load_json(path)
 
         if candidate.get("schema_version") != reference.get("schema_version"):
@@ -162,14 +164,16 @@ def validate_cpp_process_metrics(process_metrics: list[str]) -> dict:
         if candidate.get("language") != reference.get("language"):
             raise RuntimeError(f"language mismatch in {path}")
 
-        if reference.get("algorithm") == "gmm":
-            validate_gmm_process_metrics(candidate, reference, path)
+        if reference.get("phase") == "gmm":
+            validate_gmm_timing_process_metrics(candidate, reference, path)
             continue
 
-        if int(candidate["iterations"]) != int(reference["iterations"]):
+        if int(candidate["algorithm_iterations"]) != int(
+            reference["algorithm_iterations"]
+        ):
             raise RuntimeError(
-                f"iteration mismatch in {path}: "
-                f"{candidate['iterations']} vs {reference['iterations']}"
+                f"algorithm-iteration mismatch in {path}: "
+                f"{candidate['algorithm_iterations']} vs {reference['algorithm_iterations']}"
             )
 
         if candidate["cluster_counts"] != reference["cluster_counts"]:
@@ -209,8 +213,8 @@ def validate_cpp_process_metrics(process_metrics: list[str]) -> dict:
                     float(b),
                 )
 
-    reference["process_metrics_verified"] = True
-    reference["process_metrics_count"] = len(process_metrics)
+    reference["timing_process_metrics_verified"] = True
+    reference["timing_process_metrics_count"] = len(timing_process_metrics)
 
     return reference
 
@@ -239,8 +243,8 @@ def compute_lloyd_parity(
     parity = {
         "schema_version": 1,
         "config_id": config_id,
-        "cpp_iterations": int(cpp["iterations"]),
-        "python_iterations": int(py["iterations"]),
+        "cpp_algorithm_iterations": int(cpp["algorithm_iterations"]),
+        "python_algorithm_iterations": int(py["algorithm_iterations"]),
         "cpp_inertia": cpp_inertia,
         "python_inertia": py_inertia,
         "inertia_diff_abs": inertia_diff_abs,

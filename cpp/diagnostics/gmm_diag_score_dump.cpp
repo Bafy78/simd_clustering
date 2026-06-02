@@ -315,7 +315,8 @@ int main(int argc, char** argv) {
 
         out << "{\n";
         out << "  \"schema_version\": 1,\n";
-        out << "  \"algorithm\": \"gmm_diag_weighted_log_prob_score_dump\",\n";
+        out << "  \"phase\": \"gmm\",\n";
+        out << "  \"diagnostic\": \"gmm_diag_weighted_log_prob_score_dump\",\n";
         out << "  \"language\": \"cpp\",\n";
         out << "  \"D\": " << D << ",\n";
         out << "  \"N\": " << a.N << ",\n";

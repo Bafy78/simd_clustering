@@ -42,16 +42,20 @@ def filter_bench(
     return df.loc[mask].copy()
 
 
-def add_time_per_iteration_columns(df):
+def add_time_per_algorithm_iteration_columns(df):
     result = df.copy()
 
-    if "time_per_iteration_s_median" not in result.columns:
+    if "time_per_algorithm_iteration_s_median" not in result.columns:
         raise KeyError(
-            "Expected column 'time_per_iteration_s_median' from benchmark_summary.json"
+            "Expected column 'time_per_algorithm_iteration_s_median' from benchmark_summary.json"
         )
 
-    result[COL_TIME_PER_ITER] = result["time_per_iteration_s_median"]
-    result[COL_TIME_PER_ITER_MS] = result[COL_TIME_PER_ITER] * 1000.0
+    result[COL_TIME_PER_ALGORITHM_ITER] = result[
+        "time_per_algorithm_iteration_s_median"
+    ]
+    result[COL_TIME_PER_ALGORITHM_ITER_MS] = (
+        result[COL_TIME_PER_ALGORITHM_ITER] * 1000.0
+    )
 
     return result
 
@@ -141,7 +145,7 @@ def add_speedup_retention(
     return result
 
 
-def add_time_per_iteration_per_sample_columns(
+def add_time_per_algorithm_iteration_per_sample_columns(
     df,
     *,
     statistic: str = "median",
@@ -149,18 +153,18 @@ def add_time_per_iteration_per_sample_columns(
     scale: float = 1000.0,
 ):
     """
-    Add per-iteration-per-sample timing columns from benchmark_summary.json stats.
+    Add per-algorithm-iteration-per-sample timing columns from benchmark_summary.json stats.
 
-    The default center is the median time_per_iteration_s divided by samples.
+    The default center is the median time_per_algorithm_iteration_s divided by samples.
     The default spread is IQR, i.e. p25 to p75, which matches a median-centered plot.
 
     Parameters
     ----------
     statistic:
-        Center statistic from time_per_iteration_s, for example "median" or "mean".
+        Center statistic from time_per_algorithm_iteration_s, for example "median" or "mean".
 
     spread:
-        Run-to-run spread to show as error bars.
+        Timing-run spread to show as error bars.
 
         Supported values:
         - "iqr" or "p25_p75": p25 to p75
@@ -173,19 +177,19 @@ def add_time_per_iteration_per_sample_columns(
     """
     result = df.copy()
 
-    prefix = "time_per_iteration_s"
+    prefix = "time_per_algorithm_iteration_s"
     center_col = f"{prefix}_{statistic}"
 
     if center_col not in result.columns:
         raise KeyError(
             f"Expected column {center_col!r}. "
-            "Did load_benchmark_data() copy time_per_iteration_s stats?"
+            "Did load_benchmark_data() copy time_per_algorithm_iteration_s stats?"
         )
 
     if COL_SAMPLES not in result.columns:
         raise KeyError(f"Missing required column {COL_SAMPLES!r}")
 
-    result[COL_TIME_PER_ITER_PER_SAMPLE_MS] = (
+    result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_MS] = (
         result[center_col] / result[COL_SAMPLES] * scale
     )
 
@@ -216,8 +220,8 @@ def add_time_per_iteration_per_sample_columns(
         _require_columns(result, [spread_col])
 
         err = result[spread_col] / result[COL_SAMPLES] * scale
-        low = result[COL_TIME_PER_ITER_PER_SAMPLE_MS] - err
-        high = result[COL_TIME_PER_ITER_PER_SAMPLE_MS] + err
+        low = result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_MS] - err
+        high = result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_MS] + err
 
     else:
         raise ValueError(
@@ -225,20 +229,20 @@ def add_time_per_iteration_per_sample_columns(
             "'iqr', 'p25_p75', 'p05_p95', 'stddev', 'mad'."
         )
 
-    result[COL_TIME_PER_ITER_PER_SAMPLE_LOW_MS] = low.clip(lower=0)
-    result[COL_TIME_PER_ITER_PER_SAMPLE_HIGH_MS] = high
+    result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_LOW_MS] = low.clip(lower=0)
+    result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_HIGH_MS] = high
 
-    result[COL_TIME_PER_ITER_PER_SAMPLE_LOWER_ERROR_MS] = (
-        result[COL_TIME_PER_ITER_PER_SAMPLE_MS]
-        - result[COL_TIME_PER_ITER_PER_SAMPLE_LOW_MS]
+    result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_LOWER_ERROR_MS] = (
+        result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_MS]
+        - result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_LOW_MS]
     )
 
-    result[COL_TIME_PER_ITER_PER_SAMPLE_UPPER_ERROR_MS] = (
-        result[COL_TIME_PER_ITER_PER_SAMPLE_HIGH_MS]
-        - result[COL_TIME_PER_ITER_PER_SAMPLE_MS]
+    result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_UPPER_ERROR_MS] = (
+        result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_HIGH_MS]
+        - result[COL_TIME_PER_ALGORITHM_ITER_PER_SAMPLE_MS]
     )
 
-    result[COL_RUN_TO_RUN_SPREAD] = spread_label
+    result[COL_TIMING_RUN_SPREAD] = spread_label
 
     return result
 
@@ -317,12 +321,12 @@ def add_gmm_parity_pressure(
     weights_diff_abs=1e-4,
     means_diff_abs=1e-3,
     covariances_diff_rel=1e-3,
-    iteration_diff_abs=1,
+    algorithm_iteration_diff_abs=1,
 ):
     out = df.copy()
 
-    out["Iteration Diff Abs"] = (
-        out["GMM C++ Iterations"] - out["GMM Py Iterations"]
+    out["Algorithm Iteration Diff Abs"] = (
+        out["GMM C++ Algorithm Iterations"] - out["GMM Py Algorithm Iterations"]
     ).abs()
 
     ratios = pd.DataFrame(
@@ -331,7 +335,8 @@ def add_gmm_parity_pressure(
             "weights": out["Weights Max Abs Diff"] / weights_diff_abs,
             "means": out["Means Max Abs Diff"] / means_diff_abs,
             "covariances": out["Covariances Max Rel Diff"] / covariances_diff_rel,
-            "iterations": out["Iteration Diff Abs"] / iteration_diff_abs,
+            "algorithm_iterations": out["Algorithm Iteration Diff Abs"]
+            / algorithm_iteration_diff_abs,
         }
     )
 

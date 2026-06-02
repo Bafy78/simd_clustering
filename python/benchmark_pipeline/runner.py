@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 from benchmark_pipeline.metrics import (
     compute_lloyd_parity,
-    validate_cpp_process_metrics,
+    validate_cpp_timing_process_metrics,
     write_json,
 )
 from benchmark_pipeline.cpp_cases import (
@@ -48,7 +48,7 @@ def run_command(task_name: str, command: list[str]) -> None:
         sys.exit(1)
 
 
-def run_cpp_task_with_processes(task: Task, bench_processes: int) -> None:
+def run_cpp_task_with_timing_processes(task: Task, timing_processes: int) -> None:
     assert task.cpp_json_arg is not None
 
     final_json = task.command[task.cpp_json_arg]
@@ -56,11 +56,11 @@ def run_cpp_task_with_processes(task: Task, bench_processes: int) -> None:
     final_json_base = os.path.basename(final_json)
     final_json_stem, final_json_ext = os.path.splitext(final_json_base)
 
-    temp_dir = os.path.join(final_json_dir, ".cpp_process_runs")
+    temp_dir = os.path.join(final_json_dir, ".cpp_timing_process_runs")
     os.makedirs(temp_dir, exist_ok=True)
 
-    process_jsons: list[str] = []
-    process_metrics: list[str] = []
+    timing_process_jsons: list[str] = []
+    timing_process_metrics: list[str] = []
 
     final_metrics = None
 
@@ -69,37 +69,37 @@ def run_cpp_task_with_processes(task: Task, bench_processes: int) -> None:
         final_metrics_base = os.path.basename(final_metrics)
         final_metrics_stem, final_metrics_ext = os.path.splitext(final_metrics_base)
 
-    for process_index in range(bench_processes):
-        process_json = os.path.join(
+    for timing_process_index in range(timing_processes):
+        timing_process_json = os.path.join(
             temp_dir,
-            f"{final_json_stem}.process_{process_index}{final_json_ext}",
+            f"{final_json_stem}.timing_process_{timing_process_index}{final_json_ext}",
         )
 
         command = list(task.command)
-        command[task.cpp_json_arg] = process_json
+        command[task.cpp_json_arg] = timing_process_json
 
         if task.cpp_metrics_arg is not None:
-            process_metric = os.path.join(
+            timing_process_metric = os.path.join(
                 temp_dir,
-                f"{final_metrics_stem}.process_{process_index}{final_metrics_ext}",
+                f"{final_metrics_stem}.timing_process_{timing_process_index}{final_metrics_ext}",
             )
 
-            command[task.cpp_metrics_arg] = process_metric
-            process_metrics.append(process_metric)
+            command[task.cpp_metrics_arg] = timing_process_metric
+            timing_process_metrics.append(timing_process_metric)
 
         print(
-            f"[{task.name}] Running C++ process {process_index + 1}/{bench_processes}..."
+            f"[{task.name}] Running C++ timing process {timing_process_index + 1}/{timing_processes}..."
         )
         run_command(task.name, command)
 
-        process_jsons.append(process_json)
+        timing_process_jsons.append(timing_process_json)
 
     merge_command = [
         sys.executable,
         repo_path("python", "benchmark_pipeline", "tools", "merge_pyperf_runs.py"),
         "--output",
         final_json,
-        *process_jsons,
+        *timing_process_jsons,
     ]
 
     print(f"[{task.name}] Merging C++ pyperf JSON runs...")
@@ -108,18 +108,18 @@ def run_cpp_task_with_processes(task: Task, bench_processes: int) -> None:
     if task.cpp_metrics_arg is not None:
         assert final_metrics is not None
 
-        print(f"[{task.name}] Validating C++ process metrics...")
-        canonical_metrics = validate_cpp_process_metrics(process_metrics)
+        print(f"[{task.name}] Validating C++ timing-process metrics...")
+        canonical_metrics = validate_cpp_timing_process_metrics(timing_process_metrics)
         write_json(final_metrics, canonical_metrics)
 
-    for path in process_jsons:
+    for path in timing_process_jsons:
         delete_if_exists(path, label=None)
 
-    for path in process_metrics:
+    for path in timing_process_metrics:
         delete_if_exists(path, label=None)
 
 
-def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]):
+def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]) -> None:
     """Compiles the C++ nanobench cases for a specific dimension D."""
     cases = sorted(set(cpp_cases))
 
@@ -132,15 +132,15 @@ def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]):
 
     os.makedirs(os.path.dirname(nanobench_binary_path("lloyd_static")), exist_ok=True)
 
-    for alg in cases:
-        cmd = cpp_compile_command(D=D, alg=alg, mode="nanobench")
+    for cpp_case in cases:
+        cmd = cpp_compile_command(D=D, cpp_case=cpp_case, mode="nanobench")
 
-        print(f"Compiling C++ nanobench case '{alg}'...")
+        print(f"Compiling C++ nanobench case '{cpp_case}'...")
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
 
         if result.returncode != 0:
             print(
-                f"Compilation failed for C++ nanobench case '{alg}':\n{result.stderr}"
+                f"Compilation failed for C++ nanobench case '{cpp_case}':\n{result.stderr}"
             )
             sys.exit(1)
 
@@ -205,9 +205,9 @@ def execute_pipeline(
     D: int,
     N: int,
     K: int,
-    bench_processes: int,
-    bench_values: int,
-    bench_min_time: float,
+    timing_processes: int,
+    timing_values: int,
+    timing_min_time: float,
     lloyd_parity_tolerance_pct: float,
     gmm_covariance_type: str = "spherical",
 ):
@@ -217,9 +217,9 @@ def execute_pipeline(
         D,
         N,
         K,
-        bench_processes,
-        bench_values,
-        bench_min_time,
+        timing_processes,
+        timing_values,
+        timing_min_time,
         gmm_covariance_type=gmm_covariance_type,
     )
 
@@ -233,7 +233,7 @@ def execute_pipeline(
 
     for task in pipeline:
         if task.cpp_json_arg is not None:
-            run_cpp_task_with_processes(task, bench_processes)
+            run_cpp_task_with_timing_processes(task, timing_processes)
         else:
             print(f"[{task.name}] Running...")
             run_command(task.name, task.command)

@@ -345,7 +345,8 @@ void write_output(
     out << std::setprecision(17);
     out << "{\n";
     out << "  \"schema_version\": 1,\n";
-    out << "  \"algorithm\": \"gmm_diag_blas_same_resp_mstep\",\n";
+    out << "  \"phase\": \"gmm\",\n";
+    out << "  \"diagnostic\": \"gmm_diag_blas_same_resp_mstep\",\n";
     out << "  \"language\": \"cpp\",\n";
     out << "  \"D\": " << D << ",\n";
     out << "  \"N\": " << N << ",\n";

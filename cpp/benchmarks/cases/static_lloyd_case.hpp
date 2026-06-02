@@ -54,7 +54,7 @@ struct static_lloyd_case {
     }
 
     std::string title() const {
-        return "EVE K-Means " + std::to_string(D) + "D (Lloyd Iterations)";
+        return "EVE K-Means " + std::to_string(D) + "D (Lloyd Algorithm)";
     }
 
     std::string run_name() const {
@@ -67,7 +67,7 @@ struct static_lloyd_case {
 
     void run_once() {
         std::vector<SampleType> current_centroids = initial_centroids_;
-        auto assignments = k_means(samples_, current_centroids, iterations_to_converge_);
+        auto assignments = k_means(samples_, current_centroids, algorithm_iterations_);
 
         final_centroids_ = std::move(current_centroids);
         final_assignments_ = std::move(assignments);
@@ -85,7 +85,7 @@ struct static_lloyd_case {
             final_centroids_,
             final_assignments_,
             K_,
-            iterations_to_converge_
+            algorithm_iterations_
         );
     }
 
@@ -126,5 +126,5 @@ private:
 
     std::vector<SampleType> final_centroids_;
     kumi_kmeans_backend<SampleType>::assignment_vector final_assignments_;
-    int iterations_to_converge_ = 0;
+    int algorithm_iterations_ = 0;
 };

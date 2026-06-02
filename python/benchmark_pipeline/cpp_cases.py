@@ -70,69 +70,75 @@ CPP_CASES: dict[str, CppCase] = {
 }
 
 
-def get_cpp_case(alg: str) -> CppCase:
+def get_cpp_case(cpp_case: str) -> CppCase:
     try:
-        return CPP_CASES[alg]
+        return CPP_CASES[cpp_case]
     except KeyError as exc:
         valid = ", ".join(sorted(CPP_CASES))
         raise ValueError(
-            f"Unknown C++ benchmark case '{alg}'. Valid cases: {valid}"
+            f"Unknown C++ benchmark case '{cpp_case}'. Valid cases: {valid}"
         ) from exc
 
 
-def nanobench_binary_path(alg: str) -> str:
-    case = get_cpp_case(alg)
-    return str(BIN_DIR / f"bench_{case.name}.bin")
+def nanobench_binary_path(cpp_case: str) -> str:
+    cpp_case_def = get_cpp_case(cpp_case)
+    return str(BIN_DIR / f"bench_{cpp_case_def.name}.bin")
 
 
-def callgrind_binary_path(alg: str, D: int) -> Path:
-    case = get_cpp_case(alg)
-    return BIN_DIR / f"profile_{case.name}_callgrind_{D}D.bin"
+def callgrind_binary_path(cpp_case: str, D: int) -> Path:
+    cpp_case_def = get_cpp_case(cpp_case)
+    return BIN_DIR / f"profile_{cpp_case_def.name}_callgrind_{D}D.bin"
 
 
 def spill_detector_assembly_path(
-    alg: str,
+    cpp_case: str,
     D: int,
     out_dir: str | Path | None = None,
     gmm_covariance_type: str | None = None,
 ) -> Path:
-    case = get_cpp_case(alg)
+    cpp_case_def = get_cpp_case(cpp_case)
     root = (
         Path(out_dir)
         if out_dir is not None
         else Path(repo_path("spill_detector_results"))
     )
     covariance_suffix = (
-        f".{gmm_covariance_type}" if alg == "gmm_static" and gmm_covariance_type else ""
+        f".{gmm_covariance_type}"
+        if cpp_case == "gmm_static" and gmm_covariance_type
+        else ""
     )
-    return root / f"asm.{case.name}{covariance_suffix}.{D}D.s"
+    return root / f"asm.{cpp_case_def.name}{covariance_suffix}.{D}D.s"
 
 
 def cpp_compile_command(
     *,
     D: int,
-    alg: str,
+    cpp_case: str,
     mode: str,
     output: str | Path | None = None,
     extra_defines: list[str] | None = None,
 ) -> list[str]:
     if mode == "nanobench":
         src = repo_path("cpp", "benchmarks", "nanobench_main.cpp")
-        out = str(output) if output is not None else nanobench_binary_path(alg)
+        out = str(output) if output is not None else nanobench_binary_path(cpp_case)
     elif mode == "callgrind":
         src = repo_path("cpp", "benchmarks", "callgrind_main.cpp")
-        out = str(output) if output is not None else str(callgrind_binary_path(alg, D))
+        out = (
+            str(output)
+            if output is not None
+            else str(callgrind_binary_path(cpp_case, D))
+        )
     elif mode == "assembly":
         src = repo_path("cpp", "benchmarks", "spill_detector_main.cpp")
         out = (
             str(output)
             if output is not None
-            else str(spill_detector_assembly_path(alg, D))
+            else str(spill_detector_assembly_path(cpp_case, D))
         )
     else:
         raise ValueError(f"Unknown C++ benchmark mode '{mode}'")
 
-    case = get_cpp_case(alg)
+    cpp_case_def = get_cpp_case(cpp_case)
 
     return [
         "g++-14",
@@ -146,8 +152,8 @@ def cpp_compile_command(
         f"-DTUPLE_SIZE={D}",
         "-DKMEANS_N_GROUP=2",
         "-DKMEANS_K_TILE=5",
-        f'-DBENCH_CASE_HEADER="{case.case_header}"',
-        f"-DBENCH_CASE={case.case_struct}",
+        f'-DBENCH_CASE_HEADER="{cpp_case_def.case_header}"',
+        f"-DBENCH_CASE={cpp_case_def.case_struct}",
         *(extra_defines or []),
         src,
         "-o",

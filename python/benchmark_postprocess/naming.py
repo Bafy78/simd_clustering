@@ -5,7 +5,7 @@ from typing import Any
 PHASE_MAP = {
     "soa": "AoS to SoA Tax",
     "pp": "K-Means++ Initialization",
-    "lloyd": "Lloyd Iterations",
+    "lloyd": "Lloyd Algorithm",
     "gmm": "GaussianMixture EM",
 }
 

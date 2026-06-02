@@ -15,7 +15,7 @@ def nearest_center_labels(
     *,
     max_distance_cells: int = 25_000_000,
 ) -> np.ndarray:
-    """Assign each sample to its closest initial centroid without materializing the full N×K matrix."""
+    """Assign each sample to its closest initial centroid without materializing the full sample-by-cluster matrix."""
     N, D = X.shape
     K = centers.shape[0]
     chunk_size = max(1, max_distance_cells // max(1, K * D))

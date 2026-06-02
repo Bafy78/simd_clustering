@@ -69,7 +69,7 @@ def merge(paths: list[str]) -> dict[str, Any]:
     for bench in merged["benchmarks"]:
         bench["runs"] = []
 
-    for process_index, (path, suite) in enumerate(zip(paths, loaded)):
+    for timing_process_index, (path, suite) in enumerate(zip(paths, loaded)):
         validate_compatible(loaded[0], suite, path)
 
         for bench_index, bench in enumerate(suite["benchmarks"]):
@@ -81,9 +81,9 @@ def merge(paths: list[str]) -> dict[str, Any]:
             for run_index, run in enumerate(runs):
                 run_copy = copy.deepcopy(run)
                 metadata = run_copy.setdefault("metadata", {})
-                metadata["process_index"] = process_index
-                metadata["process_json"] = os.path.basename(path)
-                metadata["process_run_index"] = run_index
+                metadata["timing_process_index"] = timing_process_index
+                metadata["timing_process_json"] = os.path.basename(path)
+                metadata["timing_process_pyperf_run_index"] = run_index
 
                 merged["benchmarks"][bench_index]["runs"].append(run_copy)
 
