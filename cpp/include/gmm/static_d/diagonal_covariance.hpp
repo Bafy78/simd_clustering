@@ -16,7 +16,6 @@
 
 #include "../../layout/static_soa.hpp"
 #include "../../simd.hpp"
-#include "point_ops.hpp"
 
 template <eve::product_type PointT>
 struct diagonal_covariance_model {

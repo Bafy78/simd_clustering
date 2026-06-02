@@ -8,3 +8,4 @@ datasets*/
 **/__pycache__/
 callgrind_results/
 diagnostics/
+spill_detector_results/

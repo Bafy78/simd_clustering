@@ -15,7 +15,44 @@
 
 #include "../../layout/static_soa.hpp"
 #include "../../simd.hpp"
-#include "point_ops.hpp"
+
+template <eve::product_type PointT>
+float gmm_point_norm_sq(const PointT& point) {
+    return kumi::inner_product(point, point, 0.0f);
+}
+
+template <eve::product_type SimdPointT, eve::product_type PointT>
+wide_f gmm_dot_simd_point_with_mean(const SimdPointT& point, const PointT& mean) {
+    auto dot = eve::zero(eve::as<wide_f>());
+
+    kumi::for_each(
+        [&](auto x, auto mu) {
+            dot = eve::fma(x, wide_f(mu), dot);
+        },
+        point,
+        mean
+    );
+
+    return dot;
+}
+
+// In my setup this stopped being inlined at D=15, but inlining it always seemed to improve 
+// instructions/cycles/uops counts, at the cost of relative backend pressure.
+// But runtime performance doesn't seem impacted somehow
+template <eve::product_type SimdPointT>
+wide_f gmm_simd_point_norm_sq(const SimdPointT& point) {
+    auto norm_sq = eve::zero(eve::as<wide_f>());
+
+    kumi::for_each(
+        [&](auto x) {
+            norm_sq = eve::fma(x, x, norm_sq);
+        },
+        point
+    );
+
+    return norm_sq;
+}
+
 
 template <eve::product_type PointT>
 struct spherical_covariance_model {

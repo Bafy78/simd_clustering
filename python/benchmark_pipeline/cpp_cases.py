@@ -90,13 +90,47 @@ def callgrind_binary_path(alg: str, dim: int) -> Path:
     return BIN_DIR / f"profile_{case.name}_callgrind_{dim}D.bin"
 
 
-def cpp_compile_command(*, dim: int, alg: str, mode: str) -> list[str]:
+def spill_detector_assembly_path(
+    alg: str,
+    dim: int,
+    out_dir: str | Path | None = None,
+    gmm_covariance_type: str | None = None,
+) -> Path:
+    case = get_cpp_case(alg)
+    root = (
+        Path(out_dir)
+        if out_dir is not None
+        else Path(repo_path("spill_detector_results"))
+    )
+    covariance_suffix = (
+        f".{gmm_covariance_type}" if alg == "gmm_static" and gmm_covariance_type else ""
+    )
+    return root / f"asm.{case.name}{covariance_suffix}.{dim}D.s"
+
+
+def cpp_compile_command(
+    *,
+    dim: int,
+    alg: str,
+    mode: str,
+    output: str | Path | None = None,
+    extra_defines: list[str] | None = None,
+) -> list[str]:
     if mode == "nanobench":
         src = repo_path("cpp", "benchmarks", "nanobench_main.cpp")
-        out = nanobench_binary_path(alg)
+        out = str(output) if output is not None else nanobench_binary_path(alg)
     elif mode == "callgrind":
         src = repo_path("cpp", "benchmarks", "callgrind_main.cpp")
-        out = str(callgrind_binary_path(alg, dim))
+        out = (
+            str(output) if output is not None else str(callgrind_binary_path(alg, dim))
+        )
+    elif mode == "assembly":
+        src = repo_path("cpp", "benchmarks", "spill_detector_main.cpp")
+        out = (
+            str(output)
+            if output is not None
+            else str(spill_detector_assembly_path(alg, dim))
+        )
     else:
         raise ValueError(f"Unknown C++ benchmark mode '{mode}'")
 
@@ -106,6 +140,7 @@ def cpp_compile_command(*, dim: int, alg: str, mode: str) -> list[str]:
         "g++-14",
         "-O3",
         *(["-g"] if mode == "callgrind" else []),
+        *(["-S", "-masm=intel"] if mode == "assembly" else []),
         "-march=native",
         "-std=c++20",
         "-I../eve/include",
@@ -113,8 +148,9 @@ def cpp_compile_command(*, dim: int, alg: str, mode: str) -> list[str]:
         f"-DTUPLE_SIZE={dim}",
         "-DKMEANS_K_TILE=5",
         "-DKMEANS_M_GROUP=2",
-        f'-DKMEANS_BENCH_CASE_HEADER="{case.case_header}"',
-        f"-DKMEANS_BENCH_CASE={case.case_struct}",
+        f'-DBENCH_CASE_HEADER="{case.case_header}"',
+        f"-DBENCH_CASE={case.case_struct}",
+        *(extra_defines or []),
         src,
         "-o",
         out,

@@ -67,6 +67,32 @@ struct static_gmm_case {
         };
     }
 
+    static static_gmm_case make_for_spill_detector_spherical(int, char* argv[]) {
+        return static_gmm_case{
+            argv[1],
+            static_cast<std::size_t>(std::stoull(argv[2])),
+            std::stoi(argv[3]),
+            argv[4],
+            argv[5],
+            argv[6],
+            gmm_covariance_type::spherical,
+            argv[8]
+        };
+    }
+
+    static static_gmm_case make_for_spill_detector_diag(int, char* argv[]) {
+        return static_gmm_case{
+            argv[1],
+            static_cast<std::size_t>(std::stoull(argv[2])),
+            std::stoi(argv[3]),
+            argv[4],
+            argv[5],
+            argv[6],
+            gmm_covariance_type::diag,
+            argv[8]
+        };
+    }
+
     std::string title() const {
         return "EVE GaussianMixture " + std::to_string(TUPLE_SIZE) + "D (EM)";
     }
@@ -79,34 +105,40 @@ struct static_gmm_case {
     std::size_t bench_epochs() const { return bench_epochs_; }
     double min_epoch_seconds() const { return min_epoch_seconds_; }
 
+    void run_once_spherical() {
+        auto result = run_static_gmm_em(
+            points_,
+            initial_weights_,
+            initial_means_,
+            spherical_covariance_model<PointType>{
+                initial_precisions_,
+                static_cast<std::size_t>(n_clusters_)
+            }
+        );
+        store_result(std::move(result));
+    }
+
+    void run_once_diag() {
+        auto result = run_static_gmm_em(
+            points_,
+            initial_weights_,
+            initial_means_,
+            diagonal_covariance_model<PointType>{
+                initial_precisions_,
+                static_cast<std::size_t>(n_clusters_)
+            }
+        );
+        store_result(std::move(result));
+    }
+
     void run_once() {
         switch (covariance_type_) {
-        case gmm_covariance_type::spherical: {
-            auto result = run_static_gmm_em(
-                points_,
-                initial_weights_,
-                initial_means_,
-                spherical_covariance_model<PointType>{
-                    initial_precisions_,
-                    static_cast<std::size_t>(n_clusters_)
-                }
-            );
-            store_result(std::move(result));
+        case gmm_covariance_type::spherical:
+            run_once_spherical();
             return;
-        }
-        case gmm_covariance_type::diag: {
-            auto result = run_static_gmm_em(
-                points_,
-                initial_weights_,
-                initial_means_,
-                diagonal_covariance_model<PointType>{
-                    initial_precisions_,
-                    static_cast<std::size_t>(n_clusters_)
-                }
-            );
-            store_result(std::move(result));
+        case gmm_covariance_type::diag:
+            run_once_diag();
             return;
-        }
         case gmm_covariance_type::full:
         case gmm_covariance_type::tied:
             throw std::runtime_error(
@@ -162,9 +194,30 @@ private:
         const std::string& covariance_type,
         const std::string& metrics_json_out
     )
+        : static_gmm_case(
+            dataset_bin,
+            n_samples,
+            n_clusters,
+            gmm_weights_bin,
+            gmm_means_bin,
+            gmm_precisions_bin,
+            parse_gmm_covariance_type(covariance_type),
+            metrics_json_out
+        ) {}
+
+    static_gmm_case(
+        const std::string& dataset_bin,
+        std::size_t n_samples,
+        int n_clusters,
+        const std::string& gmm_weights_bin,
+        const std::string& gmm_means_bin,
+        const std::string& gmm_precisions_bin,
+        gmm_covariance_type covariance_type,
+        const std::string& metrics_json_out
+    )
         : n_samples_(n_samples),
           n_clusters_(n_clusters),
-          covariance_type_(parse_gmm_covariance_type(covariance_type)),
+          covariance_type_(covariance_type),
           metrics_json_out_(metrics_json_out) {
         if (n_clusters_ <= 0) {
             throw std::runtime_error("Invalid number of GMM components");

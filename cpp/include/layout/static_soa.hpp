@@ -9,10 +9,6 @@
 #include <eve/module/algo.hpp>
 #include <eve/module/core.hpp>
 
-#ifndef TUPLE_SIZE
-#define TUPLE_SIZE 2
-#endif
-
 template<std::size_t D>
 using static_point_type = kumi::result::fill_t<D, float>;
 
