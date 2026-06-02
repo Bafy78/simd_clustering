@@ -18,45 +18,45 @@ void check_dynamic_aos_size(std::span<const float> aos, std::size_t rows, const 
 }
 
 template<std::size_t D>
-void copy_aos_to_dynamic_points(
+void copy_aos_to_dynamic_samples(
     std::span<const float> aos,
-    std::size_t n_samples,
-    points_soa_storage<D>& points
+    std::size_t N,
+    samples_soa_storage<D>& samples
 ) {
-    check_dynamic_aos_size<D>(aos, n_samples, "points");
+    check_dynamic_aos_size<D>(aos, N, "samples");
 
-    if (points.n_samples != n_samples) {
-        points.resize(n_samples);
+    if (samples.N != N) {
+        samples.resize(N);
     }
 
-    for (std::size_t i = 0; i < n_samples; ++i) {
+    for (std::size_t n = 0; n < N; ++n) {
         for (std::size_t d = 0; d < D; ++d) {
-            points(i, d) = aos[i * D + d];
+            samples(n, d) = aos[n * D + d];
         }
     }
 }
 
 template<std::size_t D>
-points_soa_storage<D> make_dynamic_points_from_aos(
+samples_soa_storage<D> make_dynamic_samples_from_aos(
     std::span<const float> aos,
-    std::size_t n_samples
+    std::size_t N
 ) {
-    points_soa_storage<D> out(n_samples);
-    copy_aos_to_dynamic_points<D>(aos, n_samples, out);
+    samples_soa_storage<D> out(N);
+    copy_aos_to_dynamic_samples<D>(aos, N, out);
     return out;
 }
 
 template<std::size_t D>
 centroids_storage<D> make_dynamic_centroids_from_aos(
     std::span<const float> aos,
-    std::size_t n_clusters
+    std::size_t K
 ) {
-    check_dynamic_aos_size<D>(aos, n_clusters, "centroids");
+    check_dynamic_aos_size<D>(aos, K, "centroids");
 
     centroids_storage<D> out;
-    out.resize(n_clusters);
+    out.resize(K);
 
-    for (std::size_t k = 0; k < n_clusters; ++k) {
+    for (std::size_t k = 0; k < K; ++k) {
         for (std::size_t d = 0; d < D; ++d) {
             out.row(k, d) = aos[k * D + d];
         }
@@ -66,23 +66,23 @@ centroids_storage<D> make_dynamic_centroids_from_aos(
 }
 
 template<std::size_t D>
-std::vector<static_point_type<D>> make_static_centroids_from_dynamic(
+std::vector<static_sample_type<D>> make_static_centroids_from_dynamic(
     const centroids_storage<D>& dynamic_centroids
 ) {
-    std::vector<static_point_type<D>> out(dynamic_centroids.n_clusters);
+    std::vector<static_sample_type<D>> out(dynamic_centroids.K);
 
-    for (std::size_t k = 0; k < dynamic_centroids.n_clusters; ++k) {
-        static_point_type<D> pt{};
+    for (std::size_t k = 0; k < dynamic_centroids.K; ++k) {
+        static_sample_type<D> sample{};
 
         kumi::for_each_index(
             [&](auto index, auto& value) {
                 constexpr std::size_t d = decltype(index)::value;
                 value = dynamic_centroids.row(k, d);
             },
-            pt
+            sample
         );
 
-        out[k] = pt;
+        out[k] = sample;
     }
 
     return out;

@@ -14,8 +14,8 @@ def import_runtime_deps():
     kmeans_plusplus = _kmeans_plusplus
 
 
-def run_kmeans_pp(X, n_clusters):
-    centers, _ = kmeans_plusplus(X, n_clusters=n_clusters)
+def run_kmeans_pp(X, K):
+    centers, _ = kmeans_plusplus(X, n_clusters=K)
     return centers
 
 
@@ -24,15 +24,15 @@ def load_dataset(args):
         args.dataset_bin,
         dtype=np.float32,
         mode="r",
-        shape=(args.n_samples, args.n_features),
+        shape=(args.N, args.D),
     )
 
 
 def append_custom_args(cmd, args):
     cmd.extend(["--dataset-bin", args.dataset_bin])
-    cmd.extend(["--n-samples", str(args.n_samples)])
-    cmd.extend(["--n-features", str(args.n_features)])
-    cmd.extend(["--n-clusters", str(args.n_clusters)])
+    cmd.extend(["--D", str(args.D)])
+    cmd.extend(["--N", str(args.N)])
+    cmd.extend(["--K", str(args.K)])
 
 
 if __name__ == "__main__":
@@ -42,9 +42,9 @@ if __name__ == "__main__":
     )
 
     runner.argparser.add_argument("--dataset-bin", required=True)
-    runner.argparser.add_argument("--n-samples", type=int, required=True)
-    runner.argparser.add_argument("--n-features", type=int, required=True)
-    runner.argparser.add_argument("--n-clusters", type=int, required=True)
+    runner.argparser.add_argument("--D", type=int, required=True)
+    runner.argparser.add_argument("--N", type=int, required=True)
+    runner.argparser.add_argument("--K", type=int, required=True)
 
     args = runner.parse_args()
 
@@ -58,5 +58,5 @@ if __name__ == "__main__":
         "kmeans_pp_py",
         run_kmeans_pp,
         X,
-        args.n_clusters,
+        args.K,
     )

@@ -13,8 +13,14 @@ from benchmark_pipeline.cpp_cases import (
     cpp_compile_command,
     nanobench_binary_path,
 )
-from benchmark_pipeline.paths import DATASETS_DIR, REPO_ROOT, repo_path
-from benchmark_pipeline.tasks import Task, build_pipeline, config_id, dataset_path
+from benchmark_pipeline.paths import REPO_ROOT, repo_path
+from benchmark_pipeline.tasks import (
+    Task,
+    build_pipeline,
+    config_id,
+    configuration_label,
+    dataset_path,
+)
 
 
 def prepare_datasets_dir(datasets_dir: str) -> None:
@@ -113,21 +119,21 @@ def run_cpp_task_with_processes(task: Task, bench_processes: int) -> None:
         delete_if_exists(path, label=None)
 
 
-def compile_cpp_binaries(dim: int, cpp_cases: Iterable[str]):
-    """Compiles the C++ nanobench cases for a specific dimension."""
+def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]):
+    """Compiles the C++ nanobench cases for a specific dimension D."""
     cases = sorted(set(cpp_cases))
 
     if not cases:
         return
 
     print(f"\n{'=' * 50}")
-    print(f"--- Compiling C++ Binaries for {dim}D ---")
+    print(f"--- Compiling C++ Binaries for {D}D ---")
     print(f"{'=' * 50}")
 
     os.makedirs(os.path.dirname(nanobench_binary_path("lloyd_static")), exist_ok=True)
 
     for alg in cases:
-        cmd = cpp_compile_command(dim=dim, alg=alg, mode="nanobench")
+        cmd = cpp_compile_command(D=D, alg=alg, mode="nanobench")
 
         print(f"Compiling C++ nanobench case '{alg}'...")
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
@@ -165,13 +171,13 @@ def cleanup_config_inputs(case_id: str) -> None:
 
 def finalize_config(
     *,
-    dim: int,
-    n_samples: int,
-    n_clusters: int,
+    D: int,
+    N: int,
+    K: int,
     lloyd_parity_tolerance_pct: float,
     validate_lloyd_parity: bool,
 ) -> None:
-    case_id = config_id(dim, n_samples, n_clusters)
+    case_id = config_id(D, N, K)
 
     cpp_metrics_file = dataset_path(f"lloyd_metrics_cpp_{case_id}.json")
     py_metrics_file = dataset_path(f"lloyd_metrics_py_{case_id}.json")
@@ -196,30 +202,28 @@ def finalize_config(
 
 
 def execute_pipeline(
-    dim: int,
-    n_samples: int,
-    n_clusters: int,
+    D: int,
+    N: int,
+    K: int,
     bench_processes: int,
     bench_values: int,
     bench_min_time: float,
     lloyd_parity_tolerance_pct: float,
     gmm_covariance_type: str = "spherical",
 ):
-    print(
-        f"\n--- Running Config: {dim}D | {n_samples} Samples | {n_clusters} Clusters ---"
-    )
+    print(f"\n--- Running Config: {configuration_label(D, N, K)} ---")
 
     pipeline = build_pipeline(
-        dim,
-        n_samples,
-        n_clusters,
+        D,
+        N,
+        K,
         bench_processes,
         bench_values,
         bench_min_time,
         gmm_covariance_type=gmm_covariance_type,
     )
 
-    case_id = config_id(dim, n_samples, n_clusters)
+    case_id = config_id(D, N, K)
 
     lloyd_cpp_metrics_file = dataset_path(f"lloyd_metrics_cpp_{case_id}.json")
     lloyd_py_metrics_file = dataset_path(f"lloyd_metrics_py_{case_id}.json")
@@ -235,9 +239,9 @@ def execute_pipeline(
             run_command(task.name, task.command)
 
     finalize_config(
-        dim=dim,
-        n_samples=n_samples,
-        n_clusters=n_clusters,
+        D=D,
+        N=N,
+        K=K,
         lloyd_parity_tolerance_pct=lloyd_parity_tolerance_pct,
         validate_lloyd_parity=validate_lloyd_parity,
     )

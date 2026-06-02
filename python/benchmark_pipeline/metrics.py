@@ -26,7 +26,6 @@ def assert_close(name: str, a: float, b: float, *, rel_tol=1e-10, abs_tol=1e-8):
         )
 
 
-
 def _assert_sequence_close(name: str, candidate, reference) -> None:
     if len(candidate) != len(reference):
         raise RuntimeError(
@@ -55,7 +54,9 @@ def _assert_matrix_close(name: str, candidate, reference) -> None:
 
 
 def _is_non_string_sequence(value) -> bool:
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+    return isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    )
 
 
 def _shape_of(value) -> tuple[int, ...]:
@@ -89,7 +90,9 @@ def _assert_array_close(name: str, candidate, reference) -> None:
 
     def visit(candidate_value, reference_value, suffix: str) -> None:
         if not _is_non_string_sequence(candidate_value):
-            assert_close(f"{name}{suffix}", float(candidate_value), float(reference_value))
+            assert_close(
+                f"{name}{suffix}", float(candidate_value), float(reference_value)
+            )
             return
 
         for i, (candidate_child, reference_child) in enumerate(
@@ -142,6 +145,7 @@ def validate_gmm_process_metrics(candidate: dict, reference: dict, path: str) ->
         candidate.get("means", []),
         reference.get("means", []),
     )
+
 
 def validate_cpp_process_metrics(process_metrics: list[str]) -> dict:
     if not process_metrics:

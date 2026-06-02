@@ -23,13 +23,13 @@ def require_tool(tool: str) -> None:
         sys.exit(1)
 
 
-def compile_profile_binary(dim: int, alg: str) -> Path:
-    os.makedirs(os.path.dirname(callgrind_binary_path(alg, dim)), exist_ok=True)
+def compile_profile_binary(D: int, alg: str) -> Path:
+    os.makedirs(os.path.dirname(callgrind_binary_path(alg, D)), exist_ok=True)
 
-    out = callgrind_binary_path(alg, dim)
-    cmd = cpp_compile_command(dim=dim, alg=alg, mode="callgrind")
+    out = callgrind_binary_path(alg, D)
+    cmd = cpp_compile_command(D=D, alg=alg, mode="callgrind")
 
-    print(f"Compiling Callgrind {alg} binary for {dim}D...")
+    print(f"Compiling Callgrind {alg} binary for {D}D...")
     run_command(f"Compile Callgrind {alg} binary", cmd)
     return out
 
@@ -76,9 +76,9 @@ def main() -> None:
         default="lloyd_static",
         help="C++ case to profile. Defaults to static Lloyd.",
     )
-    parser.add_argument("--dim", type=int, required=True)
-    parser.add_argument("--n-samples", type=int, required=True)
-    parser.add_argument("--n-clusters", type=int, required=True)
+    parser.add_argument("--D", type=int, required=True)
+    parser.add_argument("--N", type=int, required=True)
+    parser.add_argument("--K", type=int, required=True)
     parser.add_argument(
         "--gmm-covariance-type",
         choices=("full", "tied", "diag", "spherical"),
@@ -100,20 +100,20 @@ def main() -> None:
     require_tool("callgrind_annotate")
 
     target = CPP_CASES[args.alg]
-    case = config_id(args.dim, args.n_samples, args.n_clusters)
+    case = config_id(args.D, args.N, args.K)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    binary = callgrind_binary_path(args.alg, args.dim)
+    binary = callgrind_binary_path(args.alg, args.D)
 
     if not args.skip_compile:
-        binary = compile_profile_binary(args.dim, args.alg)
+        binary = compile_profile_binary(args.D, args.alg)
 
     if not args.skip_generate:
         dataset_task = build_pipeline(
-            args.dim,
-            args.n_samples,
-            args.n_clusters,
+            args.D,
+            args.N,
+            args.K,
             bench_processes=1,
             bench_values=1,
             bench_min_time=0.0,
@@ -147,21 +147,23 @@ def main() -> None:
     case_args = [
         str(binary),
         dataset_bin,
-        str(args.n_samples),
+        str(args.N),
     ]
 
     if target.needs_clusters_arg:
-        case_args.append(str(args.n_clusters))
+        case_args.append(str(args.K))
 
     if target.needs_init:
         case_args.append(init_bin)
 
     if target.needs_gmm_init:
-        case_args.extend([
-            gmm_weights_bin,
-            gmm_means_bin,
-            gmm_precisions_bin,
-        ])
+        case_args.extend(
+            [
+                gmm_weights_bin,
+                gmm_means_bin,
+                gmm_precisions_bin,
+            ]
+        )
 
     if target.needs_covariance_type_arg:
         case_args.append(args.gmm_covariance_type)

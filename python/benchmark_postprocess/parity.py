@@ -6,7 +6,12 @@ from typing import Any
 import numpy as np
 
 from benchmark_postprocess.io import load_json
-from benchmark_postprocess.naming import GMM_METRICS_JSON_RE, LLOYD_PARITY_JSON_RE
+from benchmark_postprocess.naming import (
+    GMM_METRICS_JSON_RE,
+    LLOYD_PARITY_JSON_RE,
+    format_config_id,
+    parse_config_match,
+)
 
 REQUIRED_LANGUAGE_KEYS = ("cpp", "py")
 
@@ -151,10 +156,8 @@ def load_lloyd_parity_map(data_dir: Path) -> dict[str, dict[str, Any]]:
             print(f"Skipping malformed Lloyd parity filename: {path.name}")
             continue
 
-        dim = int(match.group("dim"))
-        samples = int(match.group("samples"))
-        clusters = int(match.group("clusters"))
-        config_id = f"{dim}D_{samples}S_{clusters}K"
+        D, N, K = parse_config_match(match)
+        config_id = format_config_id(D, N, K)
 
         parity = normalize_lloyd_parity_record(
             load_json(path),
@@ -203,10 +206,8 @@ def load_gmm_metrics_map(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]
             continue
 
         lang_key = match.group("lang")
-        dim = int(match.group("dim"))
-        samples = int(match.group("samples"))
-        clusters = int(match.group("clusters"))
-        config_id = f"{dim}D_{samples}S_{clusters}K"
+        D, N, K = parse_config_match(match)
+        config_id = format_config_id(D, N, K)
 
         metrics = normalize_gmm_metrics_record(
             load_json(path),

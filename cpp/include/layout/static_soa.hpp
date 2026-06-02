@@ -10,12 +10,14 @@
 #include <eve/module/core.hpp>
 
 template<std::size_t D>
-using static_point_type = kumi::result::fill_t<D, float>;
+using static_sample_type = kumi::result::fill_t<D, float>;
 
-using PointType = static_point_type<TUPLE_SIZE>;
+inline constexpr std::size_t D = static_cast<std::size_t>(TUPLE_SIZE);
+
+using SampleType = static_sample_type<D>;
 
 template<std::size_t D>
-using static_points_soa_vector = eve::algo::soa_vector<static_point_type<D>>;
+using static_samples_soa_vector = eve::algo::soa_vector<static_sample_type<D>>;
 
 template<std::size_t D>
 void check_static_aos_size(std::span<const float> aos, std::size_t rows, const char* label) {
@@ -25,46 +27,46 @@ void check_static_aos_size(std::span<const float> aos, std::size_t rows, const c
 }
 
 template<std::size_t D>
-void copy_aos_to_static_points(
+void copy_aos_to_static_samples(
     std::span<const float> aos,
-    std::size_t n_samples,
-    static_points_soa_vector<D>& points
+    std::size_t N,
+    static_samples_soa_vector<D>& samples
 ) {
-    check_static_aos_size<D>(aos, n_samples, "points");
+    check_static_aos_size<D>(aos, N, "samples");
 
-    for (std::size_t i = 0; i < n_samples; ++i) {
-        static_point_type<D> pt;
+    for (std::size_t n = 0; n < N; ++n) {
+        static_sample_type<D> sample;
 
         kumi::for_each_index(
             [&](auto index, auto& element) {
-                element = aos[i * D + index];
+                element = aos[n * D + index];
             },
-            pt
+            sample
         );
 
-        points.set(i, pt);
+        samples.set(n, sample);
     }
 }
 
 template<std::size_t D>
-static_points_soa_vector<D> make_static_points_from_aos(
+static_samples_soa_vector<D> make_static_samples_from_aos(
     std::span<const float> aos,
-    std::size_t n_samples
+    std::size_t N
 ) {
-    static_points_soa_vector<D> points(eve::algo::no_init, n_samples);
-    copy_aos_to_static_points<D>(aos, n_samples, points);
-    return points;
+    static_samples_soa_vector<D> samples(eve::algo::no_init, N);
+    copy_aos_to_static_samples<D>(aos, N, samples);
+    return samples;
 }
 
 template<std::size_t D>
-std::vector<static_point_type<D>> make_static_vectors_from_aos(
+std::vector<static_sample_type<D>> make_static_vectors_from_aos(
     std::span<const float> aos,
     std::size_t rows,
     const char* label = "vectors"
 ) {
     check_static_aos_size<D>(aos, rows, label);
 
-    std::vector<static_point_type<D>> vectors(rows);
+    std::vector<static_sample_type<D>> vectors(rows);
 
     for (std::size_t row = 0; row < rows; ++row) {
         kumi::for_each_index(

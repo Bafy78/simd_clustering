@@ -17,40 +17,40 @@
 #include "../../layout/static_soa.hpp"
 #include "../../simd.hpp"
 
-template <eve::product_type PointT>
+template <eve::product_type SampleT>
 struct diagonal_covariance_model {
-    static constexpr std::size_t n_features = kumi::size_v<PointT>;
-    using simd_sum_point = std::array<wide_f, n_features>;
+    static constexpr std::size_t D = kumi::size_v<SampleT>;
+    using simd_sum_sample = std::array<wide_f, D>;
 
     std::vector<float> covariances;
     std::vector<float> precisions;
     std::vector<float> score_constants;
-    std::vector<simd_sum_point> sum_x2_w;
+    std::vector<simd_sum_sample> sum_x2_w;
     float reg_covar = 1e-6f;
 
-    struct point_cache {
-        simd_sum_point x2;
+    struct sample_cache {
+        simd_sum_sample x2;
     };
 
     diagonal_covariance_model(
         std::vector<float> precisions_,
-        std::size_t n_components,
+        std::size_t K,
         float reg_covar_ = 1e-6f
     )
         : covariances(precisions_.size()),
           precisions(std::move(precisions_)),
-          score_constants(n_components),
-          sum_x2_w(n_components),
+          score_constants(K),
+          sum_x2_w(K),
           reg_covar(reg_covar_) {}
 
-    static std::size_t offset(std::size_t component, std::size_t feature) {
-        return component * n_features + feature;
+    static std::size_t offset(std::size_t cluster, std::size_t dimension) {
+        return cluster * D + dimension;
     }
 
-    void validate_inputs(std::size_t n_components) const {
-        if (precisions.size() != n_components * n_features) {
+    void validate_inputs(std::size_t K) const {
+        if (precisions.size() != K * D) {
             throw std::runtime_error(
-                "Diagonal GMM precision count must be component count times feature count"
+                "Diagonal GMM precision count must be cluster count times dimension count"
             );
         }
 
@@ -70,7 +70,7 @@ struct diagonal_covariance_model {
     template <class Weights, class Means>
     void refresh_score_data(const Weights& weights, const Means& means) {
         const float log_2_pi = std::log(2.0f * std::numbers::pi_v<float>);
-        constexpr float half_features = 0.5f * static_cast<float>(n_features);
+        constexpr float half_dimensions = 0.5f * static_cast<float>(D);
 
         for (std::size_t k = 0; k < means.size(); ++k) {
             float log_precision_det = 0.0f;
@@ -88,7 +88,7 @@ struct diagonal_covariance_model {
             score_constants[k] =
                 std::log(weights[k])
                 + 0.5f * log_precision_det
-                - half_features * log_2_pi
+                - half_dimensions * log_2_pi
                 - 0.5f * mean_quadratic;
         }
     }
@@ -101,25 +101,25 @@ struct diagonal_covariance_model {
         }
     }
 
-    template <eve::product_type SimdPointT>
-    point_cache make_point_cache(const SimdPointT& point) const {
-        point_cache cache;
+    template <eve::product_type SimdSampleT>
+    sample_cache make_sample_cache(const SimdSampleT& sample) const {
+        sample_cache cache;
 
         kumi::for_each_index(
             [&](auto index, auto x) {
                 cache.x2[index] = x * x;
             },
-            point
+            sample
         );
 
         return cache;
     }
 
-    template <eve::product_type SimdPointT>
+    template <eve::product_type SimdSampleT>
     wide_f compute_weighted_log_prob(
-        const SimdPointT& point,
-        const point_cache& cache,
-        const PointT& mean,
+        const SimdSampleT& sample,
+        const sample_cache& cache,
+        const SampleT& mean,
         std::size_t k
     ) const {
         auto score = wide_f(score_constants[k]);
@@ -136,19 +136,19 @@ struct diagonal_covariance_model {
                     eve::fma(wide_f(mean_times_precision), x, score)
                 );
             },
-            point,
+            sample,
             mean
         );
 
         return score;
     }
 
-    template <eve::product_type SimdPointT, class Ignore>
+    template <eve::product_type SimdSampleT, class Ignore>
     void accumulate_second_order(
         std::size_t k,
         wide_f resp,
-        const SimdPointT& point,
-        const point_cache& cache,
+        const SimdSampleT& sample,
+        const sample_cache& cache,
         Ignore ignore
     ) {
         kumi::for_each_index(
@@ -159,18 +159,18 @@ struct diagonal_covariance_model {
                     sum_x2_w[k][index]
                 );
             },
-            point
+            sample
         );
     }
 
-    void update_component_from_sufficient_statistics(
+    void update_cluster_from_sufficient_statistics(
         std::size_t k,
-        float nk,
-        const PointT& mean
+        float N_k,
+        const SampleT& mean
     ) {
         kumi::for_each_index(
             [&](auto index, auto mu) {
-                const float avg_x2 = eve::reduce(sum_x2_w[k][index]) / nk;
+                const float avg_x2 = eve::reduce(sum_x2_w[k][index]) / N_k;
                 const float mean_d = static_cast<float>(mu);
                 const float covariance = avg_x2 - mean_d * mean_d + reg_covar;
 

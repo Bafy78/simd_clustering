@@ -1,7 +1,12 @@
 from collections import defaultdict
 from typing import Any
 
-from benchmark_postprocess.naming import LANG_MAP, PHASE_MAP
+from benchmark_postprocess.naming import (
+    LANG_MAP,
+    PHASE_MAP,
+    format_config_id,
+    format_configuration,
+)
 from benchmark_postprocess.parity import compute_gmm_comparison
 from benchmark_postprocess.speedup import build_speedup_block, stable_child_seed
 from benchmark_postprocess.stats import summary_stats
@@ -42,9 +47,9 @@ def summarize_language_records(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "iterations": iterations[0],
-        "n_processes": len(process_ids),
-        "n_values": len(records),
-        "values_per_process": value_counts_by_process,
+        "process_count": len(process_ids),
+        "timing_value_count": len(records),
+        "timing_values_per_process": value_counts_by_process,
         "time_s": summary_stats([record["time_s"] for record in records]),
         "time_per_iteration_s": summary_stats(
             [record["time_per_iteration_s"] for record in records]
@@ -66,21 +71,21 @@ def build_summary(
     configs: dict[tuple[int, int, int], dict[str, Any]] = {}
 
     for (
-        dim,
-        samples,
-        clusters,
+        D,
+        N,
+        K,
         phase_key,
         language_key,
     ), group in sorted(grouped.items()):
-        config_key = (dim, samples, clusters)
+        config_key = (D, N, K)
 
         if config_key not in configs:
             configs[config_key] = {
-                "dimensions": dim,
-                "samples": samples,
-                "clusters": clusters,
-                "config_id": f"{dim}D_{samples}S_{clusters}K",
-                "configuration": f"{dim}D | {samples}S | {clusters}K",
+                "dimensions": D,
+                "samples": N,
+                "clusters": K,
+                "config_id": format_config_id(D, N, K),
+                "configuration": format_configuration(D, N, K),
                 "phases": {},
             }
 
@@ -99,17 +104,17 @@ def build_summary(
 
     # Add C++ vs Python speedup blocks.
     for config_key, config_entry in configs.items():
-        dim, samples, clusters = config_key
-        config_id = f"{dim}D_{samples}S_{clusters}K"
+        D, N, K = config_key
+        config_id = format_config_id(D, N, K)
 
         for phase_name, phase_entry in config_entry["phases"].items():
             phase_key = phase_entry["phase_key"]
 
             cpp_records = grouped.get(
-                (dim, samples, clusters, phase_key, "cpp"),
+                (D, N, K, phase_key, "cpp"),
             )
             py_records = grouped.get(
-                (dim, samples, clusters, phase_key, "py"),
+                (D, N, K, phase_key, "py"),
             )
 
             if cpp_records and py_records:
@@ -167,7 +172,10 @@ def build_summary(
                         }
                     )
 
-                if (config_id, "cpp") in gmm_metrics and (config_id, "py") in gmm_metrics:
+                if (config_id, "cpp") in gmm_metrics and (
+                    config_id,
+                    "py",
+                ) in gmm_metrics:
                     phase_entry["parity"] = compute_gmm_comparison(
                         gmm_metrics,
                         config_id=config_id,

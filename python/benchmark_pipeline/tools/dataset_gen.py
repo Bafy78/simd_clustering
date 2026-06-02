@@ -6,7 +6,6 @@ import numpy as np
 from sklearn.cluster import kmeans_plusplus
 from sklearn.datasets import make_blobs
 
-
 CovarianceType = Literal["full", "tied", "diag", "spherical"]
 
 
@@ -16,18 +15,18 @@ def nearest_center_labels(
     *,
     max_distance_cells: int = 25_000_000,
 ) -> np.ndarray:
-    """Assign each point to its closest initial center without materializing N×K for huge N."""
-    n_samples, n_features = X.shape
-    n_clusters = centers.shape[0]
-    chunk_size = max(1, max_distance_cells // max(1, n_clusters * n_features))
+    """Assign each sample to its closest initial centroid without materializing the full N×K matrix."""
+    N, D = X.shape
+    K = centers.shape[0]
+    chunk_size = max(1, max_distance_cells // max(1, K * D))
 
-    labels = np.empty(n_samples, dtype=np.intp)
+    labels = np.empty(N, dtype=np.intp)
 
     centers64 = np.asarray(centers, dtype=np.float64)
     center_norms = np.einsum("kd,kd->k", centers64, centers64)
 
-    for start in range(0, n_samples, chunk_size):
-        stop = min(start + chunk_size, n_samples)
+    for start in range(0, N, chunk_size):
+        stop = min(start + chunk_size, N)
         X_chunk = np.asarray(X[start:stop], dtype=np.float64)
 
         # ||x - c||² = ||x||² - 2 x·c + ||c||². The ||x||² term is irrelevant
@@ -40,13 +39,13 @@ def nearest_center_labels(
     return labels
 
 
-def _check_non_empty_components(counts: np.ndarray) -> None:
+def _check_non_empty_clusters(counts: np.ndarray) -> None:
     empty = np.flatnonzero(counts == 0)
     if empty.size:
         preview = ", ".join(str(int(k)) for k in empty[:10])
         raise RuntimeError(
-            "GMM initialization produced empty components. "
-            f"First empty component ids: {preview}"
+            "GMM initialization produced empty clusters. "
+            f"First empty cluster ids: {preview}"
         )
 
 
@@ -59,20 +58,20 @@ def _estimate_spherical_precisions(
     reg_covar: float,
     max_chunk_rows: int = 1_000_000,
 ) -> np.ndarray:
-    n_samples, n_features = X.shape
-    n_clusters = means.shape[0]
-    sq_sums = np.zeros(n_clusters, dtype=np.float64)
+    N, D = X.shape
+    K = means.shape[0]
+    sq_sums = np.zeros(K, dtype=np.float64)
     means64 = np.asarray(means, dtype=np.float64)
 
-    for start in range(0, n_samples, max_chunk_rows):
-        stop = min(start + max_chunk_rows, n_samples)
+    for start in range(0, N, max_chunk_rows):
+        stop = min(start + max_chunk_rows, N)
         labels_chunk = labels[start:stop]
         X_chunk = np.asarray(X[start:stop], dtype=np.float64)
         diff = X_chunk - means64[labels_chunk]
         dist_sq = np.einsum("ij,ij->i", diff, diff)
-        sq_sums += np.bincount(labels_chunk, weights=dist_sq, minlength=n_clusters)
+        sq_sums += np.bincount(labels_chunk, weights=dist_sq, minlength=K)
 
-    covariances = sq_sums / (counts.astype(np.float64) * float(n_features))
+    covariances = sq_sums / (counts.astype(np.float64) * float(D))
     covariances += reg_covar
     return 1.0 / covariances
 
@@ -86,22 +85,22 @@ def _estimate_diag_precisions(
     reg_covar: float,
     max_chunk_rows: int = 1_000_000,
 ) -> np.ndarray:
-    n_samples, n_features = X.shape
-    n_clusters = means.shape[0]
-    sq_sums = np.zeros((n_clusters, n_features), dtype=np.float64)
+    N, D = X.shape
+    K = means.shape[0]
+    sq_sums = np.zeros((K, D), dtype=np.float64)
     means64 = np.asarray(means, dtype=np.float64)
 
-    for start in range(0, n_samples, max_chunk_rows):
-        stop = min(start + max_chunk_rows, n_samples)
+    for start in range(0, N, max_chunk_rows):
+        stop = min(start + max_chunk_rows, N)
         labels_chunk = labels[start:stop]
         X_chunk = np.asarray(X[start:stop], dtype=np.float64)
         diff_sq = (X_chunk - means64[labels_chunk]) ** 2
 
-        for feature in range(n_features):
-            sq_sums[:, feature] += np.bincount(
+        for d in range(D):
+            sq_sums[:, d] += np.bincount(
                 labels_chunk,
-                weights=diff_sq[:, feature],
-                minlength=n_clusters,
+                weights=diff_sq[:, d],
+                minlength=K,
             )
 
     covariances = sq_sums / counts.astype(np.float64)[:, np.newaxis]
@@ -118,13 +117,13 @@ def _estimate_full_precisions(
     reg_covar: float,
     max_chunk_rows: int = 250_000,
 ) -> np.ndarray:
-    n_samples, n_features = X.shape
-    n_clusters = means.shape[0]
-    covariances = np.zeros((n_clusters, n_features, n_features), dtype=np.float64)
+    N, D = X.shape
+    K = means.shape[0]
+    covariances = np.zeros((K, D, D), dtype=np.float64)
     means64 = np.asarray(means, dtype=np.float64)
 
-    for start in range(0, n_samples, max_chunk_rows):
-        stop = min(start + max_chunk_rows, n_samples)
+    for start in range(0, N, max_chunk_rows):
+        stop = min(start + max_chunk_rows, N)
         labels_chunk = labels[start:stop]
         X_chunk = np.asarray(X[start:stop], dtype=np.float64)
 
@@ -135,7 +134,7 @@ def _estimate_full_precisions(
             covariances[cluster] += diff.T @ diff
 
     covariances /= counts.astype(np.float64)[:, np.newaxis, np.newaxis]
-    diag = np.arange(n_features)
+    diag = np.arange(D)
     covariances[:, diag, diag] += reg_covar
     return np.linalg.inv(covariances)
 
@@ -148,19 +147,19 @@ def _estimate_tied_precision(
     reg_covar: float,
     max_chunk_rows: int = 250_000,
 ) -> np.ndarray:
-    n_samples, n_features = X.shape
-    covariance = np.zeros((n_features, n_features), dtype=np.float64)
+    N, D = X.shape
+    covariance = np.zeros((D, D), dtype=np.float64)
     means64 = np.asarray(means, dtype=np.float64)
 
-    for start in range(0, n_samples, max_chunk_rows):
-        stop = min(start + max_chunk_rows, n_samples)
+    for start in range(0, N, max_chunk_rows):
+        stop = min(start + max_chunk_rows, N)
         labels_chunk = labels[start:stop]
         X_chunk = np.asarray(X[start:stop], dtype=np.float64)
         diff = X_chunk - means64[labels_chunk]
         covariance += diff.T @ diff
 
-    covariance /= float(n_samples)
-    diag = np.arange(n_features)
+    covariance /= float(N)
+    diag = np.arange(D)
     covariance[diag, diag] += reg_covar
     return np.linalg.inv(covariance)
 
@@ -179,7 +178,7 @@ def estimate_gmm_initial_parameters(
     """
     labels = nearest_center_labels(X, means)
     counts = np.bincount(labels, minlength=means.shape[0]).astype(np.int64)
-    _check_non_empty_components(counts)
+    _check_non_empty_clusters(counts)
 
     weights = counts.astype(np.float64) / float(X.shape[0])
 
@@ -226,9 +225,9 @@ def estimate_gmm_initial_parameters(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n-samples", type=int, required=True)
-    parser.add_argument("--n-features", type=int, required=True)
-    parser.add_argument("--n-clusters", type=int, required=True)
+    parser.add_argument("--D", type=int, required=True)
+    parser.add_argument("--N", type=int, required=True)
+    parser.add_argument("--K", type=int, required=True)
     parser.add_argument("--dataset-out", required=True)
     parser.add_argument("--centroids-out", required=True)
     parser.add_argument("--gmm-weights-out")
@@ -250,16 +249,16 @@ def main() -> None:
 
     # 1. Generate Dataset
     X, _, *_ = make_blobs(
-        n_samples=args.n_samples,
-        n_features=args.n_features,
-        centers=args.n_clusters,
+        n_samples=args.N,
+        n_features=args.D,
+        centers=args.K,
         random_state=42,
     )
     X_float32 = X.astype(np.float32)
     X_float32.tofile(args.dataset_out)
 
     # 2. Generate Initial Centroids
-    centers, _ = kmeans_plusplus(X_float32, n_clusters=args.n_clusters, random_state=42)
+    centers, _ = kmeans_plusplus(X_float32, n_clusters=args.K, random_state=42)
     centers_float32 = centers.astype(np.float32)
     centers_float32.tofile(args.centroids_out)
 

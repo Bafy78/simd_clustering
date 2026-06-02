@@ -4,29 +4,29 @@
 
 template<std::size_t D, std::size_t K_TILE>
 struct centroid_tiled_assignment_layout {
-    aligned_float_vector feature_major;
+    aligned_float_vector dimension_major;
     aligned_float_vector centroid_norm_sq;
 
-    std::size_t n_clusters = 0;
-    std::size_t feature_major_stride = 0;
+    std::size_t K = 0;
+    std::size_t dimension_major_stride = 0;
 
     void sync_from_row_major(const centroids_storage<D>& centroids) {
-        n_clusters = centroids.n_clusters;
-        feature_major_stride = round_up_to_multiple(n_clusters, K_TILE);
+        K = centroids.K;
+        dimension_major_stride = round_up_to_multiple(K, K_TILE);
 
-        feature_major.resize(D * feature_major_stride);
-        centroid_norm_sq.resize(n_clusters);
+        dimension_major.resize(D * dimension_major_stride);
+        centroid_norm_sq.resize(K);
 
-        for (std::size_t k = 0; k < n_clusters; ++k) {
+        for (std::size_t k = 0; k < K; ++k) {
             const float c = centroids.row_major[k * D];
-            feature_major.data()[k] = -2.0f * c;
+            dimension_major.data()[k] = -2.0f * c;
             centroid_norm_sq[k] = c * c;
         }
 
         for (std::size_t d = 1; d < D; ++d) {
-            float* dst = feature_major.data() + d * feature_major_stride;
+            float* dst = dimension_major.data() + d * dimension_major_stride;
 
-            for (std::size_t k = 0; k < n_clusters; ++k) {
+            for (std::size_t k = 0; k < K; ++k) {
                 const float c = centroids.row_major[k * D + d];
                 dst[k] = -2.0f * c;
                 centroid_norm_sq[k] += c * c;
@@ -42,21 +42,21 @@ struct centroid_tiled_assignment_layout {
 
         for (std::size_t d = 0; d < D; ++d) {
             const float c = centroids.row_major[k * D + d];
-            feature_major[d * feature_major_stride + k] = -2.0f * c;
+            dimension_major[d * dimension_major_stride + k] = -2.0f * c;
             norm += c * c;
         }
 
         centroid_norm_sq[k] = norm;
     }
 
-    const float* feature_centroids(std::size_t d) const {
-        return feature_major.data() + d * feature_major_stride;
+    const float* dimension_centroids(std::size_t d) const {
+        return dimension_major.data() + d * dimension_major_stride;
     }
 
-    template<std::size_t Feature>
-    const float* feature_centroids() const {
-        static_assert(Feature < D);
-        return feature_major.data() + Feature * feature_major_stride;
+    template<std::size_t Dimension>
+    const float* dimension_centroids() const {
+        static_assert(Dimension < D);
+        return dimension_major.data() + Dimension * dimension_major_stride;
     }
 };
 
@@ -96,44 +96,44 @@ inline void update_best_centroid(
     );
 }
 
-// Process N_TILES consecutive full compile-time centroid tiles while reusing each
-// loaded point feature across all tile groups.
+// Process K_TILE_GROUPS consecutive full compile-time centroid tiles while reusing each
+// loaded sample dimension across all tile groups.
 template<
     std::size_t K_COUNT,
-    std::size_t N_TILES,
+    std::size_t K_TILE_GROUPS,
     std::size_t D,
     std::size_t K_TILE,
     typename Ignore
 >
 inline void process_centroid_tiles(
-    points_soa_view<D> points,
+    samples_soa_view<D> samples,
     const centroid_tiled_assignment_layout<D, K_TILE>& layout,
-    std::size_t sample_i,
+    std::size_t n,
     std::size_t k0,
     Ignore ignore,
     wide_f& best_dist,
     wide_i& best_k
 ) {
-    constexpr std::size_t TOTAL_TILE = K_COUNT * N_TILES;
+    constexpr std::size_t TOTAL_TILE = K_COUNT * K_TILE_GROUPS;
     auto scores = kumi::generate<TOTAL_TILE>([&](auto index) {
         return wide_f(layout.centroid_norm_sq[k0 + index]);
     });
 
     for (std::size_t d = 0; d < D; ++d) {
-        // points are feature-major:
-        //     points[d][sample_i : sample_i + SIMD_WIDTH]
+        // samples are dimension-major:
+        //     samples[d][n : n + SIMD_WIDTH]
         //
-        // feature_major stores the assignment coefficient -2*c:
+        // dimension_major stores the assignment coefficient -2*c:
         //     score = ||c||^2 + sum_d x[d] * (-2*c[d])
         auto x = eve::load[ignore](
-            eve::as_aligned(points.feature(d) + sample_i)
+            eve::as_aligned(samples.dimension(d) + n)
         );
 
-        const float* centroid_feature =
-            layout.feature_centroids(d) + k0;
+        const float* centroid_dimension =
+            layout.dimension_centroids(d) + k0;
 
         kumi::for_each_index([&](auto index, auto& score) {
-            auto neg_two_c = wide_f(centroid_feature[index]);
+            auto neg_two_c = wide_f(centroid_dimension[index]);
 
             score = eve::fma(x, neg_two_c, score);
         }, scores);
@@ -151,24 +151,24 @@ inline void process_centroid_tiles(
     }, scores);
 }
 
-template<std::size_t N_TILES, std::size_t D, std::size_t K_TILE, typename Ignore>
+template<std::size_t K_TILE_GROUPS, std::size_t D, std::size_t K_TILE, typename Ignore>
 inline void process_full_centroid_tile_groups(
-    points_soa_view<D> points,
+    samples_soa_view<D> samples,
     const centroid_tiled_assignment_layout<D, K_TILE>& layout,
-    std::size_t sample_i,
+    std::size_t n,
     std::size_t& k0,
     std::size_t K,
     Ignore ignore,
     wide_f& best_dist,
     wide_i& best_k
 ) {
-    constexpr std::size_t K_GROUP_TILE = N_TILES * K_TILE;
+    constexpr std::size_t K_GROUP_TILE = K_TILE_GROUPS * K_TILE;
 
     for (; k0 + K_GROUP_TILE <= K; k0 += K_GROUP_TILE) {
-        process_centroid_tiles<K_TILE, N_TILES>(
-            points,
+        process_centroid_tiles<K_TILE, K_TILE_GROUPS>(
+            samples,
             layout,
-            sample_i,
+            n,
             k0,
             ignore,
             best_dist,
@@ -176,11 +176,11 @@ inline void process_full_centroid_tile_groups(
         );
     }
 
-    if constexpr (N_TILES > 1) {
-        process_full_centroid_tile_groups<N_TILES - 1>(
-            points,
+    if constexpr (K_TILE_GROUPS > 1) {
+        process_full_centroid_tile_groups<K_TILE_GROUPS - 1>(
+            samples,
             layout,
-            sample_i,
+            n,
             k0,
             K,
             ignore,
@@ -193,9 +193,9 @@ inline void process_full_centroid_tile_groups(
 // Compile-time exact tail dispatch.
 template<std::size_t TAIL, std::size_t D, std::size_t K_TILE, typename Ignore>
 inline void process_centroid_tail_exact(
-    points_soa_view<D> points,
+    samples_soa_view<D> samples,
     const centroid_tiled_assignment_layout<D, K_TILE>& layout,
-    std::size_t sample_i,
+    std::size_t n,
     std::size_t k0,
     std::size_t remaining,
     Ignore ignore,
@@ -204,9 +204,9 @@ inline void process_centroid_tail_exact(
 ) {
     if (remaining == TAIL) {
         process_centroid_tiles<TAIL, 1>(
-            points,
+            samples,
             layout,
-            sample_i,
+            n,
             k0,
             ignore,
             best_dist,
@@ -214,9 +214,9 @@ inline void process_centroid_tail_exact(
         );
     } else if constexpr (TAIL > 1) {
         process_centroid_tail_exact<TAIL - 1>(
-            points,
+            samples,
             layout,
-            sample_i,
+            n,
             k0,
             remaining,
             ignore,
@@ -228,13 +228,13 @@ inline void process_centroid_tail_exact(
 
 template<bool TrackChanges, std::size_t D, std::size_t K_TILE, typename Ignore>
 inline bool assign_one_sample_block_tiled(
-    points_soa_view<D> points,
+    samples_soa_view<D> samples,
     const centroid_tiled_assignment_layout<D, K_TILE>& layout,
-    std::size_t sample_i,
+    std::size_t n,
     Ignore ignore,
     int* assignment_ptr
 ) {
-    const std::size_t K = layout.n_clusters;
+    const std::size_t K = layout.K;
 
     auto assignment_aligned_ptr = eve::as_aligned(
         assignment_ptr, typename wide_i::cardinal_type{}
@@ -245,12 +245,12 @@ inline bool assign_one_sample_block_tiled(
 
     std::size_t k0 = 0;
 
-    constexpr std::size_t N_TILES_AT_ONCE = centroid_tiles_at_once<K_TILE>();
+    constexpr std::size_t K_TILE_GROUPS_AT_ONCE = centroid_tiles_at_once<K_TILE>();
 
-    process_full_centroid_tile_groups<N_TILES_AT_ONCE>(
-        points,
+    process_full_centroid_tile_groups<K_TILE_GROUPS_AT_ONCE>(
+        samples,
         layout,
-        sample_i,
+        n,
         k0,
         K,
         ignore,
@@ -263,9 +263,9 @@ inline bool assign_one_sample_block_tiled(
 
         if (remaining != 0) {
             process_centroid_tail_exact<K_TILE - 1>(
-                points,
+                samples,
                 layout,
-                sample_i,
+                n,
                 k0,
                 remaining,
                 ignore,
@@ -290,59 +290,59 @@ inline bool assign_one_sample_block_tiled(
 }
 
 template<bool TrackChanges, std::size_t D, std::size_t K_TILE>
-bool assign_points_to_centroids_tiled_impl(
-    points_soa_view<D> points,
+bool assign_samples_to_centroids_tiled_impl(
+    samples_soa_view<D> samples,
     const centroid_tiled_assignment_layout<D, K_TILE>& layout,
     std::span<int> assignments
 ) {
     constexpr std::size_t card = simd_cardinal();
-    const std::size_t n = points.n_samples;
+    const std::size_t N = samples.N;
 
     bool any_changed = false;
-    std::size_t i = 0;
+    std::size_t n = 0;
 
-    auto assign_block = [&](std::size_t sample_i, auto ignore) {
+    auto assign_block = [&](std::size_t n, auto ignore) {
         if constexpr (TrackChanges) {
             if (!any_changed) {
                 any_changed =
                     assign_one_sample_block_tiled<true>(
-                        points,
+                        samples,
                         layout,
-                        sample_i,
+                        n,
                         ignore,
-                        assignments.data() + sample_i
+                        assignments.data() + n
                     );
             } else {
                 (void)assign_one_sample_block_tiled<false>(
-                    points,
+                    samples,
                     layout,
-                    sample_i,
+                    n,
                     ignore,
-                    assignments.data() + sample_i
+                    assignments.data() + n
                 );
             }
         } else {
             (void)assign_one_sample_block_tiled<false>(
-                points,
+                samples,
                 layout,
-                sample_i,
+                n,
                 ignore,
-                assignments.data() + sample_i
+                assignments.data() + n
             );
         }
     };
 
     // Fast unmasked main loop.
-    for (; i + card <= n; i += card) {
-        assign_block(i, eve::ignore_none);
+    for (; n + card <= N; n += card) {
+        assign_block(n, eve::ignore_none);
     }
 
     // Masked tail only.
-    if (i < n) {
-        const std::size_t valid = n - i;
+    if (n < N) {
+        const std::size_t valid = N - n;
         const std::size_t ignored_lanes = card - valid;
 
-        assign_block(i, eve::ignore_last(ignored_lanes));
+        assign_block(n, eve::ignore_last(ignored_lanes));
     }
 
     return any_changed;
@@ -353,26 +353,26 @@ bool assign_points_to_centroids_tiled_impl(
 // The main loop is unmasked; only the final tail block uses ignore_last.
 // assignments.data() must be SIMD-aligned
 template<std::size_t D, std::size_t K_TILE>
-void assign_points_to_centroids_tiled(
-    points_soa_view<D> points,
+void assign_samples_to_centroids_tiled(
+    samples_soa_view<D> samples,
     const centroid_tiled_assignment_layout<D, K_TILE>& layout,
     std::span<int> assignments
 ) {
-    (void)assign_points_to_centroids_tiled_impl<false>(
-        points,
+    (void)assign_samples_to_centroids_tiled_impl<false>(
+        samples,
         layout,
         assignments
     );
 }
 
 template<std::size_t D, std::size_t K_TILE>
-bool assign_points_to_centroids_tiled_and_check_changed(
-    points_soa_view<D> points,
+bool assign_samples_to_centroids_tiled_and_check_changed(
+    samples_soa_view<D> samples,
     const centroid_tiled_assignment_layout<D, K_TILE>& layout,
     std::span<int> assignments
 ) {
-    return assign_points_to_centroids_tiled_impl<true>(
-        points,
+    return assign_samples_to_centroids_tiled_impl<true>(
+        samples,
         layout,
         assignments
     );
@@ -390,36 +390,36 @@ struct centroid_tiled_assignment_backend {
         const centroids_storage<D>& centroids,
         std::span<const int> dirty_clusters
     ) {
-        if (dirty_clusters.size() * 2 > centroids.n_clusters) {
+        if (dirty_clusters.size() * 2 > centroids.K) {
             on_centroids_changed(centroids);
             return;
         }
 
-        for (int cluster_idx : dirty_clusters) {
+        for (int k : dirty_clusters) {
             layout.update_cluster_from_row_major(
                 centroids,
-                static_cast<std::size_t>(cluster_idx)
+                static_cast<std::size_t>(k)
             );
         }
     }
 
     void assign(
-        points_soa_view<D> points,
+        samples_soa_view<D> samples,
         std::span<int> assignments
     ) const {
-        assign_points_to_centroids_tiled<D, K_TILE>(
-            points,
+        assign_samples_to_centroids_tiled<D, K_TILE>(
+            samples,
             layout,
             assignments
         );
     }
 
     bool assign_and_check_changed(
-        points_soa_view<D> points,
+        samples_soa_view<D> samples,
         std::span<int> assignments
     ) const {
-        return assign_points_to_centroids_tiled_and_check_changed<D, K_TILE>(
-            points,
+        return assign_samples_to_centroids_tiled_and_check_changed<D, K_TILE>(
+            samples,
             layout,
             assignments
         );

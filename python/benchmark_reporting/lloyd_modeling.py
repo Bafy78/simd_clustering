@@ -37,8 +37,8 @@ DEFAULT_SAMPLE_SCALE = 1_000.0
 
 ALL_COMBO_MODEL_NAME = (
     "amortized all-square-combinations model: "
-    "setup(all N,K,D monomials up to squares) + "
-    "iterations × iter(all N,K,D monomials up to squares)"
+    "setup(all D,N,K monomials up to squares) + "
+    "iterations × iter(all D,N,K monomials up to squares)"
 )
 
 
@@ -71,7 +71,7 @@ def prepare_lloyd_model_data(df_lloyd: pd.DataFrame) -> pd.DataFrame:
         df_model[COL_TIME_S] / df_model[COL_ITERATIONS] * 1_000
     )
     df_model[COL_TOTAL_TIME_MS] = df_model[COL_TIME_S] * 1_000
-    df_model[COL_WORK_SIZE] = df_model[COL_SAMPLES] * df_model[COL_DIMENSIONS]
+    df_model[COL_WORK_SIZE] = df_model[COL_DIMENSIONS] * df_model[COL_SAMPLES]
 
     return df_model[
         df_model[COL_TIME_PER_ITER_MS].gt(0)
@@ -95,7 +95,7 @@ def fit_lloyd_timing_models(
 
     ``sample_scale`` keeps the numerical conditioning of the original notebook
     cell, which fitted sample-count terms in thousands, without mutating the
-    public ``Samples`` column in the returned prediction dataframe.
+    public ``N`` column in the returned prediction dataframe.
     """
     df_model = prepare_lloyd_model_data(df_lloyd)
 
@@ -332,9 +332,9 @@ def _build_all_square_combination_terms(
 ) -> tuple[np.ndarray, list[str], list[tuple[int, ...]]]:
     names = [name for name, _ in variable_specs]
     values = [np.asarray(values, dtype=float) for _, values in variable_specs]
-    n_rows = len(values[0])
+    row_count = len(values[0])
 
-    columns = [np.ones(n_rows)]
+    columns = [np.ones(row_count)]
     terms = ["Intercept"]
     powers_list = [tuple(0 for _ in values)]
 
@@ -346,7 +346,7 @@ def _build_all_square_combination_terms(
     exponent_rows.sort(key=lambda powers: (sum(powers), tuple(-p for p in powers)))
 
     for powers in exponent_rows:
-        col = np.ones(n_rows)
+        col = np.ones(row_count)
         pieces = []
 
         for name, value, power in zip(names, values, powers):
@@ -370,7 +370,7 @@ def _fit_log_error_positive_linear_model(
     y = np.asarray(y, dtype=float)
 
     # Improves conditioning for high-degree terms while returning coefficients
-    # in the original unscaled feature units.
+    # in the original unscaled variable units.
     col_scale = np.maximum(np.nanmedian(np.abs(x), axis=0), 1.0)
     x_scaled = x / col_scale
 
@@ -406,21 +406,21 @@ def _fit_amortized_model(
     vif_threshold: float,
     sample_scale: float,
 ) -> _FittedLloydModel:
-    samples = df_lang[COL_SAMPLES].to_numpy(dtype=float) / sample_scale
-    clusters = df_lang[COL_CLUSTERS].to_numpy(dtype=float)
-    dimensions = df_lang[COL_DIMENSIONS].to_numpy(dtype=float)
+    D = df_lang[COL_DIMENSIONS].to_numpy(dtype=float)
+    N = df_lang[COL_SAMPLES].to_numpy(dtype=float) / sample_scale
+    K = df_lang[COL_CLUSTERS].to_numpy(dtype=float)
     iterations = df_lang[COL_ITERATIONS].to_numpy(dtype=float)
 
     x_base, terms, powers_list = _build_all_square_combination_terms(
         [
-            (COL_SAMPLES, samples),
-            (COL_CLUSTERS, clusters),
-            (COL_DIMENSIONS, dimensions),
+            (COL_DIMENSIONS, D),
+            (COL_SAMPLES, N),
+            (COL_CLUSTERS, K),
         ],
         max_power=MAX_TERM_POWER,
     )
 
-    n_terms = len(terms)
+    term_count = len(terms)
     x_full = np.column_stack(
         [
             x_base,
@@ -447,7 +447,7 @@ def _fit_amortized_model(
     # Usually keep both intercept-like terms.
     mandatory_mask = np.zeros(x_full.shape[1], dtype=bool)
     mandatory_mask[0] = True  # setup intercept
-    mandatory_mask[n_terms] = True  # iteration intercept
+    mandatory_mask[term_count] = True  # iteration intercept
 
     keep_mask, df_collinearity_removed = _prune_collinear_columns(
         x_full,
@@ -464,8 +464,8 @@ def _fit_amortized_model(
     full_coef = np.zeros(x_full.shape[1])
     full_coef[keep_mask] = kept_coef
 
-    setup_coef = full_coef[:n_terms]
-    iter_coef = full_coef[n_terms:]
+    setup_coef = full_coef[:term_count]
+    iter_coef = full_coef[term_count:]
 
     setup_y_hat = x_base @ setup_coef
     iter_y_hat = x_base @ iter_coef

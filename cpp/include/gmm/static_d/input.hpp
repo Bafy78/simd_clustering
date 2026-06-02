@@ -10,37 +10,37 @@
 #include "../../layout/static_soa.hpp"
 
 template<std::size_t D>
-std::vector<static_point_type<D>> make_static_means_from_aos(
+std::vector<static_sample_type<D>> make_static_means_from_aos(
     std::span<const float> aos,
-    std::size_t n_components
+    std::size_t K
 ) {
-    return make_static_vectors_from_aos<D>(aos, n_components, "means");
+    return make_static_vectors_from_aos<D>(aos, K, "means");
 }
 
-inline eve::algo::soa_vector<PointType> read_static_gmm_points_binary(
+inline eve::algo::soa_vector<SampleType> read_static_gmm_samples_binary(
     const std::string& filename,
-    std::size_t n_samples
+    std::size_t N
 ) {
-    auto raw_points = read_aos_f32(filename, n_samples, TUPLE_SIZE);
-    return make_static_points_from_aos<TUPLE_SIZE>(raw_points, n_samples);
+    auto raw_samples = read_aos_f32(filename, N, D);
+    return make_static_samples_from_aos<D>(raw_samples, N);
 }
 
-inline std::vector<PointType> read_static_gmm_means_binary(
+inline std::vector<SampleType> read_static_gmm_means_binary(
     const std::string& filename,
-    int n_components
+    int K
 ) {
-    if (n_components <= 0) {
-        throw std::runtime_error("Invalid number of GMM components");
+    if (K <= 0) {
+        throw std::runtime_error("Invalid number of GMM clusters");
     }
 
     auto raw_means = read_aos_f32(
         filename,
-        static_cast<std::size_t>(n_components),
-        TUPLE_SIZE
+        static_cast<std::size_t>(K),
+        D
     );
 
-    return make_static_means_from_aos<TUPLE_SIZE>(
+    return make_static_means_from_aos<D>(
         raw_means,
-        static_cast<std::size_t>(n_components)
+        static_cast<std::size_t>(K)
     );
 }

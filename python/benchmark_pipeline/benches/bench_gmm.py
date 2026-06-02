@@ -24,15 +24,15 @@ def import_runtime_deps():
     threadpool_limits = _threadpool_limits
 
 
-def covariance_shape(covariance_type, n_clusters, n_features):
+def covariance_shape(covariance_type, K, D):
     if covariance_type == "full":
-        return (n_clusters, n_features, n_features)
+        return (K, D, D)
     if covariance_type == "tied":
-        return (n_features, n_features)
+        return (D, D)
     if covariance_type == "diag":
-        return (n_clusters, n_features)
+        return (K, D)
     if covariance_type == "spherical":
-        return (n_clusters,)
+        return (K,)
     raise RuntimeError(f"Unsupported covariance_type: {covariance_type!r}")
 
 
@@ -41,7 +41,7 @@ def load_dataset(args):
         args.dataset_bin,
         dtype=np.float32,
         mode="r",
-        shape=(args.n_samples, args.n_features),
+        shape=(args.N, args.D),
     )
 
 
@@ -50,7 +50,7 @@ def load_gmm_weights(args):
         args.gmm_weights_bin,
         dtype=np.float32,
         mode="r",
-        shape=(args.n_clusters,),
+        shape=(args.K,),
     )
 
 
@@ -59,7 +59,7 @@ def load_gmm_means(args):
         args.gmm_means_bin,
         dtype=np.float32,
         mode="r",
-        shape=(args.n_clusters, args.n_features),
+        shape=(args.K, args.D),
     )
 
 
@@ -68,14 +68,14 @@ def load_gmm_precisions(args):
         args.gmm_precisions_bin,
         dtype=np.float32,
         mode="r",
-        shape=covariance_shape(args.covariance_type, args.n_clusters, args.n_features),
+        shape=covariance_shape(args.covariance_type, args.K, args.D),
     )
 
 
-def run_gmm_fit(X, n_clusters, covariance_type, weights, means, precisions):
+def run_gmm_fit(X, K, covariance_type, weights, means, precisions):
     with threadpool_limits(limits=1):
         gmm = GaussianMixture(
-            n_components=n_clusters,
+            n_components=K,
             covariance_type=covariance_type,
             tol=GMM_DEFAULT_TOL,
             reg_covar=GMM_DEFAULT_REG_COVAR,
@@ -118,9 +118,9 @@ def write_gmm_metrics(path, *, gmm, covariance_type):
 
 def append_custom_args(cmd, args):
     cmd.extend(["--dataset-bin", args.dataset_bin])
-    cmd.extend(["--n-samples", str(args.n_samples)])
-    cmd.extend(["--n-features", str(args.n_features)])
-    cmd.extend(["--n-clusters", str(args.n_clusters)])
+    cmd.extend(["--D", str(args.D)])
+    cmd.extend(["--N", str(args.N)])
+    cmd.extend(["--K", str(args.K)])
     cmd.extend(["--covariance-type", args.covariance_type])
     cmd.extend(["--gmm-weights-bin", args.gmm_weights_bin])
     cmd.extend(["--gmm-means-bin", args.gmm_means_bin])
@@ -135,9 +135,9 @@ if __name__ == "__main__":
     )
 
     runner.argparser.add_argument("--dataset-bin", required=True)
-    runner.argparser.add_argument("--n-samples", type=int, required=True)
-    runner.argparser.add_argument("--n-features", type=int, required=True)
-    runner.argparser.add_argument("--n-clusters", type=int, required=True)
+    runner.argparser.add_argument("--D", type=int, required=True)
+    runner.argparser.add_argument("--N", type=int, required=True)
+    runner.argparser.add_argument("--K", type=int, required=True)
     runner.argparser.add_argument(
         "--covariance-type",
         choices=("full", "tied", "diag", "spherical"),
@@ -167,7 +167,7 @@ if __name__ == "__main__":
         "gmm_em_py",
         run_gmm_fit,
         X,
-        args.n_clusters,
+        args.K,
         args.covariance_type,
         weights,
         means,
@@ -184,7 +184,7 @@ if __name__ == "__main__":
 
         final_gmm = run_gmm_fit(
             X,
-            args.n_clusters,
+            args.K,
             args.covariance_type,
             weights,
             means,

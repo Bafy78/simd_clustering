@@ -49,72 +49,68 @@ inline std::size_t round_up_to_multiple(std::size_t n, std::size_t multiple) {
     return ((n + multiple - 1) / multiple) * multiple;
 }
 
-// Compile-time-D feature-major point view:
-//     points[d][i]
+// Compile-time-D dimension-major sample view:
+//     samples[d][i]
 //
 // D is compile-time.
-// stride is runtime because n_samples is runtime.
-// stride is padded to SIMD cardinality so each feature column can be loaded safely in SIMD chunks.
+// stride is runtime because N is runtime.
+// stride is padded to SIMD cardinality so each dimension column can be loaded safely in SIMD chunks.
 template<std::size_t D>
-struct points_soa_view {
-    static constexpr std::size_t n_features = D;
-
+struct samples_soa_view {
     float* data = nullptr;
 
-    std::size_t n_samples = 0;
+    std::size_t N = 0;
     std::size_t stride = 0;
 
-    float* feature(std::size_t d) const {
+    float* dimension(std::size_t d) const {
         return data + d * stride;
     }
 };
 
 template<std::size_t D>
-struct points_soa_storage {
-    static constexpr std::size_t n_features = D;
-
+struct samples_soa_storage {
     no_init_aligned_float_vector data;
 
-    std::size_t n_samples = 0;
+    std::size_t N = 0;
     std::size_t stride = 0;
 
-    points_soa_storage() = default;
+    samples_soa_storage() = default;
 
-    explicit points_soa_storage(std::size_t samples) {
-        resize(samples);
+    explicit samples_soa_storage(std::size_t N) {
+        resize(N);
     }
 
-    void resize(std::size_t samples) {
-        n_samples = samples;
-        stride = round_up_to_multiple(samples, simd_cardinal());
+    void resize(std::size_t new_N) {
+        N = new_N;
+        stride = round_up_to_multiple(new_N, simd_cardinal());
 
         data.resize(D * stride);
     }
 
-    float& operator()(std::size_t sample, std::size_t feature) {
-        return data[feature * stride + sample];
+    float& operator()(std::size_t n, std::size_t d) {
+        return data[d * stride + n];
     }
 
-    float operator()(std::size_t sample, std::size_t feature) const {
-        return data[feature * stride + sample];
+    float operator()(std::size_t n, std::size_t d) const {
+        return data[d * stride + n];
     }
 
-    const float* feature(std::size_t d) const {
+    const float* dimension(std::size_t d) const {
         return data.data() + d * stride;
     }
 
-    points_soa_view<D> view() {
-        return points_soa_view<D>{
+    samples_soa_view<D> view() {
+        return samples_soa_view<D>{
             .data = data.data(),
-            .n_samples = n_samples,
+            .N = N,
             .stride = stride,
         };
     }
 
-    points_soa_view<D> view() const {
-        return points_soa_view<D>{
+    samples_soa_view<D> view() const {
+        return samples_soa_view<D>{
             .data = const_cast<float*>(data.data()),
-            .n_samples = n_samples,
+            .N = N,
             .stride = stride,
         };
     }

@@ -49,18 +49,18 @@ inline const char* to_string(gmm_covariance_type covariance_type) {
 
 inline std::size_t gmm_precision_value_count(
     gmm_covariance_type covariance_type,
-    std::size_t n_components,
-    std::size_t n_features
+    std::size_t K,
+    std::size_t D
 ) {
     switch (covariance_type) {
     case gmm_covariance_type::spherical:
-        return n_components;
+        return K;
     case gmm_covariance_type::diag:
-        return n_components * n_features;
+        return K * D;
     case gmm_covariance_type::full:
-        return n_components * n_features * n_features;
+        return K * D * D;
     case gmm_covariance_type::tied:
-        return n_features * n_features;
+        return D * D;
     }
 
     throw std::runtime_error("Unknown GMM covariance_type");
@@ -68,8 +68,8 @@ inline std::size_t gmm_precision_value_count(
 
 inline std::size_t gmm_covariance_value_count(
     gmm_covariance_type covariance_type,
-    std::size_t n_components,
-    std::size_t n_features
+    std::size_t K,
+    std::size_t D
 ) {
-    return gmm_precision_value_count(covariance_type, n_components, n_features);
+    return gmm_precision_value_count(covariance_type, K, D);
 }

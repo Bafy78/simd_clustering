@@ -15,13 +15,13 @@ struct dynamic_soa_case {
 
     static std::string nanobench_usage(const char* program) {
         return std::string("Usage: ") + program
-            + " <binary_file> <n_samples> <nanobench_json_out>"
+            + " <binary_file> <N> <nanobench_json_out>"
               " <bench_epochs> <min_epoch_seconds>";
     }
 
     static std::string callgrind_usage(const char* program) {
         return std::string("Usage: ") + program
-            + " <dataset_bin> <n_samples>";
+            + " <dataset_bin> <N>";
     }
 
     static dynamic_soa_case make_for_nanobench(int, char* argv[]) {
@@ -45,7 +45,7 @@ struct dynamic_soa_case {
     }
 
     std::string title() const {
-        return "EVE K-Means " + std::to_string(TUPLE_SIZE) + "D (AoS to Native Layout)";
+        return "EVE K-Means " + std::to_string(D) + "D (AoS to Native Layout)";
     }
 
     std::string run_name() const {
@@ -57,25 +57,25 @@ struct dynamic_soa_case {
     double min_epoch_seconds() const { return min_epoch_seconds_; }
 
     void run_once() {
-        copy_aos_to_dynamic_points<TUPLE_SIZE>(raw_aos_data_, n_samples_, points_);
+        copy_aos_to_dynamic_samples<D>(raw_aos_data_, N_, samples_);
     }
 
     void keep_alive() const {
-        ankerl::nanobench::doNotOptimizeAway(points_.data.data());
-        ankerl::nanobench::doNotOptimizeAway(points_.data.size());
+        ankerl::nanobench::doNotOptimizeAway(samples_.data.data());
+        ankerl::nanobench::doNotOptimizeAway(samples_.data.size());
     }
 
     void write_outputs() const {}
 
 private:
-    dynamic_soa_case(const std::string& dataset_bin, std::size_t n_samples)
-        : n_samples_(n_samples),
-          raw_aos_data_(read_aos_f32(dataset_bin, n_samples_, TUPLE_SIZE)),
-          points_(n_samples_) {}
+    dynamic_soa_case(const std::string& dataset_bin, std::size_t N)
+        : N_(N),
+          raw_aos_data_(read_aos_f32(dataset_bin, N_, D)),
+          samples_(N_) {}
 
-    std::size_t n_samples_ = 0;
+    std::size_t N_ = 0;
     std::vector<float> raw_aos_data_;
-    points_soa_storage<TUPLE_SIZE> points_;
+    samples_soa_storage<D> samples_;
 
     std::string nanobench_json_out_;
     std::size_t bench_epochs_ = 0;

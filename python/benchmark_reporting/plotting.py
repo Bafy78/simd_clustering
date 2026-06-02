@@ -9,16 +9,16 @@ import re
 from matplotlib.lines import Line2D
 
 
-def create_subplot_grid(n_plots, cols=2, row_height=5, fig_width=12):
+def create_subplot_grid(plot_count, cols=2, row_height=5, fig_width=12):
     """Handles the boilerplate for dynamic grid layouts and unused axes."""
-    rows = math.ceil(n_plots / cols)
+    rows = math.ceil(plot_count / cols)
     fig, axes = plt.subplots(
         nrows=rows, ncols=cols, figsize=(fig_width, row_height * rows)
     )
 
-    axes = axes.flatten() if n_plots > 1 else np.array([axes])
+    axes = axes.flatten() if plot_count > 1 else np.array([axes])
 
-    for j in range(n_plots, len(axes)):
+    for j in range(plot_count, len(axes)):
         fig.delaxes(axes[j])
 
     return fig, axes
@@ -349,9 +349,9 @@ def plot_clustered_heatmap_grid(
                 heat_raw=heat_raw,
             )
 
-        ax.set_title(f"Clusters: {cluster}", bbox=SMALL_MULTIPLE_TITLE_STYLE)
-        ax.set_xlabel("Number of Samples")
-        ax.set_ylabel("Dimensions" if i % 2 == 0 else "")
+        ax.set_title(f"{COL_CLUSTERS}: {cluster}", bbox=SMALL_MULTIPLE_TITLE_STYLE)
+        ax.set_xlabel(COL_SAMPLES)
+        ax.set_ylabel(COL_DIMENSIONS if i % 2 == 0 else "")
         ax.tick_params(axis="x", labelrotation=0)
 
     for ax in axes_flat[len(clusters) :]:

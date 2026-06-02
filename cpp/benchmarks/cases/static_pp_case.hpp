@@ -16,13 +16,13 @@ struct static_pp_case {
 
     static std::string nanobench_usage(const char* program) {
         return std::string("Usage: ") + program
-            + " <binary_file> <n_samples> <n_clusters> <nanobench_json_out>"
+            + " <binary_file> <N> <K> <nanobench_json_out>"
               " <bench_epochs> <min_epoch_seconds>";
     }
 
     static std::string callgrind_usage(const char* program) {
         return std::string("Usage: ") + program
-            + " <dataset_bin> <n_samples> <n_clusters>";
+            + " <dataset_bin> <N> <K>";
     }
 
     static static_pp_case make_for_nanobench(int, char* argv[]) {
@@ -48,7 +48,7 @@ struct static_pp_case {
     }
 
     std::string title() const {
-        return "EVE K-Means " + std::to_string(TUPLE_SIZE) + "D (K-Means++ Init)";
+        return "EVE K-Means " + std::to_string(D) + "D (K-Means++ Init)";
     }
 
     std::string run_name() const {
@@ -60,7 +60,7 @@ struct static_pp_case {
     double min_epoch_seconds() const { return min_epoch_seconds_; }
 
     void run_once() {
-        final_centroids_ = greedy_kmeans_pp_init(points_, n_clusters_);
+        final_centroids_ = greedy_kmeans_pp_init(samples_, K_);
     }
 
     void keep_alive() const {
@@ -72,21 +72,21 @@ struct static_pp_case {
 private:
     static_pp_case(
         const std::string& dataset_bin,
-        std::size_t n_samples,
-        int n_clusters
+        std::size_t N,
+        int K
     )
-        : n_samples_(n_samples),
-          n_clusters_(n_clusters) {
-        auto raw_points = read_aos_f32(dataset_bin, n_samples_, TUPLE_SIZE);
-        points_ = make_static_points_from_aos<TUPLE_SIZE>(raw_points, n_samples_);
+        : N_(N),
+          K_(K) {
+        auto raw_samples = read_aos_f32(dataset_bin, N_, D);
+        samples_ = make_static_samples_from_aos<D>(raw_samples, N_);
     }
 
-    std::size_t n_samples_ = 0;
-    int n_clusters_ = 0;
+    std::size_t N_ = 0;
+    int K_ = 0;
     std::string nanobench_json_out_;
     std::size_t bench_epochs_ = 0;
     double min_epoch_seconds_ = 0.0;
 
-    static_points_soa_vector<TUPLE_SIZE> points_;
-    std::vector<PointType> final_centroids_;
+    static_samples_soa_vector<D> samples_;
+    std::vector<SampleType> final_centroids_;
 };

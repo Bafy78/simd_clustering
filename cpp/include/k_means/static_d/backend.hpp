@@ -16,25 +16,25 @@
 using wide_f = kmeans::wide_f;
 using wide_i = kmeans::wide_i;
 
-template <typename SimdPoint, typename PointType>
+template <typename SimdSample, typename SampleType>
 auto compute_simd_assignment_score(
-    const SimdPoint& pt,
-    const PointType& centroid,
+    const SimdSample& sample,
+    const SampleType& centroid,
     float centroid_norm_sq
 ) {
     auto dot = eve::zero(eve::as<wide_f>());
 
     kumi::for_each([&](auto p, auto c) {
         dot = eve::fma(p, wide_f(c), dot);
-    }, pt, centroid);
+    }, sample, centroid);
 
     return eve::fma(dot, wide_f(-2.0f), wide_f(centroid_norm_sq));
 }
 
-template <typename SimdPoint, typename PointType>
+template <typename SimdSample, typename SampleType>
 wide_i compute_closest_centroid_labels(
-    const SimdPoint& pt,
-    const std::vector<PointType>& centroids,
+    const SimdSample& sample,
+    const std::vector<SampleType>& centroids,
     std::span<const float> centroid_norms
 ) {
     auto min_distances = eve::valmax(eve::as<wide_f>());
@@ -42,7 +42,7 @@ wide_i compute_closest_centroid_labels(
 
     for (std::size_t k = 0; k < centroids.size(); ++k) {
         auto assignment_score = compute_simd_assignment_score(
-            pt,
+            sample,
             centroids[k],
             centroid_norms[k]
         );
@@ -61,10 +61,10 @@ wide_i compute_closest_centroid_labels(
     return closest_centroid_labels;
 }
 
-template <bool TrackChanges = false, eve::algo::relaxed_range R, typename PointType>
-bool assign_points_to_centroids(
+template <bool TrackChanges = false, eve::algo::relaxed_range R, typename SampleType>
+bool assign_samples_to_centroids(
     R&& zipped_data,
-    const std::vector<PointType>& centroids,
+    const std::vector<SampleType>& centroids,
     std::span<const float> centroid_norms
 ) {
     bool any_changed = false;
@@ -73,10 +73,10 @@ bool assign_points_to_centroids(
         zipped_data,
         [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
 
-        auto [pt_it, assign_it] = it;
-        auto pt = eve::load[ignore](pt_it);
+        auto [sample_it, assign_it] = it;
+        auto sample = eve::load[ignore](sample_it);
 
-        auto closest_centroid_labels = compute_closest_centroid_labels(pt, centroids, centroid_norms);
+        auto closest_centroid_labels = compute_closest_centroid_labels(sample, centroids, centroid_norms);
 
         if constexpr (TrackChanges) {
             if (!any_changed) {
@@ -96,61 +96,61 @@ bool assign_points_to_centroids(
 }
 
 
-template <eve::product_type PointType>
+template <eve::product_type SampleType>
 void add_sample_to_sum(
-    const eve::algo::soa_vector<PointType>& points,
-    std::vector<PointType>& sum,
-    std::size_t cluster_idx,
-    std::size_t sample_i
+    const eve::algo::soa_vector<SampleType>& samples,
+    std::vector<SampleType>& sum,
+    std::size_t k,
+    std::size_t n
 ) {
-    const auto pt = points.get(sample_i);
-    kumi::for_each([](auto& s, auto p) { s += p; }, sum[cluster_idx], pt);
+    const auto sample = samples.get(n);
+    kumi::for_each([](auto& s, auto x) { s += x; }, sum[k], sample);
 }
 
-template <eve::product_type PointType>
+template <eve::product_type SampleType>
 void subtract_sample_from_sum(
-    const eve::algo::soa_vector<PointType>& points,
-    std::vector<PointType>& sum,
-    std::size_t cluster_idx,
-    std::size_t sample_i
+    const eve::algo::soa_vector<SampleType>& samples,
+    std::vector<SampleType>& sum,
+    std::size_t k,
+    std::size_t n
 ) {
-    const auto pt = points.get(sample_i);
-    kumi::for_each([](auto& s, auto p) { s -= p; }, sum[cluster_idx], pt);
+    const auto sample = samples.get(n);
+    kumi::for_each([](auto& s, auto x) { s -= x; }, sum[k], sample);
 }
 
-template <eve::product_type PointType>
+template <eve::product_type SampleType>
 void write_centroid_from_sum(
-    std::vector<PointType>& centroids,
-    const std::vector<PointType>& sum,
-    std::size_t cluster_idx,
+    std::vector<SampleType>& centroids,
+    const std::vector<SampleType>& sum,
+    std::size_t k,
     int count
 ) {
     const float inv_count = 1.0f / static_cast<float>(count);
-    centroids[cluster_idx] = kumi::map(
+    centroids[k] = kumi::map(
         [inv_count](auto s) { return s * inv_count; },
-        sum[cluster_idx]
+        sum[k]
     );
 }
 
-template <eve::product_type PointType>
+template <eve::product_type SampleType>
 bool resolve_dead_centroids(
-    const eve::algo::soa_vector<PointType>& points,
+    const eve::algo::soa_vector<SampleType>& samples,
     std::span<const int> assignments,
-    const std::vector<PointType>& old_centroids,
-    std::vector<PointType>& sum,
+    const std::vector<SampleType>& old_centroids,
+    std::vector<SampleType>& sum,
     std::span<int> counts
 ) {
     struct ops_t {
-        const eve::algo::soa_vector<PointType>& points;
-        const std::vector<PointType>& old_centroids;
-        std::vector<PointType>& sum;
+        const eve::algo::soa_vector<SampleType>& samples;
+        const std::vector<SampleType>& old_centroids;
+        std::vector<SampleType>& sum;
 
-        std::size_t n_samples() const { return points.size(); }
+        std::size_t N() const { return samples.size(); }
 
-        float distance_to_old_centroid(std::size_t sample_i, std::size_t old_label) const {
+        float distance_to_old_centroid(std::size_t n, std::size_t old_k) const {
             return kumi::inner_product(
-                points.get(sample_i),
-                old_centroids[old_label],
+                samples.get(n),
+                old_centroids[old_k],
                 0.0f,
                 [](auto acc, auto x) { return acc + x; },
                 [](auto p, auto c) {
@@ -161,16 +161,16 @@ bool resolve_dead_centroids(
         }
 
         void relocate_empty_cluster(
-            std::size_t old_cluster_id,
-            std::size_t new_cluster_id,
-            std::size_t sample_i
+            std::size_t old_k,
+            std::size_t new_k,
+            std::size_t n
         ) {
-            subtract_sample_from_sum(points, sum, old_cluster_id, sample_i);
-            sum[new_cluster_id] = points.get(sample_i);
+            subtract_sample_from_sum(samples, sum, old_k, n);
+            sum[new_k] = samples.get(n);
         }
     };
 
-    ops_t ops{ points, old_centroids, sum };
+    ops_t ops{ samples, old_centroids, sum };
 
     return kmeans::resolve_dead_centroids_common(
         ops,
@@ -179,40 +179,40 @@ bool resolve_dead_centroids(
     );
 }
 
-template <eve::product_type PointType>
+template <eve::product_type SampleType>
 bool update_centroids(
-    const eve::algo::soa_vector<PointType>& points,
+    const eve::algo::soa_vector<SampleType>& samples,
     std::span<const int> assignments,
-    std::vector<PointType>& centroids,
-    std::vector<PointType>& sum,
+    std::vector<SampleType>& centroids,
+    std::vector<SampleType>& sum,
     std::vector<int>& counts
 ) {
     struct ops_t {
-        const eve::algo::soa_vector<PointType>& points;
-        std::vector<PointType>& centroids;
-        std::vector<PointType>& sum;
+        const eve::algo::soa_vector<SampleType>& samples;
+        std::vector<SampleType>& centroids;
+        std::vector<SampleType>& sum;
 
-        std::size_t n_samples() const { return points.size(); }
-        std::size_t n_clusters() const { return centroids.size(); }
+        std::size_t N() const { return samples.size(); }
+        std::size_t K() const { return centroids.size(); }
 
         void reset_sums() {
-            for (auto& row : sum) row = PointType{};
+            for (auto& row : sum) row = SampleType{};
         }
 
-        void add_point_to_sum(std::size_t cluster_idx, std::size_t sample_i) {
-            add_sample_to_sum(points, sum, cluster_idx, sample_i);
+        void add_sample_to_sum(std::size_t k, std::size_t n) {
+            ::add_sample_to_sum(samples, sum, k, n);
         }
 
         bool resolve_dead_centroids(std::span<const int> assignments, std::span<int> counts) {
-            return ::resolve_dead_centroids(points, assignments, centroids, sum, counts);
+            return ::resolve_dead_centroids(samples, assignments, centroids, sum, counts);
         }
 
-        void write_centroid_from_sum(std::size_t cluster_idx, int count) {
-            ::write_centroid_from_sum(centroids, sum, cluster_idx, count);
+        void write_centroid_from_sum(std::size_t k, int count) {
+            ::write_centroid_from_sum(centroids, sum, k, count);
         }
     };
 
-    ops_t ops{ points, centroids, sum };
+    ops_t ops{ samples, centroids, sum };
 
     return kmeans::update_centroids_common(
         ops,
@@ -221,10 +221,10 @@ bool update_centroids(
     );
 }
 
-template <eve::product_type PointType>
+template <eve::product_type SampleType>
 float calculate_centroid_shift_sq(
-    const std::vector<PointType>& old_centroids,
-    const std::vector<PointType>& new_centroids
+    const std::vector<SampleType>& old_centroids,
+    const std::vector<SampleType>& new_centroids
 ) {
     float shift_sq = 0.0f;
 
@@ -245,28 +245,28 @@ float calculate_centroid_shift_sq(
 }
 
 
-template <eve::product_type PointType>
+template <eve::product_type SampleType>
 struct kumi_kmeans_backend {
     using assignment_vector = std::vector<int, eve::aligned_allocator<int>>;
     using counts_vector = std::vector<int>;
-    using centroid_snapshot = std::vector<PointType>;
+    using centroid_snapshot = std::vector<SampleType>;
 
-    const eve::algo::soa_vector<PointType>& original_points;
+    const eve::algo::soa_vector<SampleType>& original_samples;
 
-    eve::algo::soa_vector<PointType> points;
-    std::vector<PointType>& centroids;
+    eve::algo::soa_vector<SampleType> samples;
+    std::vector<SampleType>& centroids;
 
-    std::vector<PointType> sum;
+    std::vector<SampleType> sum;
     std::vector<float> centroid_norms;
     kmeans::incremental_centroid_update_state<assignment_vector> incremental_update;
-    PointType feature_mean{};
+    SampleType dimension_mean{};
 
     kumi_kmeans_backend(
-        const eve::algo::soa_vector<PointType>& points_,
-        std::vector<PointType>& centroids_
+        const eve::algo::soa_vector<SampleType>& samples_,
+        std::vector<SampleType>& centroids_
     )
-        : original_points(points_),
-        points(),
+        : original_samples(samples_),
+        samples(),
         centroids(centroids_),
         sum(centroids_.size()),
         centroid_norms(centroids_.size()),
@@ -285,55 +285,55 @@ struct kumi_kmeans_backend {
     }
 
     void recompute_dirty_centroid_norms() {
-        for (int cluster_idx : incremental_update.dirty_clusters_span()) {
-            recompute_centroid_norm(static_cast<std::size_t>(cluster_idx));
+        for (int k : incremental_update.dirty_clusters_span()) {
+            recompute_centroid_norm(static_cast<std::size_t>(k));
         }
     }
 
-    void compute_feature_mean_from_original() {
-        if (original_points.size() == 0) {
-            feature_mean = PointType{};
+    void compute_dimension_mean_from_original() {
+        if (original_samples.size() == 0) {
+            dimension_mean = SampleType{};
             return;
         }
 
-        PointType feature_sum{};
+        SampleType dimension_sum{};
 
-        for (std::size_t i = 0; i < original_points.size(); ++i) {
-            const auto pt = original_points.get(i);
-            kumi::for_each([](auto& s, auto x) { s += x; }, feature_sum, pt);
+        for (std::size_t n = 0; n < original_samples.size(); ++n) {
+            const auto sample = original_samples.get(n);
+            kumi::for_each([](auto& s, auto x) { s += x; }, dimension_sum, sample);
         }
 
-        const float inv_n = 1.0f / static_cast<float>(original_points.size());
+        const float inv_N = 1.0f / static_cast<float>(original_samples.size());
 
-        feature_mean = kumi::map([inv_n](auto s) { return s * inv_n; }, feature_sum);
+        dimension_mean = kumi::map([inv_N](auto s) { return s * inv_N; }, dimension_sum);
     }
 
-    float copy_centered_points_from_original_and_compute_scaled_tolerance(float tol) {
-        if (original_points.size() == 0) {
-            points.clear();
+    float copy_centered_samples_from_original_and_compute_scaled_tolerance(float tol) {
+        if (original_samples.size() == 0) {
+            samples.clear();
             return 0.0f;
         }
 
-        points = eve::algo::soa_vector<PointType>(
+        samples = eve::algo::soa_vector<SampleType>(
             eve::algo::no_init,
-            original_points.size(),
-            points.get_allocator()
+            original_samples.size(),
+            samples.get_allocator()
         );
 
         wide_f total_squared_centered_norm_w = eve::zero(eve::as<wide_f>());
 
         eve::algo::for_each[eve::algo::no_unrolling](
-            eve::views::zip(original_points, points),
+            eve::views::zip(original_samples, samples),
             [&](eve::algo::iterator auto it,
                 eve::relative_conditional_expr auto ignore) {
                 auto [src_it, dst_it] = it;
-                auto src_pt = eve::load[ignore](src_it);
-                using simd_point_t = std::remove_cvref_t<decltype(src_pt)>;
+                auto src_sample = eve::load[ignore](src_it);
+                using simd_sample_t = std::remove_cvref_t<decltype(src_sample)>;
 
                 auto centered = kumi::map(
                     [](auto x, auto mean) { return x - mean; },
-                    src_pt,
-                    feature_mean
+                    src_sample,
+                    dimension_mean
                 );
 
                 kumi::for_each(
@@ -344,7 +344,7 @@ struct kumi_kmeans_backend {
                     centered
                 );
 
-                eve::store[ignore](simd_point_t{centered}, dst_it);
+                eve::store[ignore](simd_sample_t{centered}, dst_it);
             }
         );
 
@@ -354,55 +354,55 @@ struct kumi_kmeans_backend {
 
         return tol
             * total_squared_centered_norm
-            / static_cast<float>(points.size())
-            / static_cast<float>(kumi::size_v<PointType>);
+            / static_cast<float>(samples.size())
+            / static_cast<float>(kumi::size_v<SampleType>);
     }
 
-    void subtract_feature_mean_from_centroids() {
+    void subtract_dimension_mean_from_centroids() {
         for (auto& centroid : centroids) {
             kumi::for_each(
                 [](auto& c, auto mean) { c -= mean; },
                 centroid,
-                feature_mean
+                dimension_mean
             );
         }
     }
 
-    void add_feature_mean_to_centroids() {
+    void add_dimension_mean_to_centroids() {
         for (auto& centroid : centroids) {
             kumi::for_each(
                 [](auto& c, auto mean) { c += mean; },
                 centroid,
-                feature_mean
+                dimension_mean
             );
         }
     }
 
     float prepare_data_for_fit(float tol) {
-        compute_feature_mean_from_original();
+        compute_dimension_mean_from_original();
 
-        const float scaled_tol = copy_centered_points_from_original_and_compute_scaled_tolerance(tol);
+        const float scaled_tol = copy_centered_samples_from_original_and_compute_scaled_tolerance(tol);
 
-        subtract_feature_mean_from_centroids();
+        subtract_dimension_mean_from_centroids();
         recompute_centroid_norms();
 
         return scaled_tol;
     }
 
     void finish_fit_after_final_assignment() {
-        add_feature_mean_to_centroids();
+        add_dimension_mean_to_centroids();
     }
 
     void check_cluster_count() const {
-        kmeans::check_cluster_count(centroids.size(), original_points.size());
+        kmeans::check_cluster_count(centroids.size(), original_samples.size());
     }
 
-    std::size_t n_samples() const {
-        return points.size();
+    std::size_t N() const {
+        return samples.size();
     }
 
     assignment_vector make_assignment_vector(int initial_value) const {
-        return assignment_vector(original_points.size(), initial_value);
+        return assignment_vector(original_samples.size(), initial_value);
     }
 
     counts_vector make_counts_vector() const {
@@ -422,8 +422,8 @@ struct kumi_kmeans_backend {
         auto aligned_ptr = eve::as_aligned(assignments.data(), kmeans::cardinal{});
         auto unaligned_end = assignments.data() + assignments.size();
         auto assignments_range = eve::algo::as_range(aligned_ptr, unaligned_end);
-        auto zipped_data = eve::views::zip(points, assignments_range);
-        (void)::assign_points_to_centroids<false>(
+        auto zipped_data = eve::views::zip(samples, assignments_range);
+        (void)::assign_samples_to_centroids<false>(
             zipped_data,
             centroids,
             std::span<const float>(centroid_norms.data(), centroid_norms.size())
@@ -437,8 +437,8 @@ struct kumi_kmeans_backend {
         auto aligned_ptr = eve::as_aligned(assignments.data(), kmeans::cardinal{});
         auto unaligned_end = assignments.data() + assignments.size();
         auto assignments_range = eve::algo::as_range(aligned_ptr, unaligned_end);
-        auto zipped_data = eve::views::zip(points, assignments_range);
-        return ::assign_points_to_centroids<true>(
+        auto zipped_data = eve::views::zip(samples, assignments_range);
+        return ::assign_samples_to_centroids<true>(
             zipped_data,
             centroids,
             std::span<const float>(centroid_norms.data(), centroid_norms.size())
@@ -449,16 +449,16 @@ struct kumi_kmeans_backend {
         incremental_update.clear_dirty_clusters();
     }
 
-    void mark_dirty_cluster(std::size_t cluster_idx) {
-        incremental_update.mark_dirty_cluster(cluster_idx);
+    void mark_dirty_cluster(std::size_t k) {
+        incremental_update.mark_dirty_cluster(k);
     }
 
-    void add_point_to_sum(std::size_t cluster_idx, std::size_t sample_i) {
-        add_sample_to_sum(points, sum, cluster_idx, sample_i);
+    void add_sample_to_sum(std::size_t k, std::size_t n) {
+        ::add_sample_to_sum(samples, sum, k, n);
     }
 
-    void subtract_point_from_sum(std::size_t cluster_idx, std::size_t sample_i) {
-        subtract_sample_from_sum(points, sum, cluster_idx, sample_i);
+    void subtract_sample_from_sum(std::size_t k, std::size_t n) {
+        ::subtract_sample_from_sum(samples, sum, k, n);
     }
 
     bool resolve_dead_centroids_and_mark_dirty(
@@ -468,12 +468,12 @@ struct kumi_kmeans_backend {
         struct ops_t {
             kumi_kmeans_backend& backend;
 
-            std::size_t n_samples() const { return backend.points.size(); }
+            std::size_t N() const { return backend.samples.size(); }
 
-            float distance_to_old_centroid(std::size_t sample_i, std::size_t old_label) const {
+            float distance_to_old_centroid(std::size_t n, std::size_t old_k) const {
                 return kumi::inner_product(
-                    backend.points.get(sample_i),
-                    backend.centroids[old_label],
+                    backend.samples.get(n),
+                    backend.centroids[old_k],
                     0.0f,
                     [](auto acc, auto x) { return acc + x; },
                     [](auto p, auto c) {
@@ -484,15 +484,15 @@ struct kumi_kmeans_backend {
             }
 
             void relocate_empty_cluster(
-                std::size_t old_cluster_id,
-                std::size_t new_cluster_id,
-                std::size_t sample_i
+                std::size_t old_k,
+                std::size_t new_k,
+                std::size_t n
             ) {
-                backend.subtract_point_from_sum(old_cluster_id, sample_i);
-                backend.sum[new_cluster_id] = backend.points.get(sample_i);
+                backend.subtract_sample_from_sum(old_k, n);
+                backend.sum[new_k] = backend.samples.get(n);
 
-                backend.mark_dirty_cluster(old_cluster_id);
-                backend.mark_dirty_cluster(new_cluster_id);
+                backend.mark_dirty_cluster(old_k);
+                backend.mark_dirty_cluster(new_k);
             }
         };
 
@@ -502,8 +502,8 @@ struct kumi_kmeans_backend {
     }
 
     void write_dirty_centroids(std::span<const int> counts) {
-        for (int cluster_idx : incremental_update.dirty_clusters_span()) {
-            const std::size_t k = static_cast<std::size_t>(cluster_idx);
+        for (int dirty_k : incremental_update.dirty_clusters_span()) {
+            const std::size_t k = static_cast<std::size_t>(dirty_k);
 
             if (counts[k] <= 0) continue;
 
@@ -520,7 +520,7 @@ struct kumi_kmeans_backend {
         counts_vector& counts
     ) {
         return ::update_centroids(
-            points,
+            samples,
             std::span<const int>(assignments.data(), assignments.size()),
             centroids,
             sum,
@@ -541,7 +541,7 @@ struct kumi_kmeans_backend {
             incremental_update,
             assignments,
             counts,
-            points.size() / 4
+            samples.size() / 4
         );
     }
 
@@ -550,15 +550,15 @@ struct kumi_kmeans_backend {
     }
 };
 
-template <eve::product_type PointType>
+template <eve::product_type SampleType>
 auto k_means(
-    const eve::algo::soa_vector<PointType>& points,
-    std::vector<PointType>& centroids,
+    const eve::algo::soa_vector<SampleType>& samples,
+    std::vector<SampleType>& centroids,
     int& out_iterations,
     int max_iterations = 300,
     float tol = 1e-4f
 ) {
-    kumi_kmeans_backend<PointType> backend{ points, centroids };
+    kumi_kmeans_backend<SampleType> backend{ samples, centroids };
 
     return kmeans::k_means_core(
         backend,

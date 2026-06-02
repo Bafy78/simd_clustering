@@ -7,15 +7,15 @@ from benchmark_pipeline.runner import (
 from benchmark_pipeline.tasks import build_pipeline
 
 
-def cpp_cases_for_dimension(config, dim: int) -> set[str]:
+def cpp_cases_for_dimension(config, D: int) -> set[str]:
     cases: set[str] = set()
 
-    for n_samples in config.test_samples:
-        for n_clusters in config.test_clusters:
+    for N in config.test_Ns:
+        for K in config.test_Ks:
             pipeline = build_pipeline(
-                dim,
-                n_samples,
-                n_clusters,
+                D,
+                N,
+                K,
                 config.bench_processes,
                 config.bench_values,
                 config.bench_min_time,
@@ -33,15 +33,15 @@ def main() -> None:
     config = default_config()
     prepare_datasets_dir(config.datasets_dir)
 
-    for dim in config.test_dimensions:
-        compile_cpp_binaries(dim, cpp_cases_for_dimension(config, dim))
+    for D in config.test_Ds:
+        compile_cpp_binaries(D, cpp_cases_for_dimension(config, D))
 
-        for n_samples in config.test_samples:
-            for n_clusters in config.test_clusters:
+        for N in config.test_Ns:
+            for K in config.test_Ks:
                 execute_pipeline(
-                    dim,
-                    n_samples,
-                    n_clusters,
+                    D,
+                    N,
+                    K,
                     config.bench_processes,
                     config.bench_values,
                     config.bench_min_time,

@@ -18,8 +18,8 @@
 // reduction and then keeping the result from the last k-means iteration, but that
 // would slow down the algorithm. This stays as a separate scalar verification step.
 // Use double so the calculation is precise enough to match scikit-learn outputs.
-template <eve::product_type PointT>
-double compute_scalar_dist_sq(const PointT& point, const PointT& centroid) {
+template <eve::product_type SampleT>
+double compute_scalar_dist_sq(const SampleT& sample, const SampleT& centroid) {
     double dist_sq = 0.0;
 
     kumi::for_each(
@@ -27,53 +27,53 @@ double compute_scalar_dist_sq(const PointT& point, const PointT& centroid) {
             const double diff = static_cast<double>(p) - static_cast<double>(c);
             dist_sq += diff * diff;
         },
-        point,
+        sample,
         centroid
     );
 
     return dist_sq;
 }
 
-template <eve::product_type PointT, class Assignments>
+template <eve::product_type SampleT, class Assignments>
 void write_lloyd_metrics(
     const std::string& filename,
-    const eve::algo::soa_vector<PointT>& points,
-    const std::vector<PointT>& centroids,
+    const eve::algo::soa_vector<SampleT>& samples,
+    const std::vector<SampleT>& centroids,
     const Assignments& assignments,
-    int num_clusters,
+    int K,
     int iterations
 ) {
-    if (num_clusters <= 0) {
+    if (K <= 0) {
         throw std::runtime_error("Invalid number of clusters");
     }
 
-    if (static_cast<std::size_t>(num_clusters) != centroids.size()) {
-        throw std::runtime_error("Centroid count does not match num_clusters");
+    if (static_cast<std::size_t>(K) != centroids.size()) {
+        throw std::runtime_error("Centroid count does not match K");
     }
 
-    if (assignments.size() != points.size()) {
-        throw std::runtime_error("Assignment count does not match point count");
+    if (assignments.size() != samples.size()) {
+        throw std::runtime_error("Assignment count does not match sample count");
     }
 
-    std::vector<std::size_t> cluster_counts(num_clusters, 0);
-    std::vector<double> cluster_inertia(num_clusters, 0.0);
+    std::vector<std::size_t> cluster_counts(K, 0);
+    std::vector<double> cluster_inertia(K, 0.0);
 
     double total_inertia = 0.0;
 
-    for (std::size_t i = 0; i < points.size(); ++i) {
-        const std::size_t cluster_id = static_cast<std::size_t>(assignments[i]);
+    for (std::size_t n = 0; n < samples.size(); ++n) {
+        const std::size_t k = static_cast<std::size_t>(assignments[n]);
 
-        if (cluster_id >= static_cast<std::size_t>(num_clusters)) {
+        if (k >= static_cast<std::size_t>(K)) {
             throw std::runtime_error("Invalid cluster assignment");
         }
 
         const double dist_sq = compute_scalar_dist_sq(
-            points.get(i),
-            centroids[cluster_id]
+            samples.get(n),
+            centroids[k]
         );
 
-        cluster_counts[cluster_id] += 1;
-        cluster_inertia[cluster_id] += dist_sq;
+        cluster_counts[k] += 1;
+        cluster_inertia[k] += dist_sq;
         total_inertia += dist_sq;
     }
 
@@ -92,7 +92,7 @@ void write_lloyd_metrics(
     out << "  \"inertia\": " << total_inertia << ",\n";
 
     out << "  \"cluster_counts\": [";
-    for (int k = 0; k < num_clusters; ++k) {
+    for (int k = 0; k < K; ++k) {
         if (k != 0) {
             out << ", ";
         }
@@ -102,7 +102,7 @@ void write_lloyd_metrics(
     out << "],\n";
 
     out << "  \"cluster_inertia\": [";
-    for (int k = 0; k < num_clusters; ++k) {
+    for (int k = 0; k < K; ++k) {
         if (k != 0) {
             out << ", ";
         }
@@ -114,7 +114,7 @@ void write_lloyd_metrics(
     out << "  \"centroids\": [\n";
     for (std::size_t k = 0; k < centroids.size(); ++k) {
         out << "    ";
-        write_point_json(out, centroids[k]);
+        write_sample_json(out, centroids[k]);
 
         if (k + 1 != centroids.size()) {
             out << ",";

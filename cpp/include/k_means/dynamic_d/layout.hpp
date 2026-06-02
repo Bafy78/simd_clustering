@@ -14,17 +14,15 @@
 // backends when on_centroids_changed() is called.
 template<std::size_t D>
 struct centroids_storage {
-    static constexpr std::size_t n_features = D;
-
     aligned_float_vector row_major;
 
-    std::size_t n_clusters = 0;
+    std::size_t K = 0;
 
     centroids_storage() = default;
 
     void resize(std::size_t clusters) {
-        n_clusters = clusters;
-        row_major.resize(n_clusters * D);
+        K = clusters;
+        row_major.resize(K * D);
         std::fill(row_major.begin(), row_major.end(), 0.0f);
     }
 
@@ -36,15 +34,15 @@ struct centroids_storage {
         return row_major[k * D + d];
     }
 
-    template<std::size_t Feature>
+    template<std::size_t Dimension>
     float& row(std::size_t k) {
-        static_assert(Feature < D);
-        return row_major[k * D + Feature];
+        static_assert(Dimension < D);
+        return row_major[k * D + Dimension];
     }
 
-    template<std::size_t Feature>
+    template<std::size_t Dimension>
     float row(std::size_t k) const {
-        static_assert(Feature < D);
-        return row_major[k * D + Feature];
+        static_assert(Dimension < D);
+        return row_major[k * D + Dimension];
     }
 };

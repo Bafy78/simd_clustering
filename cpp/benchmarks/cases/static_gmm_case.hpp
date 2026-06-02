@@ -22,7 +22,7 @@ struct static_gmm_case {
 
     static std::string nanobench_usage(const char* program) {
         return std::string("Usage: ") + program
-            + " <dataset_bin> <n_samples> <n_clusters>"
+            + " <dataset_bin> <N> <K>"
               " <gmm_weights_bin> <gmm_means_bin> <gmm_precisions_bin>"
               " <covariance_type> <metrics_json_out> <nanobench_json_out>"
               " <bench_epochs> <min_epoch_seconds>";
@@ -30,7 +30,7 @@ struct static_gmm_case {
 
     static std::string callgrind_usage(const char* program) {
         return std::string("Usage: ") + program
-            + " <dataset_bin> <n_samples> <n_clusters>"
+            + " <dataset_bin> <N> <K>"
               " <gmm_weights_bin> <gmm_means_bin> <gmm_precisions_bin>"
               " <covariance_type> <metrics_json_out>";
     }
@@ -94,7 +94,7 @@ struct static_gmm_case {
     }
 
     std::string title() const {
-        return "EVE GaussianMixture " + std::to_string(TUPLE_SIZE) + "D (EM)";
+        return "EVE GaussianMixture " + std::to_string(D) + "D (EM)";
     }
 
     std::string run_name() const {
@@ -107,12 +107,12 @@ struct static_gmm_case {
 
     void run_once_spherical() {
         auto result = run_static_gmm_em(
-            points_,
+            samples_,
             initial_weights_,
             initial_means_,
-            spherical_covariance_model<PointType>{
+            spherical_covariance_model<SampleType>{
                 initial_precisions_,
-                static_cast<std::size_t>(n_clusters_)
+                static_cast<std::size_t>(K_)
             }
         );
         store_result(std::move(result));
@@ -120,12 +120,12 @@ struct static_gmm_case {
 
     void run_once_diag() {
         auto result = run_static_gmm_em(
-            points_,
+            samples_,
             initial_weights_,
             initial_means_,
-            diagonal_covariance_model<PointType>{
+            diagonal_covariance_model<SampleType>{
                 initial_precisions_,
-                static_cast<std::size_t>(n_clusters_)
+                static_cast<std::size_t>(K_)
             }
         );
         store_result(std::move(result));
@@ -150,7 +150,7 @@ struct static_gmm_case {
     }
 
     void keep_alive() const {
-        ankerl::nanobench::doNotOptimizeAway(points_.data());
+        ankerl::nanobench::doNotOptimizeAway(samples_.data());
         ankerl::nanobench::doNotOptimizeAway(final_weights_.data());
         ankerl::nanobench::doNotOptimizeAway(final_means_.data());
         ankerl::nanobench::doNotOptimizeAway(final_covariances_.data());
@@ -172,8 +172,8 @@ struct static_gmm_case {
     }
 
 private:
-    template <eve::product_type PointT>
-    void store_result(static_gmm_result<PointT>&& result) {
+    template <eve::product_type SampleT>
+    void store_result(static_gmm_result<SampleT>&& result) {
         final_weights_ = std::move(result.weights);
         final_means_ = std::move(result.means);
         final_covariances_ = std::move(result.covariances);
@@ -186,8 +186,8 @@ private:
 
     static_gmm_case(
         const std::string& dataset_bin,
-        std::size_t n_samples,
-        int n_clusters,
+        std::size_t N,
+        int K,
         const std::string& gmm_weights_bin,
         const std::string& gmm_means_bin,
         const std::string& gmm_precisions_bin,
@@ -196,8 +196,8 @@ private:
     )
         : static_gmm_case(
             dataset_bin,
-            n_samples,
-            n_clusters,
+            N,
+            K,
             gmm_weights_bin,
             gmm_means_bin,
             gmm_precisions_bin,
@@ -207,56 +207,56 @@ private:
 
     static_gmm_case(
         const std::string& dataset_bin,
-        std::size_t n_samples,
-        int n_clusters,
+        std::size_t N,
+        int K,
         const std::string& gmm_weights_bin,
         const std::string& gmm_means_bin,
         const std::string& gmm_precisions_bin,
         gmm_covariance_type covariance_type,
         const std::string& metrics_json_out
     )
-        : n_samples_(n_samples),
-          n_clusters_(n_clusters),
+        : N_(N),
+          K_(K),
           covariance_type_(covariance_type),
           metrics_json_out_(metrics_json_out) {
-        if (n_clusters_ <= 0) {
-            throw std::runtime_error("Invalid number of GMM components");
+        if (K_ <= 0) {
+            throw std::runtime_error("Invalid number of GMM clusters");
         }
 
-        points_ = read_static_gmm_points_binary(dataset_bin, n_samples_);
+        samples_ = read_static_gmm_samples_binary(dataset_bin, N_);
 
         initial_weights_ = read_binary_f32(
             gmm_weights_bin,
-            static_cast<std::size_t>(n_clusters_)
+            static_cast<std::size_t>(K_)
         );
 
-        initial_means_ = read_static_gmm_means_binary(gmm_means_bin, n_clusters_);
+        initial_means_ = read_static_gmm_means_binary(gmm_means_bin, K_);
 
         initial_precisions_ = read_binary_f32(
             gmm_precisions_bin,
             gmm_precision_value_count(
                 covariance_type_,
-                static_cast<std::size_t>(n_clusters_),
-                TUPLE_SIZE
+                static_cast<std::size_t>(K_),
+                D
             )
         );
     }
 
-    std::size_t n_samples_ = 0;
-    int n_clusters_ = 0;
+    std::size_t N_ = 0;
+    int K_ = 0;
     gmm_covariance_type covariance_type_ = gmm_covariance_type::spherical;
     std::string metrics_json_out_;
     std::string nanobench_json_out_;
     std::size_t bench_epochs_ = 0;
     double min_epoch_seconds_ = 0.0;
 
-    static_points_soa_vector<TUPLE_SIZE> points_;
+    static_samples_soa_vector<D> samples_;
     std::vector<float> initial_weights_;
-    std::vector<PointType> initial_means_;
+    std::vector<SampleType> initial_means_;
     std::vector<float> initial_precisions_;
 
     std::vector<float> final_weights_;
-    std::vector<PointType> final_means_;
+    std::vector<SampleType> final_means_;
     std::vector<float> final_covariances_;
     std::vector<float> final_precisions_;
     std::vector<float> lower_bounds_;

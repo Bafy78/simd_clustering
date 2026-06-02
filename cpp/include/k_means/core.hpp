@@ -17,13 +17,13 @@ using ::wide_f;
 using ::wide_i;
 using ::cardinal;
 
-inline void check_cluster_count(std::size_t n_clusters, std::size_t n_samples) {
-    if (n_clusters == 0) {
-        throw std::invalid_argument("n_clusters must be greater than zero");
+inline void check_cluster_count(std::size_t K, std::size_t N) {
+    if (K == 0) {
+        throw std::invalid_argument("K must be greater than zero");
     }
 
-    if (n_clusters > n_samples) {
-        throw std::invalid_argument("n_clusters must be <= n_samples");
+    if (K > N) {
+        throw std::invalid_argument("K must be <= N");
     }
 }
 
@@ -33,94 +33,94 @@ bool resolve_dead_centroids_common(
     std::span<const int> assignments,
     std::span<int> counts
 ) {
-    const std::size_t n_samples = ops.n_samples();
-    const std::size_t n_clusters = counts.size();
+    const std::size_t N = ops.N();
+    const std::size_t K = counts.size();
 
     // Find empty clusters, in cluster-id order, matching np.where(counts == 0)[0].
     std::vector<int> empty_clusters;
-    empty_clusters.reserve(n_clusters);
+    empty_clusters.reserve(K);
 
-    for (std::size_t k = 0; k < n_clusters; ++k) {
+    for (std::size_t k = 0; k < K; ++k) {
         if (counts[k] == 0) {
             empty_clusters.push_back(static_cast<int>(k));
         }
     }
 
-    const std::size_t n_empty = empty_clusters.size();
+    const std::size_t empty_cluster_count = empty_clusters.size();
 
-    if (n_empty == 0) return false;
+    if (empty_cluster_count == 0) return false;
 
     // Dead-cluster repair keeps sample ids in uint32_t.
-    // This path assumes n_samples <= UINT32_MAX
-    if (n_samples > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
-        throw std::length_error("dead-centroid repair requires n_samples <= UINT32_MAX");
+    // This path assumes N <= UINT32_MAX
+    if (N > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        throw std::length_error("dead-centroid repair requires N <= UINT32_MAX");
     }
 
     struct candidate_t {
         float distance;
-        std::uint32_t index;
+        std::uint32_t n;
     };
 
-    // Compute distance of each point to its currently assigned old centroid:
+    // Compute distance of each sample to its currently assigned old centroid:
     // sklearn: distances = ((X - centers_old[labels]) ** 2).sum(axis=1)
     std::vector<candidate_t> farthest_candidates;
 
-    for (std::size_t i = 0; i < n_samples; ++i) {
-        const std::size_t assigned_cluster = static_cast<std::size_t>(assignments[i]);
-        const float dist = ops.distance_to_old_centroid(i, assigned_cluster);
+    for (std::size_t n = 0; n < N; ++n) {
+        const std::size_t assigned_k = static_cast<std::size_t>(assignments[n]);
+        const float dist = ops.distance_to_old_centroid(n, assigned_k);
 
         if (farthest_candidates.empty()) {
             if (dist == 0.0f) continue;
 
-            farthest_candidates.reserve(n_samples);
+            farthest_candidates.reserve(N);
 
-            for (std::uint32_t j = 0; j < static_cast<std::uint32_t>(i); ++j) {
-                farthest_candidates.push_back({ 0.0f, j });
+            for (std::uint32_t candidate_n = 0; candidate_n < static_cast<std::uint32_t>(n); ++candidate_n) {
+                farthest_candidates.push_back({ 0.0f, candidate_n });
             }
         }
 
-        farthest_candidates.push_back({ dist, static_cast<std::uint32_t>(i) });
+        farthest_candidates.push_back({ dist, static_cast<std::uint32_t>(n) });
     }
 
     // sklearn returns early when all distances are exactly zero.
     // This happens when there are more clusters than distinct non-duplicate samples.
     if (farthest_candidates.empty()) return false;
 
-    // Select the n_empty farthest points globally.
-    // sklearn uses np.argpartition(...)[-n_empty:][::-1].
+    // Select the empty_cluster_count farthest samples globally.
+    // sklearn uses np.argpartition(...)[-empty_cluster_count:][::-1].
     auto farther = [](const candidate_t& a, const candidate_t& b) {
         if (a.distance != b.distance) {
             return a.distance > b.distance;
         }
 
-        return a.index < b.index;
+        return a.n < b.n;
     };
 
     std::partial_sort(
         farthest_candidates.begin(),
-        farthest_candidates.begin() + static_cast<std::ptrdiff_t>(n_empty),
+        farthest_candidates.begin() + static_cast<std::ptrdiff_t>(empty_cluster_count),
         farthest_candidates.end(),
         farther
     );
 
-    // Relocate each empty cluster using one farthest point.
+    // Relocate each empty cluster using one farthest sample.
     //
     // Important sklearn detail:
     // labels / assignments are NOT changed here. Only the sums and counts are changed.
-    for (std::size_t idx = 0; idx < n_empty; ++idx) {
-        const std::size_t new_cluster_id = static_cast<std::size_t>(empty_clusters[idx]);
-        const std::size_t far_idx = static_cast<std::size_t>(farthest_candidates[idx].index);
+    for (std::size_t k = 0; k < empty_cluster_count; ++k) {
+        const std::size_t new_k = static_cast<std::size_t>(empty_clusters[k]);
+        const std::size_t far_n = static_cast<std::size_t>(farthest_candidates[k].n);
 
-        const std::size_t old_cluster_id = static_cast<std::size_t>(assignments[far_idx]);
+        const std::size_t old_k = static_cast<std::size_t>(assignments[far_n]);
 
         ops.relocate_empty_cluster(
-            old_cluster_id,
-            new_cluster_id,
-            far_idx
+            old_k,
+            new_k,
+            far_n
         );
 
-        counts[old_cluster_id] -= 1;
-        counts[new_cluster_id] = 1;
+        counts[old_k] -= 1;
+        counts[new_k] = 1;
     }
 
     return true;
@@ -135,16 +135,16 @@ bool update_centroids_common(
     ops.reset_sums();
     std::fill(counts.begin(), counts.end(), 0);
 
-    for (std::size_t i = 0; i < ops.n_samples(); ++i) {
-        const std::size_t cluster_idx = static_cast<std::size_t>(assignments[i]);
+    for (std::size_t n = 0; n < ops.N(); ++n) {
+        const std::size_t k = static_cast<std::size_t>(assignments[n]);
 
-        counts[cluster_idx]++;
-        ops.add_point_to_sum(cluster_idx, i);
+        counts[k]++;
+        ops.add_sample_to_sum(k, n);
     }
 
     const bool dead_repair_happened = ops.resolve_dead_centroids(assignments, counts);
 
-    for (std::size_t k = 0; k < ops.n_clusters(); ++k) {
+    for (std::size_t k = 0; k < ops.K(); ++k) {
         if (counts[k] > 0) {
             ops.write_centroid_from_sum(k, counts[k]);
         }
@@ -175,8 +175,8 @@ struct incremental_centroid_update_state {
     // sums/counts but intentionally leaves labels unchanged.
     bool sums_match_assignments = false;
 
-    explicit incremental_centroid_update_state(std::size_t n_clusters = 0)
-        : dirty_marker(n_clusters, 0) {}
+    explicit incremental_centroid_update_state(std::size_t K = 0)
+        : dirty_marker(K, 0) {}
 
     void snapshot_before_assignment(std::span<const int> assignments) {
         if (!sums_match_assignments) return;
@@ -193,18 +193,18 @@ struct incremental_centroid_update_state {
     }
 
     void clear_dirty_clusters() {
-        for (int cluster_idx : dirty_clusters) {
-            dirty_marker[static_cast<std::size_t>(cluster_idx)] = 0;
+        for (int k : dirty_clusters) {
+            dirty_marker[static_cast<std::size_t>(k)] = 0;
         }
 
         dirty_clusters.clear();
     }
 
-    void mark_dirty_cluster(std::size_t cluster_idx) {
-        if (dirty_marker[cluster_idx] != 0) return;
+    void mark_dirty_cluster(std::size_t k) {
+        if (dirty_marker[k] != 0) return;
 
-        dirty_marker[cluster_idx] = 1;
-        dirty_clusters.push_back(static_cast<int>(cluster_idx));
+        dirty_marker[k] = 1;
+        dirty_clusters.push_back(static_cast<int>(k));
     }
 };
 
@@ -218,8 +218,8 @@ std::size_t count_assignment_changes_until_common(
 ) {
     std::size_t changes = 0;
 
-    for (std::size_t i = 0; i < ops.n_samples(); ++i) {
-        if (previous_assignments[i] == assignments[i]) continue;
+    for (std::size_t n = 0; n < ops.N(); ++n) {
+        if (previous_assignments[n] == assignments[n]) continue;
 
         ++changes;
         if (changes > max_changes) return changes;
@@ -235,25 +235,25 @@ void apply_assignment_deltas_common(
     std::span<const int> assignments,
     std::span<int> counts
 ) {
-    for (std::size_t i = 0; i < ops.n_samples(); ++i) {
-        const int old_label_int = previous_assignments[i];
-        const int new_label_int = assignments[i];
+    for (std::size_t n = 0; n < ops.N(); ++n) {
+        const int old_k_int = previous_assignments[n];
+        const int new_k_int = assignments[n];
 
-        if (old_label_int == new_label_int) continue;
+        if (old_k_int == new_k_int) continue;
 
-        if (old_label_int >= 0) {
-            const std::size_t old_label = static_cast<std::size_t>(old_label_int);
+        if (old_k_int >= 0) {
+            const std::size_t old_k = static_cast<std::size_t>(old_k_int);
 
-            counts[old_label] -= 1;
-            ops.subtract_point_from_sum(old_label, i);
-            ops.mark_dirty_cluster(old_label);
+            counts[old_k] -= 1;
+            ops.subtract_sample_from_sum(old_k, n);
+            ops.mark_dirty_cluster(old_k);
         }
 
-        const std::size_t new_label = static_cast<std::size_t>(new_label_int);
+        const std::size_t new_k = static_cast<std::size_t>(new_k_int);
 
-        counts[new_label] += 1;
-        ops.add_point_to_sum(new_label, i);
-        ops.mark_dirty_cluster(new_label);
+        counts[new_k] += 1;
+        ops.add_sample_to_sum(new_k, n);
+        ops.mark_dirty_cluster(new_k);
     }
 }
 

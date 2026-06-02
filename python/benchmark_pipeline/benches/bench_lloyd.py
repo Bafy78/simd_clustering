@@ -18,10 +18,10 @@ def import_runtime_deps():
     np = _np
 
 
-def run_kmeans_lloyd(X, n_clusters, init_centers):
+def run_kmeans_lloyd(X, K, init_centers):
     with threadpool_limits(limits=1):
         kmeans = KMeans(
-            n_clusters=n_clusters,
+            n_clusters=K,
             init=init_centers,
             n_init=1,
             max_iter=300,
@@ -37,7 +37,7 @@ def load_dataset(args):
         args.dataset_bin,
         dtype=np.float32,
         mode="r",
-        shape=(args.n_samples, args.n_features),
+        shape=(args.N, args.D),
     )
 
 
@@ -46,33 +46,33 @@ def load_init_centers(args):
         args.init_centroids_bin,
         dtype=np.float32,
         mode="r",
-        shape=(args.n_clusters, args.n_features),
+        shape=(args.K, args.D),
     )
 
 
-def compute_lloyd_metrics(X, labels, centroids, n_clusters, *, chunk_size=1_000_000):
+def compute_lloyd_metrics(X, labels, centroids, K, *, chunk_size=1_000_000):
     labels = np.asarray(labels, dtype=np.intp)
     centroids = np.asarray(centroids, dtype=np.float64)
 
-    if n_clusters <= 0:
-        raise RuntimeError("Invalid number of clusters")
+    if K <= 0:
+        raise RuntimeError("Invalid cluster count K")
 
-    if centroids.shape[0] != n_clusters:
-        raise RuntimeError("Centroid count does not match n_clusters")
+    if centroids.shape[0] != K:
+        raise RuntimeError("Centroid count does not match K")
 
     if labels.shape[0] != X.shape[0]:
-        raise RuntimeError("Label count does not match point count")
+        raise RuntimeError("Label count does not match sample count N")
 
-    if np.any(labels < 0) or np.any(labels >= n_clusters):
+    if np.any(labels < 0) or np.any(labels >= K):
         raise RuntimeError("Invalid cluster assignment")
 
-    cluster_counts = np.bincount(labels, minlength=n_clusters).astype(np.int64)
-    cluster_inertia = np.zeros(n_clusters, dtype=np.float64)
+    cluster_counts = np.bincount(labels, minlength=K).astype(np.int64)
+    cluster_inertia = np.zeros(K, dtype=np.float64)
 
-    n_samples = X.shape[0]
+    N = X.shape[0]
 
-    for start in range(0, n_samples, chunk_size):
-        stop = min(start + chunk_size, n_samples)
+    for start in range(0, N, chunk_size):
+        stop = min(start + chunk_size, N)
 
         X_chunk = np.asarray(X[start:stop], dtype=np.float64)
         labels_chunk = labels[start:stop]
@@ -83,7 +83,7 @@ def compute_lloyd_metrics(X, labels, centroids, n_clusters, *, chunk_size=1_000_
         cluster_inertia += np.bincount(
             labels_chunk,
             weights=dist_sq,
-            minlength=n_clusters,
+            minlength=K,
         )
 
     total_inertia = float(cluster_inertia.sum())
@@ -95,12 +95,12 @@ def compute_lloyd_metrics(X, labels, centroids, n_clusters, *, chunk_size=1_000_
     }
 
 
-def write_lloyd_metrics(path, *, X, kmeans, n_clusters):
+def write_lloyd_metrics(path, *, X, kmeans, K):
     metrics = compute_lloyd_metrics(
         X,
         kmeans.labels_,
         kmeans.cluster_centers_,
-        n_clusters,
+        K,
     )
 
     payload = {
@@ -122,9 +122,9 @@ def write_lloyd_metrics(path, *, X, kmeans, n_clusters):
 
 def append_custom_args(cmd, args):
     cmd.extend(["--dataset-bin", args.dataset_bin])
-    cmd.extend(["--n-samples", str(args.n_samples)])
-    cmd.extend(["--n-features", str(args.n_features)])
-    cmd.extend(["--n-clusters", str(args.n_clusters)])
+    cmd.extend(["--D", str(args.D)])
+    cmd.extend(["--N", str(args.N)])
+    cmd.extend(["--K", str(args.K)])
     cmd.extend(["--init-centroids-bin", args.init_centroids_bin])
     cmd.extend(["--metrics-file", args.metrics_file])
 
@@ -136,9 +136,9 @@ if __name__ == "__main__":
     )
 
     runner.argparser.add_argument("--dataset-bin", required=True)
-    runner.argparser.add_argument("--n-samples", type=int, required=True)
-    runner.argparser.add_argument("--n-features", type=int, required=True)
-    runner.argparser.add_argument("--n-clusters", type=int, required=True)
+    runner.argparser.add_argument("--D", type=int, required=True)
+    runner.argparser.add_argument("--N", type=int, required=True)
+    runner.argparser.add_argument("--K", type=int, required=True)
     runner.argparser.add_argument("--init-centroids-bin", required=True)
     runner.argparser.add_argument("--metrics-file", required=True)
 
@@ -157,7 +157,7 @@ if __name__ == "__main__":
         "kmeans_lloyd_py",
         run_kmeans_lloyd,
         X,
-        args.n_clusters,
+        args.K,
         init_centers,
     )
 
@@ -167,10 +167,7 @@ if __name__ == "__main__":
         X = load_dataset(args)
         init_centers = load_init_centers(args)
 
-        final_kmeans = run_kmeans_lloyd(X, args.n_clusters, init_centers)
-        centroids = final_kmeans.cluster_centers_
-        labels = final_kmeans.labels_
-        iters = final_kmeans.n_iter_
+        final_kmeans = run_kmeans_lloyd(X, args.K, init_centers)
 
         import json as _json
 
@@ -180,5 +177,5 @@ if __name__ == "__main__":
             args.metrics_file,
             X=X,
             kmeans=final_kmeans,
-            n_clusters=args.n_clusters,
+            K=args.K,
         )

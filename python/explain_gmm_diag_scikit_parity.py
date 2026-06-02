@@ -224,14 +224,14 @@ def compute_precision_cholesky(covariances: np.ndarray) -> np.ndarray:
 def nearest_center_labels(
     X: np.ndarray, centers: np.ndarray, max_distance_cells: int = 25_000_000
 ) -> np.ndarray:
-    n_samples, n_features = X.shape
+    N, D = X.shape
     K = centers.shape[0]
-    chunk = max(1, max_distance_cells // max(1, K * n_features))
-    labels = np.empty(n_samples, dtype=np.intp)
+    chunk = max(1, max_distance_cells // max(1, K * D))
+    labels = np.empty(N, dtype=np.intp)
     c64 = centers.astype(np.float64)
     cn = np.einsum("kd,kd->k", c64, c64)
-    for start in range(0, n_samples, chunk):
-        stop = min(start + chunk, n_samples)
+    for start in range(0, N, chunk):
+        stop = min(start + chunk, N)
         xs = X[start:stop].astype(np.float64)
         dist = -2.0 * (xs @ c64.T) + cn
         labels[start:stop] = np.argmin(dist, axis=1)
@@ -277,7 +277,7 @@ class Paths:
 
 
 def make_paths(repo: Path, work: Path, args: argparse.Namespace) -> Paths:
-    case = f"{args.dim}D_{args.n_samples}S_{args.n_clusters}K_seed{args.seed}"
+    case = f"{args.D}D_{args.N}N_{args.K}K_seed{args.seed}"
     return Paths(
         repo=repo,
         work=work,
@@ -288,10 +288,8 @@ def make_paths(repo: Path, work: Path, args: argparse.Namespace) -> Paths:
         precisions=work / f"gmm_precisions_diag_{case}.bin",
         cpp_trace_json=work / f"cpp_trace_diag_{case}.json",
         py_trace_json=work / f"py_trace_diag_{case}.json",
-        cpp_score_json=work
-        / f"cpp_score_dump_diag_{case}_sample{args.score_sample_count}.json",
-        sample_indices=work
-        / f"score_sample_indices_{case}_{args.score_sample_count}.txt",
+        cpp_score_json=work / f"cpp_score_dump_diag_{case}_score_N{args.score_N}.json",
+        sample_indices=work / f"score_sample_indices_{case}_score_N{args.score_N}.txt",
         resp_bin=work / f"fixed_resp_diag_{case}_sklearn_private.bin",
         cpp_same_json=work / f"cpp_same_resp_mstep_diag_{case}.json",
         cpp_blas_json=work / f"cpp_blas_same_resp_mstep_diag_{case}.json",
@@ -310,22 +308,22 @@ def generate_data_and_init(p: Paths, args: argparse.Namespace) -> None:
         return
     log("[setup] generating dataset and initial diagonal GMM parameters")
     X, _ = make_blobs(
-        n_samples=args.n_samples,
-        n_features=args.dim,
-        centers=args.n_clusters,
+        n_samples=args.N,
+        n_features=args.D,
+        centers=args.K,
         random_state=args.seed,
     )
     X = np.asarray(X, dtype=np.float32)
-    centers, _ = kmeans_plusplus(X, n_clusters=args.n_clusters, random_state=args.seed)
+    centers, _ = kmeans_plusplus(X, n_clusters=args.K, random_state=args.seed)
     means = np.asarray(centers, dtype=np.float32)
     labels = nearest_center_labels(X, means)
-    counts = np.bincount(labels, minlength=args.n_clusters).astype(np.int64)
+    counts = np.bincount(labels, minlength=args.K).astype(np.int64)
     empty = np.flatnonzero(counts == 0)
     if empty.size:
         raise RuntimeError(
-            f"initialization produced empty components: {empty[:20].tolist()}"
+            f"initialization produced empty clusters: {empty[:20].tolist()}"
         )
-    weights = (counts.astype(np.float64) / float(args.n_samples)).astype(np.float32)
+    weights = (counts.astype(np.float64) / float(args.N)).astype(np.float32)
     precisions = estimate_diag_precisions(
         X, labels, means, counts, args.reg_covar
     ).astype(np.float32)
@@ -348,7 +346,7 @@ def compile_cpp(
     out = p.work / output_name
     cxx = choose_compiler(args.compiler)
     flags = args.cxxflags or ["-O3", "-march=native", "-std=c++20"]
-    cmd = [cxx, *flags, f"-DTUPLE_SIZE={args.dim}"]
+    cmd = [cxx, *flags, f"-DTUPLE_SIZE={args.D}"]
     if source_name in {"gmm_diag_trace.cpp", "gmm_diag_score_dump.cpp"}:
         cmd += ["-I../eve/include", "-Icpp/include"]
     if blas and args.blas_include:
@@ -364,13 +362,13 @@ def compile_cpp(
 
 
 def run_cpp_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
-    exe = compile_cpp(p, args, "gmm_diag_trace.cpp", f"gmm_diag_trace_{args.dim}D.bin")
+    exe = compile_cpp(p, args, "gmm_diag_trace.cpp", f"gmm_diag_trace_{args.D}D.bin")
     run(
         [
             str(exe),
             str(p.data),
-            str(args.n_samples),
-            str(args.n_clusters),
+            str(args.N),
+            str(args.K),
             str(p.weights),
             str(p.means),
             str(p.precisions),
@@ -387,15 +385,13 @@ def run_cpp_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
 
 def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
     log("[py-trace] running sklearn-style diagonal EM trace")
-    X = np.memmap(p.data, dtype=np.float32, mode="r", shape=(args.n_samples, args.dim))
-    weights = np.memmap(
-        p.weights, dtype=np.float32, mode="r", shape=(args.n_clusters,)
-    ).copy()
+    X = np.memmap(p.data, dtype=np.float32, mode="r", shape=(args.N, args.D))
+    weights = np.memmap(p.weights, dtype=np.float32, mode="r", shape=(args.K,)).copy()
     means = np.memmap(
-        p.means, dtype=np.float32, mode="r", shape=(args.n_clusters, args.dim)
+        p.means, dtype=np.float32, mode="r", shape=(args.K, args.D)
     ).copy()
     precisions = np.memmap(
-        p.precisions, dtype=np.float32, mode="r", shape=(args.n_clusters, args.dim)
+        p.precisions, dtype=np.float32, mode="r", shape=(args.K, args.D)
     ).copy()
     covariances = (1.0 / precisions).astype(np.float32)
     precisions_chol = precision_cholesky_from_precisions(precisions)
@@ -465,9 +461,9 @@ def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
     trace = {
         "schema_version": 1,
         "algorithm": "py_sklearn_diag_trace",
-        "n_samples": args.n_samples,
-        "n_features": args.dim,
-        "n_components": args.n_clusters,
+        "D": args.D,
+        "N": args.N,
+        "K": args.K,
         "iterations": iterations,
         "final": {
             "iterations": len(iterations),
@@ -557,10 +553,8 @@ def compare_full_trace(cpp: dict[str, Any], py: dict[str, Any]) -> dict[str, Any
 
 def write_sample_indices(p: Paths, args: argparse.Namespace) -> np.ndarray:
     rng = np.random.default_rng(args.seed + 12345)
-    count = min(args.score_sample_count, args.n_samples)
-    idx = np.sort(
-        rng.choice(args.n_samples, size=count, replace=False).astype(np.int64)
-    )
+    score_N = min(args.score_N, args.N)
+    idx = np.sort(rng.choice(args.N, size=score_N, replace=False).astype(np.int64))
     p.sample_indices.write_text("\n".join(str(int(i)) for i in idx) + "\n")
     return idx
 
@@ -569,14 +563,14 @@ def run_score_sanity(
     p: Paths, args: argparse.Namespace, idx: np.ndarray
 ) -> dict[str, Any]:
     exe = compile_cpp(
-        p, args, "gmm_diag_score_dump.cpp", f"gmm_diag_score_dump_{args.dim}D.bin"
+        p, args, "gmm_diag_score_dump.cpp", f"gmm_diag_score_dump_{args.D}D.bin"
     )
     run(
         [
             str(exe),
             str(p.data),
-            str(args.n_samples),
-            str(args.n_clusters),
+            str(args.N),
+            str(args.K),
             str(p.weights),
             str(p.means),
             str(p.precisions),
@@ -587,18 +581,14 @@ def run_score_sanity(
         label="run-cpp-score-dump",
     )
     cpp = load_json(p.cpp_score_json)
-    X_full = np.memmap(
-        p.data, dtype=np.float32, mode="r", shape=(args.n_samples, args.dim)
-    )
+    X_full = np.memmap(p.data, dtype=np.float32, mode="r", shape=(args.N, args.D))
     X = np.asarray(X_full[idx], dtype=np.float32)
-    weights = np.memmap(
-        p.weights, dtype=np.float32, mode="r", shape=(args.n_clusters,)
-    ).copy()
+    weights = np.memmap(p.weights, dtype=np.float32, mode="r", shape=(args.K,)).copy()
     means = np.memmap(
-        p.means, dtype=np.float32, mode="r", shape=(args.n_clusters, args.dim)
+        p.means, dtype=np.float32, mode="r", shape=(args.K, args.D)
     ).copy()
     precisions = np.memmap(
-        p.precisions, dtype=np.float32, mode="r", shape=(args.n_clusters, args.dim)
+        p.precisions, dtype=np.float32, mode="r", shape=(args.K, args.D)
     ).copy()
     precisions_chol = precision_cholesky_from_precisions(precisions)
     py_score = _estimate_log_gaussian_prob(X, means, precisions_chol, "diag") + np.log(
@@ -619,7 +609,7 @@ def run_score_sanity(
         np.sum(np.argmax(cpp_resp, axis=1) != np.argmax(py_resp, axis=1))
     )
     return {
-        "sample_count": int(idx.size),
+        "score_N": int(idx.size),
         "eve_cardinal": cpp.get("eve_cardinal"),
         "score_cpp_current_vs_sklearn": arr_stats(cpp_score, py_score64),
         "resp_from_scores_cpp_current_vs_sklearn": arr_stats(cpp_resp, py_resp),
@@ -636,32 +626,28 @@ def generate_fixed_resp(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
             p.resp_bin,
             dtype=np.float32,
             mode="r",
-            shape=(args.n_samples, args.n_clusters),
+            shape=(args.N, args.K),
         )
-        row_sum = np.asarray(resp[: min(args.n_samples, 10000)].sum(axis=1))
+        row_sum = np.asarray(resp[: min(args.N, 10000)].sum(axis=1))
         return {
             "row_sum_max_abs_err_sample": float(np.max(np.abs(row_sum - 1.0))),
             "path": str(p.resp_bin),
         }
     log("[resp] generating fixed sklearn responsibilities")
-    X = np.memmap(p.data, dtype=np.float32, mode="r", shape=(args.n_samples, args.dim))
-    weights = np.memmap(
-        p.weights, dtype=np.float32, mode="r", shape=(args.n_clusters,)
-    ).copy()
+    X = np.memmap(p.data, dtype=np.float32, mode="r", shape=(args.N, args.D))
+    weights = np.memmap(p.weights, dtype=np.float32, mode="r", shape=(args.K,)).copy()
     means = np.memmap(
-        p.means, dtype=np.float32, mode="r", shape=(args.n_clusters, args.dim)
+        p.means, dtype=np.float32, mode="r", shape=(args.K, args.D)
     ).copy()
     precisions = np.memmap(
-        p.precisions, dtype=np.float32, mode="r", shape=(args.n_clusters, args.dim)
+        p.precisions, dtype=np.float32, mode="r", shape=(args.K, args.D)
     ).copy()
     precisions_chol = precision_cholesky_from_precisions(precisions)
-    resp = np.memmap(
-        p.resp_bin, dtype=np.float32, mode="w+", shape=(args.n_samples, args.n_clusters)
-    )
+    resp = np.memmap(p.resp_bin, dtype=np.float32, mode="w+", shape=(args.N, args.K))
     max_err = 0.0
     mn, mx = math.inf, -math.inf
-    for start in range(0, args.n_samples, args.resp_chunk_rows):
-        stop = min(start + args.resp_chunk_rows, args.n_samples)
+    for start in range(0, args.N, args.resp_chunk_samples):
+        stop = min(start + args.resp_chunk_samples, args.N)
         scores = _estimate_log_gaussian_prob(
             X[start:stop], means, precisions_chol, "diag"
         ) + np.log(weights)
@@ -671,7 +657,7 @@ def generate_fixed_resp(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
         max_err = max(max_err, float(np.max(np.abs(block.sum(axis=1) - 1.0))))
         mn = min(mn, float(block.min()))
         mx = max(mx, float(block.max()))
-        log(f"[resp] rows {stop}/{args.n_samples}")
+        log(f"[resp] samples {stop}/{args.N}")
     resp.flush()
     return {
         "row_sum_max_abs_err": max_err,
@@ -683,10 +669,8 @@ def generate_fixed_resp(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
 
 def py_mstep_reference(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
     log("[py-mstep] NumPy matmul reference")
-    X = np.memmap(p.data, dtype=np.float32, mode="r", shape=(args.n_samples, args.dim))
-    resp = np.memmap(
-        p.resp_bin, dtype=np.float32, mode="r", shape=(args.n_samples, args.n_clusters)
-    )
+    X = np.memmap(p.data, dtype=np.float32, mode="r", shape=(args.N, args.D))
+    resp = np.memmap(p.resp_bin, dtype=np.float32, mode="r", shape=(args.N, args.K))
     nk_raw = np.sum(resp, axis=0)
     eps10 = np.asarray(10 * np.finfo(resp.dtype).eps, dtype=resp.dtype)
     nk = nk_raw + eps10
@@ -715,14 +699,14 @@ def run_cpp_same_resp(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
         p,
         args,
         "gmm_diag_same_resp_mstep.cpp",
-        f"gmm_diag_same_resp_mstep_{args.dim}D.bin",
+        f"gmm_diag_same_resp_mstep_{args.D}D.bin",
     )
     run(
         [
             str(exe),
             str(p.data),
-            str(args.n_samples),
-            str(args.n_clusters),
+            str(args.N),
+            str(args.K),
             str(p.resp_bin),
             str(p.cpp_same_json),
             repr(float(args.reg_covar)),
@@ -738,15 +722,15 @@ def run_cpp_blas(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
         p,
         args,
         "gmm_diag_blas_same_resp_mstep.cpp",
-        f"gmm_diag_blas_same_resp_mstep_{args.dim}D.bin",
+        f"gmm_diag_blas_same_resp_mstep_{args.D}D.bin",
         blas=True,
     )
     run(
         [
             str(exe),
             str(p.data),
-            str(args.n_samples),
-            str(args.n_clusters),
+            str(args.N),
+            str(args.K),
             str(p.resp_bin),
             str(p.cpp_blas_json),
             repr(float(args.reg_covar)),
@@ -782,7 +766,7 @@ def compare_mstep_variants(
 ) -> dict[str, Any]:
     comp: dict[str, Any] = {}
     for name, variant in cpp_json["variants"].items():
-        vv = flat_variant(variant, args.n_clusters, args.dim)
+        vv = flat_variant(variant, args.K, args.D)
         comp[name] = {field: arr_stats(vv[field], ref[field]) for field in ref}
     return comp
 
@@ -796,13 +780,13 @@ def compare_covariance_error_vectors(
 ) -> dict[str, Any]:
     iter1_cpp = np.asarray(
         full["raw"]["cpp_iter1_cov_from_stats"], dtype=np.float64
-    ).reshape(args.n_clusters, args.dim)
+    ).reshape(args.K, args.D)
     iter1_py = np.asarray(
         full["raw"]["py_iter1_cov_from_stats"], dtype=np.float64
-    ).reshape(args.n_clusters, args.dim)
-    same_current = flat_variant(
-        cpp_same["variants"][current_name], args.n_clusters, args.dim
-    )["covariances"]
+    ).reshape(args.K, args.D)
+    same_current = flat_variant(cpp_same["variants"][current_name], args.K, args.D)[
+        "covariances"
+    ]
     ref_cov = np.asarray(ref["covariances"], dtype=np.float64)
 
     full_seed_delta = iter1_cpp - iter1_py
@@ -869,7 +853,7 @@ def render_report(
     score_p99 = score_resp["p99_abs"]
     score_max = score_resp["max_abs"]
     score_argmax = score["argmax_changed_count"]
-    score_sample_count = score.get("sample_count")
+    score_N = score.get("score_N")
     eve_cardinal = score.get("eve_cardinal")
 
     scoring_unlikely_primary = score_argmax == 0 and score_p99 < 1e-5
@@ -916,17 +900,19 @@ def render_report(
     if scoring_unlikely_primary:
         verdict += (
             " Scoring/normalization differences look unlikely to be the primary cause "
-            "on the sampled rows."
+            "on the selected samples."
         )
     else:
-        verdict += " Scoring/normalization may still contribute on the sampled rows."
+        verdict += (
+            " Scoring/normalization may still contribute on the selected samples."
+        )
 
     obj = {
         "schema_version": 3,
         "case": {
-            "n_samples": args.n_samples,
-            "n_features": args.dim,
-            "n_components": args.n_clusters,
+            "D": args.D,
+            "N": args.N,
+            "K": args.K,
             "seed": args.seed,
             "max_iter": args.max_iter,
             "tol": args.tol,
@@ -943,7 +929,7 @@ def render_report(
             "amplification_final_over_iter1": amplification,
         },
         "scoring_sanity": {
-            "sample_count": score_sample_count,
+            "score_N": score_N,
             "resp_p99_abs": score_p99,
             "resp_max_abs": score_max,
             "argmax_changed_count": score_argmax,
@@ -991,9 +977,7 @@ def render_report(
     md: list[str] = []
     md.append("# Diagonal GMM scikit parity explainer")
     md.append("")
-    md.append(
-        f"Case: `{args.dim}D`, `{args.n_samples}` samples, `{args.n_clusters}` components, seed `{args.seed}`."
-    )
+    md.append(f"Case: `{args.D}D`, `{args.N}N`, `{args.K}K`, seed `{args.seed}`.")
     md.append("")
     md.append("## Verdict")
     md.append("")
@@ -1014,10 +998,10 @@ def render_report(
         f"| Full EM lower-bound abs diff | `{fnum(lower_abs)}` | Model likelihood remains close |"
     )
     md.append(
-        f"| Score-derived responsibility p99 abs diff | `{fnum(score_p99)}` over `{score_sample_count}` rows | {'Makes scoring unlikely as the primary cause on the sampled rows' if scoring_unlikely_primary else 'Scoring may contribute on the sampled rows'} |"
+        f"| Score-derived responsibility p99 abs diff | `{fnum(score_p99)}` over `{score_N}` samples | {'Makes scoring unlikely as the primary cause on the selected samples' if scoring_unlikely_primary else 'Scoring may contribute on the selected samples'} |"
     )
     md.append(
-        f"| Score-derived argmax changes | `{score_argmax}` | {'No assignment winner changes on sample' if score_argmax == 0 else 'Some winner changes'} |"
+        f"| Score-derived argmax changes | `{score_argmax}` | {'No assignment winner changes on selected samples' if score_argmax == 0 else 'Some winner changes'} |"
     )
     md.append(
         f"| Same-resp current-like M-step cov p95 abs diff | `{fnum(current_p95)}` | `{pct(seed_ratio)}` of iter-1 seed using `{current_name}` |"
@@ -1040,7 +1024,7 @@ def render_report(
     md.append("")
     if diagnosed_case_supported:
         md.append(
-            "The strongest comparison is the same-responsibility M-step test. Both implementations receive the exact same scikit-generated `resp` matrix. That bypasses scoring, exponentials, logsumexp, and component matching. The current-like streaming M-step reproduces the first-iteration covariance difference in both p95 magnitude and covariance error-vector shape. Then the BLAS oracle, using `sgemm` for `resp.T @ X` and `resp.T @ X²` with a loop-float `nk`, nearly removes that difference."
+            "The strongest comparison is the same-responsibility M-step test. Both implementations receive the exact same scikit-generated `resp` matrix. That bypasses scoring, exponentials, logsumexp, and cluster matching. The current-like streaming M-step reproduces the first-iteration covariance difference in both p95 magnitude and covariance error-vector shape. Then the BLAS oracle, using `sgemm` for `resp.T @ X` and `resp.T @ X²` with a loop-float `nk`, nearly removes that difference."
         )
     else:
         md.append(
@@ -1075,17 +1059,27 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--workdir",
         type=Path,
-        default=Path("diagnostics/gmm_diag_scikit_parity_explainer"),
+        default=Path("diagnostics_results/gmm_diag_scikit_parity_explainer"),
     )
-    ap.add_argument("--dim", type=int, default=2)
-    ap.add_argument("--n-samples", type=int, default=2_000_000)
-    ap.add_argument("--n-clusters", type=int, default=100)
+    ap.add_argument("--D", type=int, default=2)
+    ap.add_argument("--N", type=int, default=2_000_000)
+    ap.add_argument("--K", type=int, default=100)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max-iter", type=int, default=100)
     ap.add_argument("--tol", type=float, default=1e-3)
     ap.add_argument("--reg-covar", type=float, default=1e-6)
-    ap.add_argument("--score-sample-count", type=int, default=65536)
-    ap.add_argument("--resp-chunk-rows", type=int, default=65536)
+    ap.add_argument(
+        "--score-sample-N",
+        dest="score_N",
+        type=int,
+        default=65536,
+    )
+    ap.add_argument(
+        "--resp-chunk-samples",
+        dest="resp_chunk_samples",
+        type=int,
+        default=65536,
+    )
     ap.add_argument("--compiler", default=None)
     ap.add_argument("--cxxflags", nargs="*", default=None)
     ap.add_argument("--blas-flags", default=None)

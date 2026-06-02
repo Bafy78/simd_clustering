@@ -1,11 +1,12 @@
-docs/
-datasets*/
-.venv/
+*.html
 *.bin
 *.csv
+.venv/
 .vscode/
-*.html
+bin/
+docs/
+datasets*/
 **/__pycache__/
 callgrind_results/
-diagnostics/
+diagnostics_results/
 spill_detector_results/

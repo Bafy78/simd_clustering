@@ -8,8 +8,8 @@
 
 #include <eve/module/core.hpp>
 
-template <eve::product_type PointT>
-void write_point_json(std::ostream& out, const PointT& point) {
+template <eve::product_type SampleT>
+void write_sample_json(std::ostream& out, const SampleT& sample) {
     out << "[";
 
     bool first = true;
@@ -22,7 +22,7 @@ void write_point_json(std::ostream& out, const PointT& point) {
 
             first = false;
         },
-        point
+        sample
     );
 
     out << "]";

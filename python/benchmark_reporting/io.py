@@ -10,8 +10,8 @@ SUMMARY_FILENAME = "benchmark_summary.json"
 
 
 def extract_config_params(filename):
-    """Extracts Dimension, Samples, and Clusters from a string using regex."""
-    match = re.search(r"(\d+)D_(\d+)S_(\d+)K", filename)
+    """Extract Dimensions (D), Samples (N), and Clusters (K) from a config ID."""
+    match = re.search(r"(\d+)D_(\d+)N_(\d+)K", filename)
     if match:
         return int(match.group(1)), int(match.group(2)), int(match.group(3))
     return None, None, None
@@ -117,13 +117,13 @@ def load_benchmark_data(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
-        dim = int(config["dimensions"])
-        samples = int(config["samples"])
-        clusters = int(config["clusters"])
+        D = int(config["dimensions"])
+        N = int(config["samples"])
+        K = int(config["clusters"])
         config_id = config["config_id"]
         configuration = config.get(
             "configuration",
-            f"{dim}D | {samples}S | {clusters}K",
+            f"{D}D | {N}N | {K}K",
         )
 
         for phase_name_from_json, phase_entry in config.get("phases", {}).items():
@@ -146,9 +146,9 @@ def load_benchmark_data(
                 record = {
                     COL_PHASE: phase_name,
                     COL_LANGUAGE: language_name,
-                    COL_DIMENSIONS: dim,
-                    COL_SAMPLES: samples,
-                    COL_CLUSTERS: clusters,
+                    COL_DIMENSIONS: D,
+                    COL_SAMPLES: N,
+                    COL_CLUSTERS: K,
                     COL_ITERATIONS: iterations,
                     COL_TIME_S: selected_time,
                     COL_CONFIGURATION: configuration,
@@ -156,8 +156,8 @@ def load_benchmark_data(
                     COL_PHASE_KEY: phase_key,
                     COL_TIME_FIELD: time_field,
                     COL_TIME_STATISTIC: statistic,
-                    COL_N_PROCESSES: language_entry.get("n_processes"),
-                    COL_N_VALUES: language_entry.get("n_values"),
+                    COL_PROCESS_COUNT: language_entry.get("process_count"),
+                    COL_TIMING_VALUE_COUNT: language_entry.get("timing_value_count"),
                     COL_INERTIA: language_entry.get("inertia"),
                     COL_COVARIANCE_TYPE: language_entry.get("covariance_type"),
                     COL_CONVERGED: language_entry.get("converged"),
@@ -216,13 +216,13 @@ def load_speedup_summary(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
-        dim = int(config["dimensions"])
-        samples = int(config["samples"])
-        clusters = int(config["clusters"])
+        D = int(config["dimensions"])
+        N = int(config["samples"])
+        K = int(config["clusters"])
         config_id = config["config_id"]
         configuration = config.get(
             "configuration",
-            f"{dim}D | {samples}S | {clusters}K",
+            f"{D}D | {N}N | {K}K",
         )
 
         for phase_name_from_json, phase_entry in config.get("phases", {}).items():
@@ -239,9 +239,9 @@ def load_speedup_summary(
             records.append(
                 {
                     COL_PHASE: phase_name,
-                    COL_DIMENSIONS: dim,
-                    COL_SAMPLES: samples,
-                    COL_CLUSTERS: clusters,
+                    COL_DIMENSIONS: D,
+                    COL_SAMPLES: N,
+                    COL_CLUSTERS: K,
                     COL_CONFIGURATION: configuration,
                     COL_CONFIG_ID: config_id,
                     COL_PHASE_KEY: phase_key,
@@ -287,12 +287,12 @@ def load_lloyd_parity_summary(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
-        dim = int(config["dimensions"])
-        samples = int(config["samples"])
-        clusters = int(config["clusters"])
+        D = int(config["dimensions"])
+        N = int(config["samples"])
+        K = int(config["clusters"])
         configuration = config.get(
             "configuration",
-            f"{dim}D | {samples}S | {clusters}K",
+            f"{D}D | {N}N | {K}K",
         )
 
         for phase_entry in config.get("phases", {}).values():
@@ -315,9 +315,9 @@ def load_lloyd_parity_summary(
             records.append(
                 {
                     COL_CONFIGURATION: configuration,
-                    COL_DIMENSIONS: dim,
-                    COL_SAMPLES: samples,
-                    COL_CLUSTERS: clusters,
+                    COL_DIMENSIONS: D,
+                    COL_SAMPLES: N,
+                    COL_CLUSTERS: K,
                     "Diff (%)": diff_pct,
                     "Status": "✅ PASS" if passed else "❌ FAIL",
                     "Lloyd C++ Iteration": parity["cpp_iterations"],
@@ -347,12 +347,12 @@ def load_gmm_parity_summary(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
-        dim = int(config["dimensions"])
-        samples = int(config["samples"])
-        clusters = int(config["clusters"])
+        D = int(config["dimensions"])
+        N = int(config["samples"])
+        K = int(config["clusters"])
         configuration = config.get(
             "configuration",
-            f"{dim}D | {samples}S | {clusters}K",
+            f"{D}D | {N}N | {K}K",
         )
 
         for phase_entry in config.get("phases", {}).values():
@@ -369,9 +369,9 @@ def load_gmm_parity_summary(
             records.append(
                 {
                     COL_CONFIGURATION: configuration,
-                    COL_DIMENSIONS: dim,
-                    COL_SAMPLES: samples,
-                    COL_CLUSTERS: clusters,
+                    COL_DIMENSIONS: D,
+                    COL_SAMPLES: N,
+                    COL_CLUSTERS: K,
                     "Status": "✅ PASS" if status == "PASS" else "❌ FAIL",
                     "Failure Reasons": ", ".join(failure_reasons),
                     "Covariance Type": parity.get("covariance_type"),

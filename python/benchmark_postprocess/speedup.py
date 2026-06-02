@@ -61,10 +61,10 @@ def clustered_resample_values(
     Cluster bootstrap: resample whole processes/runs with replacement.
     Values inside each selected process remain grouped together.
     """
-    n_processes = len(process_values)
-    selected = rng.integers(0, n_processes, size=n_processes)
+    process_count = len(process_values)
+    selected_processes = rng.integers(0, process_count, size=process_count)
 
-    return np.concatenate([process_values[i] for i in selected])
+    return np.concatenate([process_values[i] for i in selected_processes])
 
 
 def clustered_bootstrap_speedup(
