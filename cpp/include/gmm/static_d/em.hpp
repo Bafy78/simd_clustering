@@ -55,7 +55,6 @@ struct static_gmm_em_state {
           N_k_w(means.size()),
           sum_x_w(means.size()) {
         validate_inputs();
-        covariance.refresh_covariances_from_precisions();
         covariance.refresh_score_data(weights, means);
     }
 
@@ -167,18 +166,16 @@ struct static_gmm_em_state {
     void m_step_from_accumulators() {
         constexpr float eps10 = 10.0f * std::numeric_limits<float>::epsilon();
 
-        std::vector<float> N_k(K());
         float N_k_sum = 0.0f;
 
         for (std::size_t k = 0; k < K(); ++k) {
-            N_k[k] = eve::reduce(N_k_w[k]) + eps10;
-            N_k_sum += N_k[k];
+            weights[k] = eve::reduce(N_k_w[k]) + eps10;
+            N_k_sum += weights[k];
         }
 
         for (std::size_t k = 0; k < K(); ++k) {
-            const float inv_N_k = 1.0f / N_k[k];
-
-            weights[k] = N_k[k] / N_k_sum;
+            const float N_k = weights[k];
+            const float inv_N_k = 1.0f / N_k;
 
             kumi::for_each_index(
                 [&](auto index, auto& mean_d) {
@@ -187,7 +184,9 @@ struct static_gmm_em_state {
                 means[k]
             );
 
-            covariance.update_cluster_from_sufficient_statistics(k, N_k[k], means[k]);
+            covariance.update_cluster_from_sufficient_statistics(k, N_k, means[k]);
+
+            weights[k] = N_k / N_k_sum;
         }
 
         covariance.refresh_score_data(weights, means);
@@ -237,7 +236,7 @@ static_gmm_result<SampleT> run_static_gmm_em(
 
     result.weights = std::move(state.weights);
     result.means = std::move(state.means);
-    result.covariances = std::move(state.covariance.covariances);
+    result.covariances = state.covariance.materialize_covariances();
     result.precisions = std::move(state.covariance.precisions);
 
     return result;

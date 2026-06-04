@@ -315,7 +315,8 @@ std::string make_iteration_json(
     out << "      \"lower_bound\": "; write_f64(out, lower_bound); out << ",\n";
     write_vector_key(out, "weights_before_m_step", state.weights, ",\n");
     out << "      \"means_before_m_step\": "; write_mean_vector_json(out, state.means); out << ",\n";
-    write_matrix_key<SampleT>(out, "covariances_before_m_step", state.covariance.covariances, K, ",\n");
+    const auto covariances_before_m_step = state.covariance.materialize_covariances();
+    write_matrix_key<SampleT>(out, "covariances_before_m_step", covariances_before_m_step, K, ",\n");
     write_matrix_key<SampleT>(out, "precisions_before_m_step", state.covariance.precisions, K, ",\n");
     write_vector_key(out, "N_k_raw", N_k_raw, ",\n");
     write_vector_key(out, "N_k", N_k, ",\n");
@@ -410,7 +411,7 @@ int main(int argc, char** argv) {
             lower_bound,
             state.weights,
             state.means,
-            state.covariance.covariances,
+            state.covariance.materialize_covariances(),
             state.covariance.precisions
         );
 

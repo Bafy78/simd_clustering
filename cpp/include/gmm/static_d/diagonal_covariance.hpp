@@ -32,7 +32,6 @@ struct diagonal_covariance_model {
         std::array<score_term, D> terms;
     };
 
-    std::vector<float> covariances;
     std::vector<float> precisions;
     std::vector<cluster_score_data> score_data;
     std::vector<simd_sum_sample> sum_x2_w;
@@ -47,8 +46,7 @@ struct diagonal_covariance_model {
         std::size_t K,
         float reg_covar_ = 1e-6f
     )
-        : covariances(precisions_.size()),
-          precisions(std::move(precisions_)),
+        : precisions(std::move(precisions_)),
           score_data(K),
           sum_x2_w(K),
           reg_covar(reg_covar_) {}
@@ -75,10 +73,14 @@ struct diagonal_covariance_model {
         }
     }
 
-    void refresh_covariances_from_precisions() {
+    std::vector<float> materialize_covariances() const {
+        std::vector<float> out(precisions.size());
+
         for (std::size_t i = 0; i < precisions.size(); ++i) {
-            covariances[i] = 1.0f / precisions[i];
+            out[i] = 1.0f / precisions[i];
         }
+
+        return out;
     }
 
     template <class Weights, class Means>
@@ -201,7 +203,6 @@ struct diagonal_covariance_model {
                     );
                 }
 
-                covariances[offset(k, index)] = covariance;
                 precisions[offset(k, index)] = 1.0f / covariance;
             },
             mean

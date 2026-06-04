@@ -53,9 +53,7 @@ wide_f gmm_simd_sample_norm_sq(const SimdSampleT& sample) {
 
 template <eve::product_type SampleT>
 struct spherical_covariance_model {
-    std::vector<float> covariances;
     std::vector<float> precisions;
-    std::vector<float> mean_norms;
     std::vector<float> score_constants;
     std::vector<wide_f> sum_x2_w;
     float reg_covar = 1e-6f;
@@ -69,9 +67,7 @@ struct spherical_covariance_model {
         std::size_t K,
         float reg_covar_ = 1e-6f
     )
-        : covariances(precisions_.size()),
-          precisions(std::move(precisions_)),
-          mean_norms(K),
+        : precisions(std::move(precisions_)),
           score_constants(K),
           sum_x2_w(K),
           reg_covar(reg_covar_) {}
@@ -88,10 +84,14 @@ struct spherical_covariance_model {
         }
     }
 
-    void refresh_covariances_from_precisions() {
+    std::vector<float> materialize_covariances() const {
+        std::vector<float> out(precisions.size());
+
         for (std::size_t k = 0; k < precisions.size(); ++k) {
-            covariances[k] = 1.0f / precisions[k];
+            out[k] = 1.0f / precisions[k];
         }
+
+        return out;
     }
 
     template <class Weights, class Means>
@@ -100,13 +100,13 @@ struct spherical_covariance_model {
         constexpr float half_dimensions = 0.5f * static_cast<float>(kumi::size_v<SampleT>);
 
         for (std::size_t k = 0; k < means.size(); ++k) {
-            mean_norms[k] = gmm_sample_norm_sq(means[k]);
+            const float mean_norm = gmm_sample_norm_sq(means[k]);
 
             score_constants[k] =
                 std::log(weights[k])
                 + half_dimensions * std::log(precisions[k])
                 - half_dimensions * log_2_pi
-                - 0.5f * precisions[k] * mean_norms[k];
+                - 0.5f * precisions[k] * mean_norm;
         }
     }
 
@@ -164,8 +164,6 @@ struct spherical_covariance_model {
             );
         }
 
-        covariances[k] = covariance;
         precisions[k] = 1.0f / covariance;
-        mean_norms[k] = mean_norm;
     }
 };
