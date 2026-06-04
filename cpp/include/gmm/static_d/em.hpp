@@ -38,7 +38,6 @@ struct static_gmm_em_state {
     std::vector<SampleT> means;
     CovarianceModel covariance;
     std::vector<wide_f> score_scratch;
-    std::vector<wide_f> unnormalized_resp_scratch;
     std::vector<wide_f> N_k_w;
     std::vector<simd_sum_sample> sum_x_w;
 
@@ -53,7 +52,6 @@ struct static_gmm_em_state {
           means(std::move(means_)),
           covariance(std::move(covariance_)),
           score_scratch(means.size()),
-          unnormalized_resp_scratch(means.size()),
           N_k_w(means.size()),
           sum_x_w(means.size()) {
         validate_inputs();
@@ -90,7 +88,7 @@ struct static_gmm_em_state {
     }
 
     void reset_simd_accumulators() {
-        const auto zero = eve::zero(eve::as<wide_f>());
+        const auto zero = wide_zero_f;
 
         std::fill(N_k_w.begin(), N_k_w.end(), zero);
 
@@ -105,7 +103,7 @@ struct static_gmm_em_state {
     __attribute__((always_inline)) float e_step_and_accumulate_sufficient_statistics() {
         reset_simd_accumulators();
 
-        auto lower_bound_sum_w = eve::zero(eve::as<wide_f>());
+        auto lower_bound_sum_w = wide_zero_f;
 
         eve::algo::for_each(
             samples,
@@ -126,11 +124,11 @@ struct static_gmm_em_state {
                     max_score = eve::max(max_score, score);
                 }
 
-                auto denom = eve::zero(eve::as<wide_f>());
+                auto denom = wide_zero_f;
 
                 for (std::size_t k = 0; k < K(); ++k) {
                     const auto unnormalized_resp = eve::exp(score_scratch[k] - max_score);
-                    unnormalized_resp_scratch[k] = unnormalized_resp;
+                    score_scratch[k] = unnormalized_resp;
                     denom += unnormalized_resp;
                 }
 
@@ -144,7 +142,7 @@ struct static_gmm_em_state {
                 const auto inv_denom = wide_f(1.0f) / denom;
 
                 for (std::size_t k = 0; k < K(); ++k) {
-                    const auto resp = unnormalized_resp_scratch[k] * inv_denom;
+                    const auto resp = score_scratch[k] * inv_denom;
 
                     N_k_w[k] = eve::fma[ignore](resp, wide_f(1.0f), N_k_w[k]);
                     covariance.accumulate_second_order(k, resp, sample, sample_cache, ignore);

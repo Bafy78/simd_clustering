@@ -94,7 +94,7 @@ struct diagonal_covariance_model {
     }
 
     void reset_simd_accumulators() {
-        const auto zero = eve::zero(eve::as<wide_f>());
+        const auto zero = wide_zero_f;
 
         for (auto& row : sum_x2_w) {
             row.fill(zero);
@@ -116,7 +116,7 @@ struct diagonal_covariance_model {
     }
 
     template <eve::product_type SimdSampleT>
-    wide_f compute_weighted_log_prob(
+   wide_f compute_weighted_log_prob(
         const SimdSampleT& sample,
         const sample_cache& cache,
         const SampleT& mean,

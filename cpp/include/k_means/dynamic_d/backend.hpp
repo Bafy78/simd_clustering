@@ -236,7 +236,7 @@ struct dynamic_kmeans_backend {
         for (std::size_t d = 0; d < D; ++d) {
             const float* src = original_samples.dimension(d);
 
-            wide_f sum_v = eve::zero(eve::as<wide_f>());
+            wide_f sum_v = wide_zero_f;
 
             std::size_t n = 0;
 
@@ -280,7 +280,7 @@ struct dynamic_kmeans_backend {
                     dst[n] = src[n] - mean;
 
             } else {
-                wide_f variance_v = eve::zero(eve::as<wide_f>());
+                wide_f variance_v = wide_zero_f;
 
                 for (; n + card <= N; n += card) {
                     const auto x = eve::load(eve::as_aligned(src + n));

@@ -241,7 +241,7 @@ inline bool assign_one_sample_block_tiled(
     );
 
     auto best_dist = eve::valmax(eve::as<wide_f>());
-    auto best_k = eve::zero(eve::as<wide_i>());
+    auto best_k = wide_zero_i;
 
     std::size_t k0 = 0;
 

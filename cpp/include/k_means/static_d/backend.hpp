@@ -22,7 +22,7 @@ auto compute_simd_assignment_score(
     const SampleType& centroid,
     float centroid_norm_sq
 ) {
-    auto dot = eve::zero(eve::as<wide_f>());
+    auto dot = wide_zero_f;
 
     kumi::for_each([&](auto p, auto c) {
         dot = eve::fma(p, wide_f(c), dot);
@@ -38,7 +38,7 @@ wide_i compute_closest_centroid_labels(
     std::span<const float> centroid_norms
 ) {
     auto min_distances = eve::valmax(eve::as<wide_f>());
-    auto closest_centroid_labels = eve::zero(eve::as<wide_i>());
+    auto closest_centroid_labels = wide_zero_i;
 
     for (std::size_t k = 0; k < centroids.size(); ++k) {
         auto assignment_score = compute_simd_assignment_score(
@@ -320,7 +320,7 @@ struct kumi_kmeans_backend {
             samples.get_allocator()
         );
 
-        wide_f total_squared_centered_norm_w = eve::zero(eve::as<wide_f>());
+        wide_f total_squared_centered_norm_w = wide_zero_f;
 
         eve::algo::for_each(
             eve::views::zip(original_samples, samples),

@@ -282,7 +282,7 @@ inline bool assign_full_micro_gemm_sample_group(
 
     for (std::size_t sample_vector = 0; sample_vector < N_VECTORS; ++sample_vector) {
         best_dist[sample_vector] = eve::valmax(eve::as<wide_f>());
-        best_k[sample_vector] = eve::zero(eve::as<wide_i>());
+        best_k[sample_vector] = wide_zero_i;
     }
 
     std::size_t k0 = 0;
@@ -354,7 +354,7 @@ inline bool assign_one_micro_gemm_sample_vector(
     );
 
     wide_f best_dist = eve::valmax(eve::as<wide_f>());
-    wide_i best_k = eve::zero(eve::as<wide_i>());
+    wide_i best_k = wide_zero_i;
 
     std::size_t k0 = 0;
 

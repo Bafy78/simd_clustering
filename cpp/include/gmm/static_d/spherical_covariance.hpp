@@ -23,7 +23,7 @@ float gmm_sample_norm_sq(const SampleT& sample) {
 
 template <eve::product_type SimdSampleT, eve::product_type SampleT>
 wide_f gmm_dot_simd_sample_with_mean(const SimdSampleT& sample, const SampleT& mean) {
-    auto dot = eve::zero(eve::as<wide_f>());
+    auto dot = wide_zero_f;
 
     kumi::for_each(
         [&](auto x, auto mu) {
@@ -36,12 +36,9 @@ wide_f gmm_dot_simd_sample_with_mean(const SimdSampleT& sample, const SampleT& m
     return dot;
 }
 
-// In my setup this stopped being inlined at D=15, but inlining it always seemed to improve 
-// instructions/cycles/uops counts, at the cost of relative backend pressure.
-// But runtime performance doesn't seem impacted somehow
 template <eve::product_type SimdSampleT>
 wide_f gmm_simd_sample_norm_sq(const SimdSampleT& sample) {
-    auto norm_sq = eve::zero(eve::as<wide_f>());
+    auto norm_sq = wide_zero_f;
 
     kumi::for_each(
         [&](auto x) {
@@ -114,7 +111,7 @@ struct spherical_covariance_model {
     }
 
     void reset_simd_accumulators() {
-        const auto zero = eve::zero(eve::as<wide_f>());
+        const auto zero = wide_zero_f;
         std::fill(sum_x2_w.begin(), sum_x2_w.end(), zero);
     }
 
