@@ -22,9 +22,19 @@ struct diagonal_covariance_model {
     static constexpr std::size_t D = kumi::size_v<SampleT>;
     using simd_sum_sample = std::array<wide_f, D>;
 
+    struct score_term {
+        float quadratic = 0.0f;
+        float linear = 0.0f;
+    };
+
+    struct cluster_score_data {
+        float constant = 0.0f;
+        std::array<score_term, D> terms;
+    };
+
     std::vector<float> covariances;
     std::vector<float> precisions;
-    std::vector<float> score_constants;
+    std::vector<cluster_score_data> score_data;
     std::vector<simd_sum_sample> sum_x2_w;
     float reg_covar = 1e-6f;
 
@@ -39,7 +49,7 @@ struct diagonal_covariance_model {
     )
         : covariances(precisions_.size()),
           precisions(std::move(precisions_)),
-          score_constants(K),
+          score_data(K),
           sum_x2_w(K),
           reg_covar(reg_covar_) {}
 
@@ -52,6 +62,10 @@ struct diagonal_covariance_model {
             throw std::runtime_error(
                 "Diagonal GMM precision count must be cluster count times dimension count"
             );
+        }
+
+        if (score_data.size() != K) {
+            throw std::runtime_error("Diagonal GMM score data count must match cluster count");
         }
 
         for (float precision : precisions) {
@@ -75,17 +89,26 @@ struct diagonal_covariance_model {
         for (std::size_t k = 0; k < means.size(); ++k) {
             float log_precision_det = 0.0f;
             float mean_quadratic = 0.0f;
+            auto& score_row = score_data[k];
 
             kumi::for_each_index(
                 [&](auto index, auto mu) {
                     const float precision = precisions[offset(k, index)];
+                    const float mean = static_cast<float>(mu);
+                    const float linear = mean * precision;
+
+                    score_row.terms[index] = score_term{
+                        -0.5f * precision,
+                        linear
+                    };
+
                     log_precision_det += std::log(precision);
-                    mean_quadratic += static_cast<float>(mu) * static_cast<float>(mu) * precision;
+                    mean_quadratic += mean * linear;
                 },
                 means[k]
             );
 
-            score_constants[k] =
+            score_row.constant =
                 std::log(weights[k])
                 + 0.5f * log_precision_det
                 - half_dimensions * log_2_pi
@@ -116,28 +139,26 @@ struct diagonal_covariance_model {
     }
 
     template <eve::product_type SimdSampleT>
-   wide_f compute_weighted_log_prob(
+    wide_f compute_weighted_log_prob(
         const SimdSampleT& sample,
         const sample_cache& cache,
-        const SampleT& mean,
+        const SampleT&,
         std::size_t k
     ) const {
-        auto score = wide_f(score_constants[k]);
+        const auto& score_row = score_data[k];
+        auto score = wide_f(score_row.constant);
 
         kumi::for_each_index(
-            [&](auto index, auto x, auto mu) {
-                const float mean_times_precision = static_cast<float>(mu)
-                    * precisions[offset(k, index)];
-                const auto precision = wide_f(precisions[offset(k, index)]);
+            [&](auto index, auto x) {
+                const auto& term = score_row.terms[index];
 
                 score = eve::fma(
-                    wide_f(-0.5f) * precision,
+                    wide_f(term.quadratic),
                     cache.x2[index],
-                    eve::fma(wide_f(mean_times_precision), x, score)
+                    eve::fma(wide_f(term.linear), x, score)
                 );
             },
-            sample,
-            mean
+            sample
         );
 
         return score;
