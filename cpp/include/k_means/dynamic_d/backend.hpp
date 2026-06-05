@@ -111,7 +111,7 @@ inline bool resolve_dead_centroids(
 }
 
 template<std::size_t D>
-inline bool update_centroids(
+inline kmeans::centroid_update_result update_centroids(
     samples_soa_view<D> samples,
     std::span<const int> assignments,
     centroids_storage<D>& centroids,
@@ -144,15 +144,24 @@ inline bool update_centroids(
             );
         }
 
-        void write_centroid_from_sum(std::size_t k, int count) {
+        float write_centroid_from_sum(std::size_t k, int count) {
             const float inv_count = 1.0f / static_cast<float>(count);
 
             const float* src = sums_row_major.data() + k * D;
             float* dst = centroids.row_major.data() + k * D;
 
+            float shift_sq = 0.0f;
+
             for (std::size_t d = 0; d < D; ++d) {
-                dst[d] = src[d] * inv_count;
+                const float old_value = dst[d];
+                const float new_value = src[d] * inv_count;
+                const float diff = new_value - old_value;
+
+                dst[d] = new_value;
+                shift_sq += diff * diff;
             }
+
+            return shift_sq;
         }
     };
 
@@ -165,35 +174,10 @@ inline bool update_centroids(
     );
 }
 
-template<std::size_t D>
-inline float calculate_centroid_shift_sq(
-    std::span<const float> old_centroids_row_major,
-    std::span<const float> new_centroids_row_major
-) {
-    const std::size_t K = new_centroids_row_major.size() / D;
-
-    float shift_sq = 0.0f;
-
-    for (std::size_t k = 0; k < K; ++k) {
-        const std::size_t base = k * D;
-
-        for (std::size_t d = 0; d < D; ++d) {
-            const float diff =
-                new_centroids_row_major[base + d]
-                - old_centroids_row_major[base + d];
-
-            shift_sq += diff * diff;
-        }
-    }
-
-    return shift_sq;
-}
-
 template<std::size_t D, class AssignmentBackend>
 struct dynamic_kmeans_backend {
     using assignment_vector = aligned_int_vector;
     using counts_vector = aligned_int_vector;
-    using centroid_snapshot = aligned_float_vector;
 
     samples_soa_view<D> original_samples;
 
@@ -352,14 +336,6 @@ struct dynamic_kmeans_backend {
         return counts_vector(centroids.K, 0);
     }
 
-    centroid_snapshot make_centroid_snapshot() const {
-        return centroid_snapshot(centroids.row_major.size(), 0.0f);
-    }
-
-    void save_centroids(centroid_snapshot& snapshot) const {
-        snapshot = centroids.row_major;
-    }
-
     void assign(assignment_vector& assignments) const {
         assignment_backend.assign(samples, assignments);
     }
@@ -437,7 +413,9 @@ struct dynamic_kmeans_backend {
         );
     }
 
-    void write_dirty_centroids(std::span<const int> counts) {
+    float write_dirty_centroids(std::span<const int> counts) {
+        float shift_sq = 0.0f;
+
         for (int dirty_k : incremental_update.dirty_clusters_span()) {
             const std::size_t k = static_cast<std::size_t>(dirty_k);
 
@@ -448,9 +426,16 @@ struct dynamic_kmeans_backend {
             float* dst = centroids.row_major.data() + k * D;
 
             for (std::size_t d = 0; d < D; ++d) {
-                dst[d] = src[d] * inv_count;
+                const float old_value = dst[d];
+                const float new_value = src[d] * inv_count;
+                const float diff = new_value - old_value;
+
+                dst[d] = new_value;
+                shift_sq += diff * diff;
             }
         }
+
+        return shift_sq;
     }
 
     void refresh_dirty_centroid_data() {
@@ -460,7 +445,7 @@ struct dynamic_kmeans_backend {
         );
     }
 
-    bool update_centroids_full(
+    kmeans::centroid_update_result update_centroids_full(
         const assignment_vector& assignments,
         counts_vector& counts
     ) {
@@ -477,20 +462,13 @@ struct dynamic_kmeans_backend {
         assignment_backend.on_centroids_changed(centroids);
     }
 
-    bool update_centroids(assignment_vector& assignments, counts_vector& counts) {
+    kmeans::centroid_update_result update_centroids(assignment_vector& assignments, counts_vector& counts) {
         return kmeans::update_centroids_incremental_or_full_common(
             *this,
             incremental_update,
             assignments,
             counts,
             samples.N / 4
-        );
-    }
-
-    float centroid_shift_sq(const centroid_snapshot& previous_centroids) const {
-        return ::calculate_centroid_shift_sq<D>(
-            std::span<const float>{previous_centroids},
-            std::span<const float>{centroids.row_major}
         );
     }
 };

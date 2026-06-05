@@ -119,17 +119,32 @@ void subtract_sample_from_sum(
 }
 
 template <eve::product_type SampleType>
-void write_centroid_from_sum(
+float write_centroid_from_sum(
     std::vector<SampleType>& centroids,
     const std::vector<SampleType>& sum,
     std::size_t k,
     int count
 ) {
     const float inv_count = 1.0f / static_cast<float>(count);
-    centroids[k] = kumi::map(
+    const SampleType new_centroid = kumi::map(
         [inv_count](auto s) { return s * inv_count; },
         sum[k]
     );
+
+    const float shift_sq = kumi::inner_product(
+        centroids[k],
+        new_centroid,
+        0.0f,
+        [](auto acc, auto x) { return acc + x; },
+        [](auto old_c, auto new_c) {
+            const auto diff = new_c - old_c;
+            return diff * diff;
+        }
+    );
+
+    centroids[k] = new_centroid;
+
+    return shift_sq;
 }
 
 template <eve::product_type SampleType>
@@ -180,7 +195,7 @@ bool resolve_dead_centroids(
 }
 
 template <eve::product_type SampleType>
-bool update_centroids(
+kmeans::centroid_update_result update_centroids(
     const eve::algo::soa_vector<SampleType>& samples,
     std::span<const int> assignments,
     std::vector<SampleType>& centroids,
@@ -207,8 +222,8 @@ bool update_centroids(
             return ::resolve_dead_centroids(samples, assignments, centroids, sum, counts);
         }
 
-        void write_centroid_from_sum(std::size_t k, int count) {
-            ::write_centroid_from_sum(centroids, sum, k, count);
+        float write_centroid_from_sum(std::size_t k, int count) {
+            return ::write_centroid_from_sum(centroids, sum, k, count);
         }
     };
 
@@ -222,34 +237,9 @@ bool update_centroids(
 }
 
 template <eve::product_type SampleType>
-float calculate_centroid_shift_sq(
-    const std::vector<SampleType>& old_centroids,
-    const std::vector<SampleType>& new_centroids
-) {
-    float shift_sq = 0.0f;
-
-    for (std::size_t k = 0; k < new_centroids.size(); ++k) {
-        shift_sq = kumi::inner_product(
-            old_centroids[k],
-            new_centroids[k],
-            shift_sq,
-            [](auto acc, auto x) { return acc + x;},
-            [](auto old_c, auto new_c) {
-                auto diff = new_c - old_c;
-                return diff * diff;
-            }
-        );
-    }
-
-    return shift_sq;
-}
-
-
-template <eve::product_type SampleType>
 struct kumi_kmeans_backend {
     using assignment_vector = std::vector<int, eve::aligned_allocator<int>>;
     using counts_vector = std::vector<int>;
-    using centroid_snapshot = std::vector<SampleType>;
 
     const eve::algo::soa_vector<SampleType>& original_samples;
 
@@ -410,14 +400,6 @@ struct kumi_kmeans_backend {
     }
 
 
-    centroid_snapshot make_centroid_snapshot() const {
-        return centroid_snapshot(centroids.size());
-    }
-
-    void save_centroids(centroid_snapshot& snapshot) const {
-        snapshot = centroids;
-    }
-
     void assign(assignment_vector& assignments) const {
         auto aligned_ptr = eve::as_aligned(assignments.data(), kmeans::cardinal{});
         auto unaligned_end = assignments.data() + assignments.size();
@@ -501,21 +483,25 @@ struct kumi_kmeans_backend {
         return kmeans::resolve_dead_centroids_common(ops, assignments, counts);
     }
 
-    void write_dirty_centroids(std::span<const int> counts) {
+    float write_dirty_centroids(std::span<const int> counts) {
+        float shift_sq = 0.0f;
+
         for (int dirty_k : incremental_update.dirty_clusters_span()) {
             const std::size_t k = static_cast<std::size_t>(dirty_k);
 
             if (counts[k] <= 0) continue;
 
-            ::write_centroid_from_sum(centroids, sum, k, counts[k]);
+            shift_sq += ::write_centroid_from_sum(centroids, sum, k, counts[k]);
         }
+
+        return shift_sq;
     }
 
     void refresh_dirty_centroid_data() {
         recompute_dirty_centroid_norms();
     }
 
-    bool update_centroids_full(
+    kmeans::centroid_update_result update_centroids_full(
         const assignment_vector& assignments,
         counts_vector& counts
     ) {
@@ -532,7 +518,7 @@ struct kumi_kmeans_backend {
         recompute_centroid_norms();
     }
 
-    bool update_centroids(
+    kmeans::centroid_update_result update_centroids(
         assignment_vector& assignments,
         counts_vector& counts
     ) {
@@ -543,10 +529,6 @@ struct kumi_kmeans_backend {
             counts,
             samples.size() / 4
         );
-    }
-
-    float centroid_shift_sq(const centroid_snapshot& previous_centroids) const {
-        return ::calculate_centroid_shift_sq(previous_centroids, centroids);
     }
 };
 

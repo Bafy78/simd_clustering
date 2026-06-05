@@ -27,6 +27,11 @@ inline void check_cluster_count(std::size_t K, std::size_t N) {
     }
 }
 
+struct centroid_update_result {
+    bool dead_repair_happened = false;
+    float shift_sq = 0.0f;
+};
+
 template<class Ops>
 bool resolve_dead_centroids_common(
     Ops& ops,
@@ -127,7 +132,7 @@ bool resolve_dead_centroids_common(
 }
 
 template<class Ops>
-bool update_centroids_common(
+centroid_update_result update_centroids_common(
     Ops& ops,
     std::span<const int> assignments,
     std::span<int> counts
@@ -142,15 +147,16 @@ bool update_centroids_common(
         ops.add_sample_to_sum(k, n);
     }
 
-    const bool dead_repair_happened = ops.resolve_dead_centroids(assignments, counts);
+    centroid_update_result result;
+    result.dead_repair_happened = ops.resolve_dead_centroids(assignments, counts);
 
     for (std::size_t k = 0; k < ops.K(); ++k) {
         if (counts[k] > 0) {
-            ops.write_centroid_from_sum(k, counts[k]);
+            result.shift_sq += ops.write_centroid_from_sum(k, counts[k]);
         }
     }
 
-    return dead_repair_happened;
+    return result;
 }
 
 
@@ -264,7 +270,7 @@ bool try_update_centroids_incremental_common(
     std::span<const int> assignments,
     std::span<int> counts,
     std::size_t max_incremental_changes,
-    bool& dead_repair_happened
+    centroid_update_result& result
 ) {
     const std::size_t changed_labels = count_assignment_changes_until_common(
         ops,
@@ -286,12 +292,12 @@ bool try_update_centroids_incremental_common(
         counts
     );
 
-    dead_repair_happened = ops.resolve_dead_centroids_and_mark_dirty(
+    result.dead_repair_happened = ops.resolve_dead_centroids_and_mark_dirty(
         assignments,
         counts
     );
 
-    ops.write_dirty_centroids(counts);
+    result.shift_sq = ops.write_dirty_centroids(counts);
     ops.refresh_dirty_centroid_data();
     ops.clear_dirty_clusters();
 
@@ -301,14 +307,14 @@ bool try_update_centroids_incremental_common(
 
 
 template<class Ops, class State, class AssignmentVector, class CountsVector>
-bool update_centroids_incremental_or_full_common(
+centroid_update_result update_centroids_incremental_or_full_common(
     Ops& ops,
     State& state,
     const AssignmentVector& assignments,
     CountsVector& counts,
     std::size_t max_incremental_changes
 ) {
-    bool dead_repair_happened = false;
+    centroid_update_result result;
     bool used_incremental_update = false;
 
     if (state.sums_match_assignments) {
@@ -318,18 +324,18 @@ bool update_centroids_incremental_or_full_common(
             const_int_span(assignments),
             mutable_int_span(counts),
             max_incremental_changes,
-            dead_repair_happened
+            result
         );
     }
 
     if (!used_incremental_update) {
-        dead_repair_happened = ops.update_centroids_full(assignments, counts);
+        result = ops.update_centroids_full(assignments, counts);
         ops.refresh_all_centroid_data();
     }
 
-    state.sums_match_assignments = !dead_repair_happened;
+    state.sums_match_assignments = !result.dead_repair_happened;
 
-    return dead_repair_happened;
+    return result;
 }
 
 template<class Backend>
@@ -343,7 +349,6 @@ auto k_means_core(
 
     auto assignments = backend.make_assignment_vector(-1);
     auto counts = backend.make_counts_vector();
-    auto previous_centroids = backend.make_centroid_snapshot();
 
     const float scaled_tol = backend.prepare_data_for_fit(tol);
 
@@ -353,20 +358,13 @@ auto k_means_core(
 
     while (!converged && algorithm_iterations < max_iterations) {
         const bool labels_changed = backend.assign_and_check_changed(assignments);
+        const centroid_update_result update = backend.update_centroids(assignments, counts);
 
-        backend.save_centroids(previous_centroids);
-
-        const bool dead_repair_happened = backend.update_centroids(assignments, counts);
-
-        if (!labels_changed && !dead_repair_happened) {
+        if (!labels_changed && !update.dead_repair_happened) {
             strict_convergence = true;
             converged = true;
-        } else {
-            const float shift_sq = backend.centroid_shift_sq(previous_centroids);
-
-            if (shift_sq <= scaled_tol) {
-                converged = true;
-            }
+        } else if (update.shift_sq <= scaled_tol) {
+            converged = true;
         }
 
         ++algorithm_iterations;
