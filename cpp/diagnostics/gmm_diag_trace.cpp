@@ -213,7 +213,6 @@ void write_trace_json(
     const std::vector<std::string>& algorithm_iteration_jsons,
     const std::vector<float>& lower_bounds,
     int algorithm_iterations,
-    bool converged,
     float lower_bound,
     const std::vector<float>& final_weights,
     const std::vector<SampleT>& final_means,
@@ -253,7 +252,6 @@ void write_trace_json(
 
     out << "  \"final\": {\n";
     out << "    \"algorithm_iterations\": " << algorithm_iterations << ",\n";
-    out << "    \"converged\": " << (converged ? "true" : "false") << ",\n";
     out << "    \"lower_bound\": "; write_f64(out, lower_bound); out << ",\n";
     out << "    \"lower_bounds\": "; write_scalar_array_json(out, lower_bounds); out << ",\n";
     out << "    \"weights\": "; write_scalar_array_json(out, final_weights); out << ",\n";
@@ -371,7 +369,6 @@ int main(int argc, char** argv) {
         lower_bounds.reserve(static_cast<std::size_t>(args.max_iter));
 
         float lower_bound = -std::numeric_limits<float>::infinity();
-        bool converged = false;
         int algorithm_iterations = 0;
 
         for (int iter = 1; iter <= args.max_iter; ++iter) {
@@ -388,7 +385,6 @@ int main(int argc, char** argv) {
             algorithm_iterations = iter;
 
             if (std::abs(lower_bound - previous_lower_bound) < args.tol) {
-                converged = true;
                 break;
             }
         }
@@ -407,7 +403,6 @@ int main(int argc, char** argv) {
             algorithm_iteration_jsons,
             lower_bounds,
             algorithm_iterations,
-            converged,
             lower_bound,
             state.weights,
             state.means,

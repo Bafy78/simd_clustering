@@ -164,7 +164,6 @@ def load_benchmark_data(
                     COL_TIMING_VALUE_COUNT: language_entry.get("timing_value_count"),
                     COL_INERTIA: language_entry.get("inertia"),
                     COL_COVARIANCE_TYPE: language_entry.get("covariance_type"),
-                    COL_CONVERGED: language_entry.get("converged"),
                     COL_LOWER_BOUND: language_entry.get("lower_bound"),
                 }
 
@@ -280,7 +279,6 @@ def load_lloyd_parity_summary(
     data_dir=Path("./datasets"),
     *,
     summary_filename=SUMMARY_FILENAME,
-    tolerance_pct: float | None = None,
 ) -> pd.DataFrame:
     """
     Load Lloyd parity/inertia results from benchmark_summary.json.
@@ -308,13 +306,9 @@ def load_lloyd_parity_summary(
                 continue
 
             diff_pct = float(parity["inertia_diff_pct"])
-            effective_tolerance = (
-                float(tolerance_pct)
-                if tolerance_pct is not None
-                else float(parity["tolerance_pct"])
-            )
-
-            passed = diff_pct <= effective_tolerance
+            thresholds = parity.get("thresholds", {})
+            failure_reasons = parity.get("failure_reasons", [])
+            passed = parity.get("status") == "PASS"
 
             records.append(
                 {
@@ -324,16 +318,25 @@ def load_lloyd_parity_summary(
                     COL_CLUSTERS: K,
                     "Diff (%)": diff_pct,
                     "Status": "✅ PASS" if passed else "❌ FAIL",
+                    "Failure Reasons": ", ".join(failure_reasons),
                     "Lloyd C++ Algorithm Iterations": parity[
                         "cpp_algorithm_iterations"
                     ],
                     "Lloyd Py Algorithm Iterations": parity[
                         "python_algorithm_iterations"
                     ],
+                    "Algorithm Iteration Diff Abs": parity.get(
+                        "algorithm_iteration_diff_abs"
+                    ),
                     "C++ Inertia": parity["cpp_inertia"],
                     "Py Inertia": parity["python_inertia"],
                     "Inertia Diff Abs": parity["inertia_diff_abs"],
-                    "Tolerance (%)": effective_tolerance,
+                    "Inertia Diff Threshold (%)": thresholds.get(
+                        "inertia_diff_pct"
+                    ),
+                    "Algorithm Iteration Diff Threshold Abs": thresholds.get(
+                        "algorithm_iteration_diff_abs"
+                    ),
                 }
             )
 
@@ -383,7 +386,6 @@ def load_gmm_parity_summary(
                     "Status": "✅ PASS" if status == "PASS" else "❌ FAIL",
                     "Failure Reasons": ", ".join(failure_reasons),
                     "Covariance Type": parity.get("covariance_type"),
-                    "Converged Match": parity.get("converged_match"),
                     "GMM C++ Algorithm Iterations": parity.get(
                         "cpp_algorithm_iterations"
                     ),
@@ -393,8 +395,6 @@ def load_gmm_parity_summary(
                     "Algorithm Iteration Diff Abs": parity.get(
                         "algorithm_iteration_diff_abs"
                     ),
-                    "C++ Converged": parity.get("cpp_converged"),
-                    "Py Converged": parity.get("python_converged"),
                     "C++ Lower Bound": parity.get("cpp_lower_bound"),
                     "Py Lower Bound": parity.get("python_lower_bound"),
                     "Lower Bound Diff Abs": parity.get("lower_bound_diff_abs"),
@@ -402,6 +402,21 @@ def load_gmm_parity_summary(
                     "Weights Max Abs Diff": parity.get("weights_max_abs_diff"),
                     "Means Max Abs Diff": parity.get("means_max_abs_diff"),
                     "Covariances Max Rel Diff": parity.get("covariances_max_rel_diff"),
+                    "Lower Bound Diff Abs Threshold": parity.get("thresholds", {}).get(
+                        "lower_bound_diff_abs"
+                    ),
+                    "Weights Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                        "weights_max_abs_diff"
+                    ),
+                    "Means Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                        "means_max_abs_diff"
+                    ),
+                    "Covariances Max Rel Diff Threshold": parity.get("thresholds", {}).get(
+                        "covariances_max_rel_diff"
+                    ),
+                    "Algorithm Iteration Diff Threshold Abs": parity.get(
+                        "thresholds", {}
+                    ).get("algorithm_iteration_diff_abs"),
                 }
             )
 

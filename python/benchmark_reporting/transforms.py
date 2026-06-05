@@ -315,44 +315,68 @@ def iter_speedup_phase_data(df_speedup, *, phases=None):
             yield phase, phase_df
 
 
-def add_gmm_parity_pressure(
-    df,
-    lower_bound_diff_abs=1e-4,
-    weights_diff_abs=1e-4,
-    means_diff_abs=1e-3,
-    covariances_diff_rel=1e-3,
-    algorithm_iteration_diff_abs=1,
-):
-    out = df.copy()
+def _safe_ratio(numerator, denominator):
+    numerator = pd.to_numeric(numerator, errors="coerce")
+    denominator = pd.to_numeric(denominator, errors="coerce")
 
-    out["Algorithm Iteration Diff Abs"] = (
-        out["GMM C++ Algorithm Iterations"] - out["GMM Py Algorithm Iterations"]
-    ).abs()
+    return np.where(
+        denominator == 0,
+        np.where(numerator == 0, 0.0, np.inf),
+        numerator / denominator,
+    )
+
+
+def add_gmm_parity_pressure(df):
+    out = df.copy()
 
     ratios = pd.DataFrame(
         {
-            "lower_bound": out["Lower Bound Diff Abs"] / lower_bound_diff_abs,
-            "weights": out["Weights Max Abs Diff"] / weights_diff_abs,
-            "means": out["Means Max Abs Diff"] / means_diff_abs,
-            "covariances": out["Covariances Max Rel Diff"] / covariances_diff_rel,
-            "algorithm_iterations": out["Algorithm Iteration Diff Abs"]
-            / algorithm_iteration_diff_abs,
+            "lower_bound": _safe_ratio(
+                out["Lower Bound Diff Abs"],
+                out["Lower Bound Diff Abs Threshold"],
+            ),
+            "weights": _safe_ratio(
+                out["Weights Max Abs Diff"],
+                out["Weights Max Abs Diff Threshold"],
+            ),
+            "means": _safe_ratio(
+                out["Means Max Abs Diff"],
+                out["Means Max Abs Diff Threshold"],
+            ),
+            "covariances": _safe_ratio(
+                out["Covariances Max Rel Diff"],
+                out["Covariances Max Rel Diff Threshold"],
+            ),
+            "algorithm_iterations": _safe_ratio(
+                out["Algorithm Iteration Diff Abs"],
+                out["Algorithm Iteration Diff Threshold Abs"],
+            ),
         }
     )
 
     out["Parity Pressure"] = ratios.max(axis=1)
     out["Worst Check"] = ratios.idxmax(axis=1)
 
-    hard_failure = ~out["Converged Match"].astype(bool)
-
-    out.loc[hard_failure, "Parity Pressure"] = 10.0
-    out.loc[hard_failure, "Worst Check"] = "hard fail"
-
     return out
 
 
-def add_lloyd_parity_pressure(df, tolerance_pct=1e-6):
+def add_lloyd_parity_pressure(df):
     out = df.copy()
-    out["Parity Pressure"] = out["Diff (%)"] / tolerance_pct
-    out["Worst Check"] = "inertia"
+
+    ratios = pd.DataFrame(
+        {
+            "inertia": _safe_ratio(
+                out["Diff (%)"],
+                out["Inertia Diff Threshold (%)"],
+            ),
+            "algorithm_iterations": _safe_ratio(
+                out["Algorithm Iteration Diff Abs"],
+                out["Algorithm Iteration Diff Threshold Abs"],
+            ),
+        }
+    )
+
+    out["Parity Pressure"] = ratios.max(axis=1)
+    out["Worst Check"] = ratios.idxmax(axis=1)
+
     return out

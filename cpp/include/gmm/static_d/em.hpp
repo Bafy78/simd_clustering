@@ -25,7 +25,6 @@ struct static_gmm_result {
     std::vector<float> precisions;
     std::vector<float> lower_bounds;
     int algorithm_iterations = 0;
-    bool converged = false;
     float lower_bound = -std::numeric_limits<float>::infinity();
 };
 
@@ -229,7 +228,6 @@ static_gmm_result<SampleT> run_static_gmm_em(
         result.lower_bound = lower_bound;
 
         if (std::abs(lower_bound - previous_lower_bound) < tol) {
-            result.converged = true;
             break;
         }
     }

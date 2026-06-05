@@ -8,12 +8,17 @@ import numpy as np
 from benchmark_postprocess.io import load_json
 from benchmark_postprocess.naming import (
     GMM_METRICS_JSON_RE,
-    LLOYD_PARITY_JSON_RE,
+    LLOYD_METRICS_JSON_RE,
     format_config_id,
     parse_config_match,
 )
 
 REQUIRED_LANGUAGE_KEYS = ("cpp", "py")
+
+LLOYD_PARITY_THRESHOLDS = {
+    "inertia_diff_pct": 1e-6,
+    "algorithm_iteration_diff_abs": 0,
+}
 
 GMM_PARITY_THRESHOLDS = {
     "lower_bound_diff_abs": 1e-4,
@@ -24,27 +29,39 @@ GMM_PARITY_THRESHOLDS = {
 }
 
 
+def _language_metrics(
+    metrics: dict[tuple[str, str], dict[str, Any]],
+    *,
+    config_id: str,
+    lang_key: str,
+    phase_name: str,
+) -> dict[str, Any]:
+    record = metrics.get((config_id, lang_key))
+
+    if record is None:
+        raise RuntimeError(
+            f"Missing {phase_name} metrics file for {lang_key} {config_id}. "
+            f"{phase_name} timing needs the algorithm-iteration count to report "
+            "time_per_algorithm_iteration_s."
+        )
+
+    return record
+
+
 def lloyd_algorithm_iteration_count(
-    lloyd_parity: dict[str, dict[str, Any]],
+    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
     *,
     config_id: str,
     lang_key: str,
 ) -> int:
-    parity = lloyd_parity.get(config_id)
-
-    if parity is None:
-        raise RuntimeError(
-            f"Missing Lloyd parity file for {config_id}. "
-            f"The orchestrator should finalize each config before post-processing."
-        )
-
-    if lang_key == "cpp":
-        return int(parity["cpp_algorithm_iterations"])
-
-    if lang_key == "py":
-        return int(parity["python_algorithm_iterations"])
-
-    raise RuntimeError(f"Unexpected Lloyd language key: {lang_key!r}")
+    return int(
+        _language_metrics(
+            lloyd_metrics,
+            config_id=config_id,
+            lang_key=lang_key,
+            phase_name="Lloyd",
+        )["algorithm_iterations"]
+    )
 
 
 def gmm_algorithm_iteration_count(
@@ -53,56 +70,50 @@ def gmm_algorithm_iteration_count(
     config_id: str,
     lang_key: str,
 ) -> int:
-    metrics = gmm_metrics.get((config_id, lang_key))
+    return int(
+        _language_metrics(
+            gmm_metrics,
+            config_id=config_id,
+            lang_key=lang_key,
+            phase_name="GMM",
+        )["algorithm_iterations"]
+    )
 
-    if metrics is None:
-        raise RuntimeError(
-            f"Missing GMM metrics file for {lang_key} {config_id}. "
-            "GMM timing needs the EM algorithm-iteration count to report time_per_algorithm_iteration_s."
-        )
 
-    return int(metrics["algorithm_iterations"])
-
-
-def normalize_lloyd_parity_record(
+def normalize_lloyd_metrics_record(
     record: dict[str, Any],
     *,
     config_id: str,
+    lang_key: str,
 ) -> dict[str, Any]:
     required_fields = [
-        "cpp_algorithm_iterations",
-        "python_algorithm_iterations",
-        "cpp_inertia",
-        "python_inertia",
-        "inertia_diff_abs",
-        "inertia_diff_pct",
-        "tolerance_pct",
-        "status",
+        "phase",
+        "language",
+        "algorithm_iterations",
+        "inertia",
+        "cluster_counts",
+        "cluster_inertia",
     ]
 
     for field in required_fields:
         if field not in record:
-            raise RuntimeError(f"Missing {field!r} in Lloyd parity for {config_id}")
+            raise RuntimeError(f"Missing {field!r} in Lloyd metrics for {config_id}")
 
-    record_config_id = record.get("config_id")
+    if record["phase"] != "lloyd":
+        raise RuntimeError(f"Unexpected phase in Lloyd metrics for {config_id}")
 
-    if record_config_id is not None and record_config_id != config_id:
+    if record["language"] != lang_key:
         raise RuntimeError(
-            f"Lloyd parity config mismatch: file is for {record_config_id}, "
-            f"expected {config_id}"
+            f"Lloyd metrics language mismatch: file is {lang_key}, "
+            f"record says {record['language']!r}"
         )
 
     return {
         **record,
         "config_id": config_id,
-        "cpp_algorithm_iterations": int(record["cpp_algorithm_iterations"]),
-        "python_algorithm_iterations": int(record["python_algorithm_iterations"]),
-        "cpp_inertia": float(record["cpp_inertia"]),
-        "python_inertia": float(record["python_inertia"]),
-        "inertia_diff_abs": float(record["inertia_diff_abs"]),
-        "inertia_diff_pct": float(record["inertia_diff_pct"]),
-        "tolerance_pct": float(record["tolerance_pct"]),
-        "status": str(record["status"]),
+        "language": lang_key,
+        "algorithm_iterations": int(record["algorithm_iterations"]),
+        "inertia": float(record["inertia"]),
     }
 
 
@@ -117,7 +128,6 @@ def normalize_gmm_metrics_record(
         "language",
         "covariance_type",
         "algorithm_iterations",
-        "converged",
         "lower_bound",
     ]
 
@@ -139,60 +149,39 @@ def normalize_gmm_metrics_record(
         "config_id": config_id,
         "language": lang_key,
         "algorithm_iterations": int(record["algorithm_iterations"]),
-        "converged": bool(record["converged"]),
         "lower_bound": float(record["lower_bound"]),
         "covariance_type": str(record["covariance_type"]),
     }
 
 
-def load_lloyd_parity_map(data_dir: Path) -> dict[str, dict[str, Any]]:
-    parity_records: dict[str, dict[str, Any]] = {}
-    failures: list[dict[str, Any]] = []
+def load_lloyd_metrics_map(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    metrics_records: dict[tuple[str, str], dict[str, Any]] = {}
 
-    for path in sorted(data_dir.glob("lloyd_parity_*.json")):
-        match = LLOYD_PARITY_JSON_RE.match(path.name)
+    for path in sorted(data_dir.glob("lloyd_metrics_*.json")):
+        match = LLOYD_METRICS_JSON_RE.match(path.name)
 
         if not match:
-            print(f"Skipping malformed Lloyd parity filename: {path.name}")
+            print(f"Skipping malformed Lloyd metrics filename: {path.name}")
             continue
 
+        lang_key = match.group("lang")
         D, N, K = parse_config_match(match)
         config_id = format_config_id(D, N, K)
 
-        parity = normalize_lloyd_parity_record(
+        metrics = normalize_lloyd_metrics_record(
             load_json(path),
             config_id=config_id,
+            lang_key=lang_key,
         )
 
-        if int(parity.get("schema_version", 1)) != 1:
-            raise RuntimeError(f"Unsupported Lloyd parity schema in {path}")
+        if int(metrics.get("schema_version", 1)) != 1:
+            raise RuntimeError(f"Unsupported Lloyd metrics schema in {path}")
 
-        parity_records[config_id] = parity
+        metrics_records[(config_id, lang_key)] = metrics
 
-        if parity["status"] != "PASS":
-            failures.append(parity)
+    print(f"Loaded {len(metrics_records)} Lloyd metrics records.")
 
-    if failures:
-        failed_ids = ", ".join(record["config_id"] for record in failures[:10])
-
-        print(
-            f"WARNING: Loaded {len(failures)} Lloyd parity failures. "
-            f"First failures: {failed_ids}"
-        )
-
-    pass_count = sum(
-        1 for record in parity_records.values() if record["status"] == "PASS"
-    )
-    fail_count = sum(
-        1 for record in parity_records.values() if record["status"] != "PASS"
-    )
-
-    print(
-        f"Loaded {len(parity_records)} Lloyd parity records "
-        f"({pass_count} PASS, {fail_count} non-PASS)."
-    )
-
-    return parity_records
+    return metrics_records
 
 
 def load_gmm_metrics_map(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
@@ -225,15 +214,15 @@ def load_gmm_metrics_map(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]
     return metrics_records
 
 
-def gmm_completed_config_ids(
-    gmm_metrics: dict[tuple[str, str], dict[str, Any]],
+def completed_config_ids(
+    metrics: dict[tuple[str, str], dict[str, Any]],
     *,
     required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
 ) -> set[str]:
-    """Return configs with enough GMM metrics for timing and C++/Python speedups."""
+    """Return configs with enough metrics for timing and C++/Python speedups."""
     by_config: dict[str, set[str]] = {}
 
-    for config_id, lang_key in gmm_metrics:
+    for config_id, lang_key in metrics:
         by_config.setdefault(config_id, set()).add(lang_key)
 
     required = set(required_languages)
@@ -242,6 +231,22 @@ def gmm_completed_config_ids(
         for config_id, languages in by_config.items()
         if required.issubset(languages)
     }
+
+
+def lloyd_completed_config_ids(
+    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
+    *,
+    required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
+) -> set[str]:
+    return completed_config_ids(lloyd_metrics, required_languages=required_languages)
+
+
+def gmm_completed_config_ids(
+    gmm_metrics: dict[tuple[str, str], dict[str, Any]],
+    *,
+    required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
+) -> set[str]:
+    return completed_config_ids(gmm_metrics, required_languages=required_languages)
 
 
 def _relative_diff_pct(a: float, b: float) -> float:
@@ -289,17 +294,79 @@ def _is_finite_and_within(value: float | None, tolerance: float) -> bool:
     return bool(np.isfinite(value) and value <= tolerance)
 
 
+def _status_from_checks(checks: dict[str, bool]) -> tuple[str, list[str]]:
+    failure_reasons = [
+        check_name for check_name, passed in checks.items() if not passed
+    ]
+    return ("PASS" if not failure_reasons else "FAIL", failure_reasons)
+
+
+def compute_lloyd_comparison(
+    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
+    *,
+    config_id: str,
+) -> dict[str, Any]:
+    cpp = lloyd_metrics.get((config_id, "cpp"))
+    py = lloyd_metrics.get((config_id, "py"))
+
+    if cpp is None or py is None:
+        missing = [
+            lang_key
+            for lang_key, record in (("cpp", cpp), ("py", py))
+            if record is None
+        ]
+        raise RuntimeError(f"Missing Lloyd metrics for {config_id}: {', '.join(missing)}")
+
+    cpp_algorithm_iterations = int(cpp["algorithm_iterations"])
+    py_algorithm_iterations = int(py["algorithm_iterations"])
+    algorithm_iteration_diff_abs = abs(
+        cpp_algorithm_iterations - py_algorithm_iterations
+    )
+
+    cpp_inertia = float(cpp["inertia"])
+    py_inertia = float(py["inertia"])
+    inertia_diff_abs = abs(cpp_inertia - py_inertia)
+    scale = max(abs(cpp_inertia), abs(py_inertia))
+    inertia_diff_pct = inertia_diff_abs / scale * 100.0 if scale > 0.0 else 0.0
+
+    checks = {
+        "inertia_diff_pct": _is_finite_and_within(
+            inertia_diff_pct,
+            LLOYD_PARITY_THRESHOLDS["inertia_diff_pct"],
+        ),
+        "algorithm_iteration_diff_abs": (
+            algorithm_iteration_diff_abs
+            <= LLOYD_PARITY_THRESHOLDS["algorithm_iteration_diff_abs"]
+        ),
+    }
+    status, failure_reasons = _status_from_checks(checks)
+
+    return {
+        "config_id": config_id,
+        "status": status,
+        "failure_reasons": failure_reasons,
+        "checks": checks,
+        "thresholds": dict(LLOYD_PARITY_THRESHOLDS),
+        "cpp_algorithm_iterations": cpp_algorithm_iterations,
+        "python_algorithm_iterations": py_algorithm_iterations,
+        "algorithm_iteration_diff_abs": algorithm_iteration_diff_abs,
+        "cpp_inertia": cpp_inertia,
+        "python_inertia": py_inertia,
+        "inertia_diff_abs": inertia_diff_abs,
+        "inertia_diff_pct": inertia_diff_pct,
+        "cpp_cluster_counts": cpp.get("cluster_counts"),
+        "python_cluster_counts": py.get("cluster_counts"),
+        "cpp_cluster_inertia": cpp.get("cluster_inertia"),
+        "python_cluster_inertia": py.get("cluster_inertia"),
+    }
+
+
 def compute_gmm_comparison(
     gmm_metrics: dict[tuple[str, str], dict[str, Any]],
     *,
     config_id: str,
 ) -> dict[str, Any]:
-    """Build GMM parity info using fixed project-level tolerances.
-
-    Unlike Lloyd, GMM has no inertia. The main numerical target is the final
-    average lower bound, plus sanity checks on convergence, algorithm-iteration count,
-    and learned parameters.
-    """
+    """Build GMM parity info from raw C++ and sklearn metrics."""
     cpp = gmm_metrics.get((config_id, "cpp"))
     py = gmm_metrics.get((config_id, "py"))
 
@@ -330,10 +397,7 @@ def compute_gmm_comparison(
         py.get("covariances"),
     )
 
-    converged_match = bool(cpp["converged"]) == bool(py["converged"])
-
     checks = {
-        "converged_match": converged_match,
         "algorithm_iteration_diff_abs": (
             algorithm_iteration_diff_abs
             <= GMM_PARITY_THRESHOLDS["algorithm_iteration_diff_abs"]
@@ -355,24 +419,17 @@ def compute_gmm_comparison(
             GMM_PARITY_THRESHOLDS["covariances_max_rel_diff"],
         ),
     }
-
-    failure_reasons = [
-        check_name for check_name, passed in checks.items() if not passed
-    ]
-
-    status = "PASS" if not failure_reasons else "FAIL"
+    status, failure_reasons = _status_from_checks(checks)
 
     return {
+        "config_id": config_id,
         "status": status,
         "failure_reasons": failure_reasons,
         "checks": checks,
-        "thresholds": GMM_PARITY_THRESHOLDS,
+        "thresholds": dict(GMM_PARITY_THRESHOLDS),
         "cpp_algorithm_iterations": cpp_algorithm_iterations,
         "python_algorithm_iterations": py_algorithm_iterations,
         "algorithm_iteration_diff_abs": algorithm_iteration_diff_abs,
-        "cpp_converged": bool(cpp["converged"]),
-        "python_converged": bool(py["converged"]),
-        "converged_match": converged_match,
         "covariance_type": str(cpp["covariance_type"]),
         "cpp_lower_bound": cpp_lower_bound,
         "python_lower_bound": py_lower_bound,

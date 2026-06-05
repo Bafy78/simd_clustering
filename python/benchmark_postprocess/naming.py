@@ -28,7 +28,9 @@ CONFIG_ID_PATTERN = r"(?P<D>\d+)D_(?P<N>\d+)N_(?P<K>\d+)K"
 BENCHMARK_JSON_RE = re.compile(
     rf"^(?P<phase>soa|pp|lloyd|gmm)_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
-LLOYD_PARITY_JSON_RE = re.compile(rf"^lloyd_parity_{CONFIG_ID_PATTERN}\.json$")
+LLOYD_METRICS_JSON_RE = re.compile(
+    rf"^lloyd_metrics_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
+)
 GMM_METRICS_JSON_RE = re.compile(
     rf"^gmm_metrics_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )

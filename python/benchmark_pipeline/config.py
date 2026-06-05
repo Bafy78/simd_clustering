@@ -11,7 +11,6 @@ class BenchmarkConfig:
     timing_processes: int
     timing_values: int
     timing_min_time: float
-    lloyd_parity_tolerance_pct: float
     gmm_covariance_type: str
     datasets_dir: str = str(DATASETS_DIR)
 
@@ -33,6 +32,5 @@ def default_config() -> BenchmarkConfig:
         timing_processes=5,
         timing_values=5,
         timing_min_time=0.05,
-        lloyd_parity_tolerance_pct=1e-6,
         gmm_covariance_type="spherical",
     )

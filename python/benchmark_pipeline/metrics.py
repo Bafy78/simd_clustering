@@ -118,9 +118,6 @@ def validate_gmm_timing_process_metrics(
             f"{candidate['algorithm_iterations']} vs {reference['algorithm_iterations']}"
         )
 
-    if bool(candidate["converged"]) != bool(reference["converged"]):
-        raise RuntimeError(f"converged mismatch in {path}")
-
     assert_close(
         f"lower_bound in {path}",
         float(candidate["lower_bound"]),
@@ -217,52 +214,3 @@ def validate_cpp_timing_process_metrics(timing_process_metrics: list[str]) -> di
     reference["timing_process_metrics_count"] = len(timing_process_metrics)
 
     return reference
-
-
-def compute_lloyd_parity(
-    *,
-    config_id: str,
-    cpp_metrics_file: str,
-    py_metrics_file: str,
-    output_file: str,
-    tolerance_pct: float,
-) -> dict:
-    cpp = load_json(cpp_metrics_file)
-    py = load_json(py_metrics_file)
-
-    cpp_inertia = float(cpp["inertia"])
-    py_inertia = float(py["inertia"])
-
-    inertia_diff_abs = abs(cpp_inertia - py_inertia)
-    scale = max(abs(cpp_inertia), abs(py_inertia))
-    if scale > 0.0:
-        inertia_diff_pct = inertia_diff_abs / scale * 100.0
-    else:
-        inertia_diff_pct = 0.0
-
-    parity = {
-        "schema_version": 1,
-        "config_id": config_id,
-        "cpp_algorithm_iterations": int(cpp["algorithm_iterations"]),
-        "python_algorithm_iterations": int(py["algorithm_iterations"]),
-        "cpp_inertia": cpp_inertia,
-        "python_inertia": py_inertia,
-        "inertia_diff_abs": inertia_diff_abs,
-        "inertia_diff_pct": inertia_diff_pct,
-        "tolerance_pct": tolerance_pct,
-        "status": "PASS" if inertia_diff_pct <= tolerance_pct else "FAIL",
-        "cpp_cluster_counts": cpp.get("cluster_counts"),
-        "python_cluster_counts": py.get("cluster_counts"),
-        "cpp_cluster_inertia": cpp.get("cluster_inertia"),
-        "python_cluster_inertia": py.get("cluster_inertia"),
-    }
-
-    write_json(output_file, parity)
-
-    if parity["status"] != "PASS":
-        print(
-            f"WARNING: Lloyd parity failed for {config_id}: "
-            f"{inertia_diff_pct:.12g}% > {tolerance_pct}%"
-        )
-
-    return parity

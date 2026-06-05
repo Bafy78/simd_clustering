@@ -7,7 +7,7 @@ from benchmark_postprocess.naming import (
     format_config_id,
     format_configuration,
 )
-from benchmark_postprocess.parity import compute_gmm_comparison
+from benchmark_postprocess.parity import compute_gmm_comparison, compute_lloyd_comparison
 from benchmark_postprocess.speedup import build_speedup_block, stable_child_seed
 from benchmark_postprocess.stats import summary_stats
 
@@ -70,12 +70,14 @@ def build_summary(
     bootstrap_iterations: int,
     ci_level: float,
     bootstrap_seed: int,
-    lloyd_parity: dict[str, dict[str, Any]],
+    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
     gmm_metrics: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     grouped = group_records(records)
 
     configs: dict[tuple[int, int, int], dict[str, Any]] = {}
+    lloyd_comparison_records: list[dict[str, Any]] = []
+    gmm_parity_records: list[dict[str, Any]] = []
 
     for (
         D,
@@ -139,12 +141,12 @@ def build_summary(
                     seed=speedup_seed,
                 )
 
-            # Add Lloyd inertia/parity.
+            # Add Lloyd inertia/parity from raw C++ and sklearn metrics.
             if phase_key == "lloyd":
-                parity = lloyd_parity.get(config_id)
-
-                if parity is None:
-                    raise RuntimeError(f"Missing Lloyd parity record for {config_id}")
+                parity = compute_lloyd_comparison(
+                    lloyd_metrics,
+                    config_id=config_id,
+                )
 
                 phase_entry["languages"].setdefault("C++", {})["inertia"] = parity[
                     "cpp_inertia"
@@ -154,18 +156,8 @@ def build_summary(
                     "python_inertia"
                 ]
 
-                phase_entry["parity"] = {
-                    "cpp_algorithm_iterations": parity["cpp_algorithm_iterations"],
-                    "python_algorithm_iterations": parity[
-                        "python_algorithm_iterations"
-                    ],
-                    "cpp_inertia": parity["cpp_inertia"],
-                    "python_inertia": parity["python_inertia"],
-                    "inertia_diff_abs": parity["inertia_diff_abs"],
-                    "inertia_diff_pct": parity["inertia_diff_pct"],
-                    "tolerance_pct": parity["tolerance_pct"],
-                    "status": parity["status"],
-                }
+                phase_entry["parity"] = parity
+                lloyd_comparison_records.append(parity)
 
             if phase_key == "gmm" and gmm_metrics is not None:
                 for lang_key, language_name in LANG_MAP.items():
@@ -176,7 +168,6 @@ def build_summary(
                     phase_entry["languages"].setdefault(language_name, {}).update(
                         {
                             "covariance_type": metrics["covariance_type"],
-                            "converged": metrics["converged"],
                             "lower_bound": metrics["lower_bound"],
                         }
                     )
@@ -185,10 +176,62 @@ def build_summary(
                     config_id,
                     "py",
                 ) in gmm_metrics:
-                    phase_entry["parity"] = compute_gmm_comparison(
+                    parity = compute_gmm_comparison(
                         gmm_metrics,
                         config_id=config_id,
                     )
+                    phase_entry["parity"] = parity
+                    gmm_parity_records.append(parity)
+
+    if lloyd_comparison_records:
+        failures = [
+            parity for parity in lloyd_comparison_records if parity["status"] != "PASS"
+        ]
+
+        if failures:
+            failed_ids = ", ".join(
+                parity["config_id"] for parity in failures[:10]
+            )
+            print(
+                f"WARNING: Computed {len(failures)} Lloyd parity failures. "
+                f"First failures: {failed_ids}"
+            )
+
+        pass_count = sum(
+            1 for parity in lloyd_comparison_records if parity["status"] == "PASS"
+        )
+        fail_count = sum(
+            1 for parity in lloyd_comparison_records if parity["status"] != "PASS"
+        )
+        print(
+            f"Computed {len(lloyd_comparison_records)} Lloyd parity records "
+            f"({pass_count} PASS, {fail_count} non-PASS)."
+        )
+
+    if gmm_parity_records:
+        failures = [
+            parity for parity in gmm_parity_records if parity["status"] != "PASS"
+        ]
+
+        if failures:
+            failed_ids = ", ".join(
+                parity["config_id"] for parity in failures[:10]
+            )
+            print(
+                f"WARNING: Computed {len(failures)} GMM parity failures. "
+                f"First failures: {failed_ids}"
+            )
+
+        pass_count = sum(
+            1 for parity in gmm_parity_records if parity["status"] == "PASS"
+        )
+        fail_count = sum(
+            1 for parity in gmm_parity_records if parity["status"] != "PASS"
+        )
+        print(
+            f"Computed {len(gmm_parity_records)} GMM parity records "
+            f"({pass_count} PASS, {fail_count} non-PASS)."
+        )
 
     return {
         "metadata": {
@@ -210,16 +253,20 @@ def build_summary(
                 "seed": int(bootstrap_seed),
             },
             "algorithm_metrics": {
-                "lloyd_source": "precomputed lloyd_parity_*.json files",
+                "lloyd_source": "precomputed lloyd_metrics_{cpp,py}_*.json files",
                 "gmm_source": "precomputed gmm_metrics_{cpp,py}_*.json files",
+                "parity_note": (
+                    "Lloyd and GMM parity are computed during post-processing from "
+                    "raw C++ and sklearn metrics using the current thresholds in "
+                    "benchmark_postprocess.parity. Reporting reads only this summary."
+                ),
                 "inertia_note": (
-                    "Inertia is Lloyd-specific and is computed during per-config "
-                    "finalization from compact Lloyd metrics. The post-processing step "
-                    "does not read data_*.bin files."
+                    "Inertia is Lloyd-specific and is read from compact Lloyd metrics. "
+                    "The post-processing step does not read data_*.bin files."
                 ),
                 "gmm_note": (
-                    "GMM uses lower-bound/convergence/parameter metrics instead of "
-                    "inertia. Timing summaries and speedups use the same clustered "
+                    "GMM uses lower-bound/parameter metrics instead of inertia. "
+                    "Timing summaries and speedups use the same clustered "
                     "aggregation path as Lloyd."
                 ),
             },

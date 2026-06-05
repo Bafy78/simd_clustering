@@ -5,7 +5,6 @@ import sys
 from collections.abc import Iterable
 
 from benchmark_pipeline.metrics import (
-    compute_lloyd_parity,
     validate_cpp_timing_process_metrics,
     write_json,
 )
@@ -154,9 +153,6 @@ def delete_if_exists(path: str, *, label: str | None = "intermediate artifact") 
         pass
 
 
-def task_references_path(task: Task, path: str) -> bool:
-    return any(arg == path for arg in task.command)
-
 
 def cleanup_config_inputs(case_id: str) -> None:
     for path in [
@@ -169,36 +165,6 @@ def cleanup_config_inputs(case_id: str) -> None:
         delete_if_exists(path, label="temporary input")
 
 
-def finalize_config(
-    *,
-    D: int,
-    N: int,
-    K: int,
-    lloyd_parity_tolerance_pct: float,
-    validate_lloyd_parity: bool,
-) -> None:
-    case_id = config_id(D, N, K)
-
-    cpp_metrics_file = dataset_path(f"lloyd_metrics_cpp_{case_id}.json")
-    py_metrics_file = dataset_path(f"lloyd_metrics_py_{case_id}.json")
-    parity_file = dataset_path(f"lloyd_parity_{case_id}.json")
-
-    try:
-        if validate_lloyd_parity:
-            print(f"[Validate: Lloyd Parity] {case_id}...")
-            compute_lloyd_parity(
-                config_id=case_id,
-                cpp_metrics_file=cpp_metrics_file,
-                py_metrics_file=py_metrics_file,
-                output_file=parity_file,
-                tolerance_pct=lloyd_parity_tolerance_pct,
-            )
-
-    finally:
-        cleanup_config_inputs(case_id)
-
-        delete_if_exists(cpp_metrics_file)
-        delete_if_exists(py_metrics_file)
 
 
 def execute_pipeline(
@@ -208,7 +174,6 @@ def execute_pipeline(
     timing_processes: int,
     timing_values: int,
     timing_min_time: float,
-    lloyd_parity_tolerance_pct: float,
     gmm_covariance_type: str = "spherical",
 ):
     print(f"\n--- Running Config: {configuration_label(D, N, K)} ---")
@@ -223,14 +188,6 @@ def execute_pipeline(
         gmm_covariance_type=gmm_covariance_type,
     )
 
-    case_id = config_id(D, N, K)
-
-    lloyd_cpp_metrics_file = dataset_path(f"lloyd_metrics_cpp_{case_id}.json")
-    lloyd_py_metrics_file = dataset_path(f"lloyd_metrics_py_{case_id}.json")
-    validate_lloyd_parity = any(
-        task_references_path(task, lloyd_cpp_metrics_file) for task in pipeline
-    ) and any(task_references_path(task, lloyd_py_metrics_file) for task in pipeline)
-
     for task in pipeline:
         if task.cpp_json_arg is not None:
             run_cpp_task_with_timing_processes(task, timing_processes)
@@ -238,10 +195,4 @@ def execute_pipeline(
             print(f"[{task.name}] Running...")
             run_command(task.name, task.command)
 
-    finalize_config(
-        D=D,
-        N=N,
-        K=K,
-        lloyd_parity_tolerance_pct=lloyd_parity_tolerance_pct,
-        validate_lloyd_parity=validate_lloyd_parity,
-    )
+    cleanup_config_inputs(config_id(D, N, K))

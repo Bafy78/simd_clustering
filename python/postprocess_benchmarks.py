@@ -4,8 +4,9 @@ from pathlib import Path
 from benchmark_postprocess.io import write_json
 from benchmark_postprocess.parity import (
     gmm_completed_config_ids,
+    lloyd_completed_config_ids,
     load_gmm_metrics_map,
-    load_lloyd_parity_map,
+    load_lloyd_metrics_map,
 )
 from benchmark_postprocess.records import load_timing_process_aware_records
 from benchmark_postprocess.summary import build_summary
@@ -29,12 +30,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    print("Step 1/4: Loading Lloyd parity and GMM metrics artifacts...")
-    lloyd_parity = load_lloyd_parity_map(args.data_dir)
+    print("Step 1/4: Loading Lloyd and GMM metrics artifacts...")
+    lloyd_metrics = load_lloyd_metrics_map(args.data_dir)
     gmm_metrics = load_gmm_metrics_map(args.data_dir)
 
     print(f"Step 2/4: Loading benchmark records from {args.data_dir}...")
-    lloyd_config_ids = set(lloyd_parity)
+    lloyd_config_ids = lloyd_completed_config_ids(lloyd_metrics)
     gmm_config_ids = gmm_completed_config_ids(gmm_metrics)
     completed_config_ids_by_phase = {
         "soa": lloyd_config_ids | gmm_config_ids,
@@ -44,7 +45,7 @@ def main() -> None:
 
     records = load_timing_process_aware_records(
         args.data_dir,
-        lloyd_parity=lloyd_parity,
+        lloyd_metrics=lloyd_metrics,
         gmm_metrics=gmm_metrics,
         completed_config_ids_by_phase=completed_config_ids_by_phase,
     )
@@ -55,7 +56,7 @@ def main() -> None:
         bootstrap_iterations=args.bootstrap_iterations,
         ci_level=args.ci_level,
         bootstrap_seed=args.bootstrap_seed,
-        lloyd_parity=lloyd_parity,
+        lloyd_metrics=lloyd_metrics,
         gmm_metrics=gmm_metrics,
     )
 
@@ -67,7 +68,8 @@ def main() -> None:
     print(f"Configurations: {len(summary['configs'])}")
     print(f"Raw timing values: {len(records)}")
     print(f"Bootstrap iterations: {args.bootstrap_iterations}")
-    print(f"Lloyd parity configs: {len(lloyd_parity)}")
+    print(f"Lloyd metrics records: {len(lloyd_metrics)}")
+    print(f"Lloyd completed configs: {len(lloyd_config_ids)}")
     print(f"GMM metrics records: {len(gmm_metrics)}")
     print(f"GMM completed configs: {len(gmm_config_ids)}")
 

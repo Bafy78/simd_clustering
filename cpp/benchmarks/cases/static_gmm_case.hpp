@@ -165,7 +165,6 @@ struct static_gmm_case {
             final_covariances_,
             lower_bounds_,
             algorithm_iterations_,
-            converged_,
             lower_bound_,
             covariance_type_
         );
@@ -180,7 +179,6 @@ private:
         final_precisions_ = std::move(result.precisions);
         lower_bounds_ = std::move(result.lower_bounds);
         algorithm_iterations_ = result.algorithm_iterations;
-        converged_ = result.converged;
         lower_bound_ = result.lower_bound;
     }
 
@@ -261,6 +259,5 @@ private:
     std::vector<float> final_precisions_;
     std::vector<float> lower_bounds_;
     int algorithm_iterations_ = 0;
-    bool converged_ = false;
     float lower_bound_ = 0.0f;
 };

@@ -39,7 +39,6 @@ COL_TIMING_PROCESS_COUNT = "Timing_Process_Count"
 COL_TIMING_VALUE_COUNT = "Timing_Value_Count"
 COL_INERTIA = "Inertia"
 COL_COVARIANCE_TYPE = "Covariance_Type"
-COL_CONVERGED = "Converged"
 COL_LOWER_BOUND = "Lower_Bound"
 
 # Derived / analysis columns

@@ -51,7 +51,7 @@ def iter_timing_values(path: Path):
 def load_timing_process_aware_records(
     data_dir: Path,
     *,
-    lloyd_parity: dict[str, dict[str, Any]],
+    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
     gmm_metrics: dict[tuple[str, str], dict[str, Any]] | None = None,
     completed_config_ids_by_phase: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -62,7 +62,6 @@ def load_timing_process_aware_records(
         if parsed is None:
             known_artifact_prefixes = (
                 "lloyd_metrics_",
-                "lloyd_parity_",
                 "gmm_metrics_",
             )
 
@@ -85,7 +84,7 @@ def load_timing_process_aware_records(
 
         if phase_key == "lloyd":
             algorithm_iterations = lloyd_algorithm_iteration_count(
-                lloyd_parity,
+                lloyd_metrics,
                 config_id=config_id,
                 lang_key=lang_key,
             )

@@ -45,7 +45,6 @@ def main() -> None:
                     config.timing_processes,
                     config.timing_values,
                     config.timing_min_time,
-                    config.lloyd_parity_tolerance_pct,
                     gmm_covariance_type=config.gmm_covariance_type,
                 )
 

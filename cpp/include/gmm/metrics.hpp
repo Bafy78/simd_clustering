@@ -98,7 +98,6 @@ void write_gmm_metrics(
     const std::vector<float>& covariances,
     const std::vector<float>& lower_bounds,
     int algorithm_iterations,
-    bool converged,
     float lower_bound,
     gmm_covariance_type covariance_type
 ) {
@@ -130,7 +129,6 @@ void write_gmm_metrics(
     out << "  \"language\": \"cpp\",\n";
     out << "  \"covariance_type\": \"" << to_string(covariance_type) << "\",\n";
     out << "  \"algorithm_iterations\": " << algorithm_iterations << ",\n";
-    out << "  \"converged\": " << (converged ? "true" : "false") << ",\n";
     out << "  \"lower_bound\": " << static_cast<double>(lower_bound) << ",\n";
 
     out << "  \"lower_bounds\": [";

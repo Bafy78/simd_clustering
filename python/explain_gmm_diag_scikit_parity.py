@@ -400,10 +400,9 @@ def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
     algorithm_iterations: list[dict[str, Any]] = []
     lower_bounds: list[float] = []
     lower_bound = -math.inf
-    converged = False
 
     def body() -> None:
-        nonlocal weights, means, covariances, precisions_chol, lower_bound, converged
+        nonlocal weights, means, covariances, precisions_chol, lower_bound
         for it in range(1, args.max_iter + 1):
             prev = lower_bound
             weighted = _estimate_log_gaussian_prob(
@@ -452,7 +451,6 @@ def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
             precisions_chol = compute_precision_cholesky(covariances)
             lower_bounds.append(lower_bound)
             if abs(lower_bound - prev) < args.tol:
-                converged = True
                 break
 
     if threadpool_limits is None:
@@ -470,7 +468,6 @@ def run_python_trace(p: Paths, args: argparse.Namespace) -> dict[str, Any]:
         "algorithm_iterations": algorithm_iterations,
         "final": {
             "algorithm_iterations": len(algorithm_iterations),
-            "converged": converged,
             "lower_bound": lower_bound,
             "lower_bounds": lower_bounds,
             "weights": weights,
@@ -539,8 +536,6 @@ def compare_full_trace(cpp: dict[str, Any], py: dict[str, Any]) -> dict[str, Any
             "cpp": cf["algorithm_iterations"],
             "py": pf["algorithm_iterations"],
             "compared": n,
-            "cpp_converged": cf.get("converged"),
-            "py_converged": pf.get("converged"),
         },
         "lower_bound": {
             "cpp": cf["lower_bound"],
