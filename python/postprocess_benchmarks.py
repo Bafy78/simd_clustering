@@ -37,10 +37,7 @@ def main() -> None:
     lloyd_config_ids = set(lloyd_parity)
     gmm_config_ids = gmm_completed_config_ids(gmm_metrics)
     completed_config_ids_by_phase = {
-        # AoS/SoA and k-means++ are shared setup phases. Keep them whenever
-        # at least one iterative algorithm for the config has complete metrics.
         "soa": lloyd_config_ids | gmm_config_ids,
-        "pp": lloyd_config_ids | gmm_config_ids,
         "lloyd": lloyd_config_ids,
         "gmm": gmm_config_ids,
     }
