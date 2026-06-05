@@ -5,29 +5,29 @@
 template<std::size_t D, std::size_t K_TILE>
 struct micro_gemm_assignment_layout {
     // Tile-major centroid coefficient pack:
-    //     packed[panel][d][k_in_panel]
+    //     packed[tile][d][k_in_tile]
     // where packed values are -2 * row_major_centroid_value.
     aligned_float_vector packed;
     aligned_float_vector centroid_norm_sq;
 
     std::size_t K = 0;
-    std::size_t K_panel_count = 0;
+    std::size_t K_tile_count = 0;
 
     void sync_from_row_major(const centroids_storage<D>& centroids) {
         K = centroids.K;
-        K_panel_count = (K + K_TILE - 1) / K_TILE;
+        K_tile_count = (K + K_TILE - 1) / K_TILE;
 
-        packed.resize(K_panel_count * D * K_TILE);
+        packed.resize(K_tile_count * D * K_TILE);
         centroid_norm_sq.resize(K);
 
-        for (std::size_t panel = 0; panel < K_panel_count; ++panel) {
-            const std::size_t k_base = panel * K_TILE;
+        for (std::size_t tile = 0; tile < K_tile_count; ++tile) {
+            const std::size_t k_base = tile * K_TILE;
 
             for (std::size_t t = 0; t < K_TILE; ++t) {
                 const std::size_t k = k_base + t;
                 if (k < K) {
                     const float c = centroids.row_major[k * D];
-                    panel_dimension(panel, 0)[t] = -2.0f * c;
+                    tile_dimension(tile, 0)[t] = -2.0f * c;
                     centroid_norm_sq[k] = c * c;
                 }
             }
@@ -37,7 +37,7 @@ struct micro_gemm_assignment_layout {
                     const std::size_t k = k_base + t;
                     if (k < K) {
                         const float c = centroids.row_major[k * D + d];
-                        panel_dimension(panel, d)[t] = -2.0f * c;
+                        tile_dimension(tile, d)[t] = -2.0f * c;
                         centroid_norm_sq[k] += c * c;
                     }
                 }
@@ -49,30 +49,30 @@ struct micro_gemm_assignment_layout {
         const centroids_storage<D>& centroids,
         std::size_t k
     ) {
-        const std::size_t panel = k / K_TILE;
+        const std::size_t tile = k / K_TILE;
         const std::size_t t = k % K_TILE;
 
         float norm = 0.0f;
 
         for (std::size_t d = 0; d < D; ++d) {
             const float c = centroids.row_major[k * D + d];
-            panel_dimension(panel, d)[t] = -2.0f * c;
+            tile_dimension(tile, d)[t] = -2.0f * c;
             norm += c * c;
         }
 
         centroid_norm_sq[k] = norm;
     }
 
-    float* panel_dimension(std::size_t panel, std::size_t d) {
-        return packed.data() + (panel * D + d) * K_TILE;
+    float* tile_dimension(std::size_t tile, std::size_t d) {
+        return packed.data() + (tile * D + d) * K_TILE;
     }
 
-    const float* panel_dimension(std::size_t panel, std::size_t d) const {
-        return packed.data() + (panel * D + d) * K_TILE;
+    const float* tile_dimension(std::size_t tile, std::size_t d) const {
+        return packed.data() + (tile * D + d) * K_TILE;
     }
 
-    const float* panel_dimension_for_k0(std::size_t k0, std::size_t d) const {
-        return panel_dimension(k0 / K_TILE, d);
+    const float* tile_dimension_for_k0(std::size_t k0, std::size_t d) const {
+        return tile_dimension(k0 / K_TILE, d);
     }
 };
 
@@ -118,7 +118,7 @@ inline void process_micro_gemm_centroid_tile_full_vectors(
     // No B x K score block is materialized.
     for (std::size_t d = 0; d < D; ++d) {
         const float* sample_dimension = samples.dimension(d);
-        const float* centroid_panel_dimension = layout.panel_dimension_for_k0(k0, d);
+        const float* centroid_tile_dimension = layout.tile_dimension_for_k0(k0, d);
 
         std::array<wide_f, N_VECTORS> x;
 
@@ -129,7 +129,7 @@ inline void process_micro_gemm_centroid_tile_full_vectors(
         }
 
         for (std::size_t t = 0; t < K_COUNT; ++t) {
-            const wide_f neg_two_c(centroid_panel_dimension[t]);
+            const wide_f neg_two_c(centroid_tile_dimension[t]);
 
             for (std::size_t sample_vector = 0; sample_vector < N_VECTORS; ++sample_vector) {
                 scores[sample_vector][t] = eve::fma(
@@ -208,10 +208,10 @@ inline void process_micro_gemm_centroid_tile_one_vector(
             eve::as_aligned(samples.dimension(d) + n)
         );
 
-        const float* centroid_panel_dimension = layout.panel_dimension_for_k0(k0, d);
+        const float* centroid_tile_dimension = layout.tile_dimension_for_k0(k0, d);
 
         for (std::size_t t = 0; t < K_COUNT; ++t) {
-            const wide_f neg_two_c(centroid_panel_dimension[t]);
+            const wide_f neg_two_c(centroid_tile_dimension[t]);
 
             scores[t] = eve::fma(
                 x,
