@@ -66,33 +66,10 @@ bool resolve_dead_centroids_common(
         std::uint32_t n;
     };
 
-    // Compute distance of each sample to its currently assigned old centroid:
-    // sklearn: distances = ((X - centers_old[labels]) ** 2).sum(axis=1)
-    std::vector<candidate_t> farthest_candidates;
-
-    for (std::size_t n = 0; n < N; ++n) {
-        const std::size_t assigned_k = static_cast<std::size_t>(assignments[n]);
-        const float dist = ops.distance_to_old_centroid(n, assigned_k);
-
-        if (farthest_candidates.empty()) {
-            if (dist == 0.0f) continue;
-
-            farthest_candidates.reserve(N);
-
-            for (std::uint32_t candidate_n = 0; candidate_n < static_cast<std::uint32_t>(n); ++candidate_n) {
-                farthest_candidates.push_back({ 0.0f, candidate_n });
-            }
-        }
-
-        farthest_candidates.push_back({ dist, static_cast<std::uint32_t>(n) });
-    }
-
-    // sklearn returns early when all distances are exactly zero.
-    // This happens when there are more clusters than distinct non-duplicate samples.
-    if (farthest_candidates.empty()) return false;
-
     // Select the empty_cluster_count farthest samples globally.
     // sklearn uses np.argpartition(...)[-empty_cluster_count:][::-1].
+    // We keep the same top-E rule, but maintain only the current top E candidates
+    // instead of materializing all N distances/candidates.
     auto farther = [](const candidate_t& a, const candidate_t& b) {
         if (a.distance != b.distance) {
             return a.distance > b.distance;
@@ -101,9 +78,54 @@ bool resolve_dead_centroids_common(
         return a.n < b.n;
     };
 
-    std::partial_sort(
+    std::vector<candidate_t> farthest_candidates;
+    farthest_candidates.reserve(empty_cluster_count);
+
+    float max_distance = 0.0f;
+
+    for (std::size_t n = 0; n < N; ++n) {
+        const std::size_t assigned_k = static_cast<std::size_t>(assignments[n]);
+        const float dist = ops.distance_to_old_centroid(n, assigned_k);
+
+        max_distance = std::max(max_distance, dist);
+
+        const candidate_t candidate{
+            dist,
+            static_cast<std::uint32_t>(n)
+        };
+
+        if (farthest_candidates.size() < empty_cluster_count) {
+            farthest_candidates.push_back(candidate);
+            std::push_heap(
+                farthest_candidates.begin(),
+                farthest_candidates.end(),
+                farther
+            );
+        } else if (farther(candidate, farthest_candidates.front())) {
+            std::pop_heap(
+                farthest_candidates.begin(),
+                farthest_candidates.end(),
+                farther
+            );
+
+            farthest_candidates.back() = candidate;
+
+            std::push_heap(
+                farthest_candidates.begin(),
+                farthest_candidates.end(),
+                farther
+            );
+        }
+    }
+
+    // sklearn returns early when all distances are exactly zero.
+    // This happens when there are more clusters than distinct non-duplicate samples.
+    if (max_distance == 0.0f) return false;
+
+    // Relocate in deterministic farthest-first order. This preserves the intended
+    // sklearn top-E selection rule, though not NumPy argpartition's internal order.
+    std::sort(
         farthest_candidates.begin(),
-        farthest_candidates.begin() + static_cast<std::ptrdiff_t>(empty_cluster_count),
         farthest_candidates.end(),
         farther
     );
