@@ -17,7 +17,7 @@ class BenchmarkConfig:
 
 def default_config() -> BenchmarkConfig:
     return BenchmarkConfig(
-        test_Ds=[1, 2, 3, 5, 8, 12, 17, 23, 30, 40, 63, 80, 100],
+        test_Ds=[3, 5, 7, 9, 12, 15, 20, 30],
         test_Ns=[
             4_000,
             15_000,
@@ -29,8 +29,8 @@ def default_config() -> BenchmarkConfig:
             10_000_000,
         ],
         test_Ks=[10, 25, 50, 100],
-        timing_processes=5,
-        timing_values=5,
+        timing_processes=8,
+        timing_values=6,
         timing_min_time=0.05,
         gmm_covariance_type="spherical",
     )

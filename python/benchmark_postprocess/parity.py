@@ -25,7 +25,7 @@ GMM_PARITY_THRESHOLDS = {
     "weights_max_abs_diff": 1e-4,
     "means_max_abs_diff": 1e-3,
     "covariances_max_rel_diff": 1e-2,
-    "algorithm_iteration_diff_abs": 1,
+    "algorithm_iteration_diff_abs": 0,
 }
 
 

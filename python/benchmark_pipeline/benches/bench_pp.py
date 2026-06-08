@@ -1,21 +1,25 @@
 import pyperf
 
+threadpool_limits = None
 np = None
 kmeans_plusplus = None
 
 
 def import_runtime_deps():
-    global np, kmeans_plusplus
+    global threadpool_limits, np, kmeans_plusplus
 
     import numpy as _np
     from sklearn.cluster import kmeans_plusplus as _kmeans_plusplus
+    from threadpoolctl import threadpool_limits as _threadpool_limits
 
     np = _np
     kmeans_plusplus = _kmeans_plusplus
+    threadpool_limits = _threadpool_limits
 
 
 def run_kmeans_pp(X, K):
-    centers, _ = kmeans_plusplus(X, n_clusters=K)
+    with threadpool_limits(limits=1):
+        centers, _ = kmeans_plusplus(X, n_clusters=K)
     return centers
 
 

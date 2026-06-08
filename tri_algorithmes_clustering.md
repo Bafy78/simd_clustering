@@ -13,7 +13,7 @@ To keep the explanations concise, the following variables are used consistently 
 * **$\mu$:** The centroid, exemplar, or candidate position representing a cluster.
 * **$S$:** The set of clusters. 
 
-## K-Means
+## K-Means (Lloyd)
 
 * **Parameters:** number of clusters
 * **Scalability:** Very large n_samples, medium n_clusters with MiniBatch code
@@ -34,6 +34,7 @@ $|| \cdot ||$ is $L^2$ norm.
 1. Choose the initial centroids (many methods, random, arbitrary by user, or K-means++,...)
 2. Loop:
     1. Assign each sample to its nearest centroid
+        * If a cluster receives no samples, the algorithm must define an empty-cluster policy before recomputing centroids, such as keeping the previous centroid, reinitializing it, or relocating it to a high-error sample.
     2. Create new centroids by taking the mean value of all of the samples assigned to each previous centroid
 
     Stop the loop when the distance between a previous centroid and the new one is less than a threshold.
@@ -68,7 +69,9 @@ Step 2.2 wouldn't.
 Very memory-bound if $k$ (and $d$) are small compared to $n$, but could be compute-bound else, when computing all the distances at step 2.1.
 
 #### Reductions necessary?
-Sum-reduction, during the mean computation for the new centroids.
+* Sum-reduction during the mean computation for the new centroids (step 2.2.).
+* Sum-reduction over dimensions when computing squared Euclidean distances or dot products.
+* Min/argmin-reduction over the k centroids to choose the nearest centroid for each sample.
 
 
 ### SIMD versions
@@ -802,10 +805,23 @@ Where $\mathcal{N}$ represents the probability distribution function of a multiv
     Stop the loop when the change of the log-likelihood (or lower bound) is less than a predefined convergence threshold.
 
 #### Time complexity?
-$\mathcal{O}(nk(1+d^2)+k)$
+Per EM iteration:
+* Full covariance: $\mathcal{O}(n k d^2 + k d^3)$
+* Tied full covariance: $\mathcal{O}(n k d^2 + d^3)$
+* Diagonal covariance: $\mathcal{O}(n k d)$
+* Spherical covariance: $\mathcal{O}(n k d)$
+
+Total runtime multiplies by the number of EM iterations t.
 
 #### Space complexity?
-We need to count, but some kind of $\mathcal{O}(n(d+c))$ smth
+If responsibilities are materialized, space is $\mathcal{O}(nd + nk + \text{cov params})$.
+If responsibilities are streamed and only sufficient statistics are accumulated, working memory can avoid the $\mathcal{O}(nk)$ term.
+
+Covariance parameter storage:
+* Full: $\mathcal{O}(k d^2)$
+* Tied full: $\mathcal{O}(d^2)$
+* Diagonal: $\mathcal{O}(k d)$
+* Spherical: $\mathcal{O}(k)$
 
 #### What are the heaviest mathematical operations?
 * Compute $k$ probability densities (involving Mahalanobis distances and exponentials) for n vectors at step 2.1.

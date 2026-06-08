@@ -1,0 +1,15 @@
+# Benchmark execution and dataset generation
+numpy
+scipy
+scikit-learn
+pyperf
+threadpoolctl
+
+# Postprocessing and reporting
+pandas
+matplotlib
+seaborn
+
+# Notebook report
+notebook
+ipykernel
