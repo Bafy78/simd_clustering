@@ -1,4 +1,4 @@
-# Run and reproduce
+# 🚀 Run and reproduce
 
 This document is the operational guide for reproducing the benchmark artifacts. All commands below assume they are run from the repository root.
 

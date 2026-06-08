@@ -1,6 +1,6 @@
-# SIMD and kernel mechanics
+# ⚙️ SIMD and kernel mechanics
 
-## SIMD vocabulary and data shapes
+## 🧠 SIMD vocabulary and data shapes
 
 The project uses EVE vectors as the common SIMD abstraction:
 
@@ -84,7 +84,7 @@ clusters    -> scanned, tiled, or tile-packed
 
 Most of the kernel design choices described later are different ways of exploiting this structure while maximizing data reuse and minimizing register pressure.
 
-## Static-D Kumi backends
+## 🏛️ Static-D Kumi backends
 
 The static-D kernels all use the same basic shape:
 
@@ -118,7 +118,7 @@ Its distance kernel computes squared distances from a SIMD sample batch to a can
 * updating the permanent nearest-centroid distance array;
 * evaluating the total cost of a trial candidate.
 
-## Dynamic-D K-Means assignment kernels
+## 🌊 Dynamic-D K-Means assignment kernels
 
 The dynamic-D assignment kernels are more specialized because dimensions are not tuple fields. They stream dimensions from `samples[d][n]` and use an assignment-specific centroid pack.
 
@@ -179,7 +179,7 @@ N_VECTORS * K_TILE
 
 plus the currently loaded sample-dimension vectors. If either knob is too large, the kernel can recreate the same register-pressure problem the dynamic path was trying to avoid.
 
-## Kernel comparison
+## ⚖️ Kernel comparison
 
 | Kernel family | SIMD lanes mean | Cluster loop shape | Reuse strategy | Main tunables |
 | ------------- | --------------- | ------------------ | -------------- | ------------- |

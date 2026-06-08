@@ -1,11 +1,11 @@
-# Project overview and runnable artifact map
+# 🧭 Architecture and artifact map
 
 This document describes how the benchmark code is organized and which files are produced by the normal pipeline.
 
 The main conceptual coordinates used throughout the project are `D` for dimensions, `N` for samples, and `K` for clusters or mixture components. All benchmark configurations
 are identified by these three coordinates, together with the algorithm phase, implementation language, and sometimes algorithm variant. All the code also uses this naming convention.
 
-## Main supported algorithmic phases
+## 🧩 Main supported algorithmic phases
 
 The project exposes four major phases:
 
@@ -25,15 +25,7 @@ Each phase has a different level of support across C++, Python, metrics, parity 
 
 The pipeline is modular: phases can be enabled or disabled depending on what is currently being studied. The project should therefore be understood as a collection of reusable benchmark stages rather than a single permanently fixed experiment script.
 
-## Repository structure
-
-The codebase is organized around three main layers:
-
-1. **Algorithm implementations**
-2. **Benchmark/profiling entry points**
-3. **Python orchestration and reporting**
-
-## C++ algorithm layer
+## 💻 C++ algorithm layer
 
 The core implementations live under [`cpp/include`](../cpp/include)
 
@@ -72,7 +64,7 @@ to compile instructions, benchmark case headers, case types, and mode-specific b
 
 This registry is reused by all the tools.
 
-## Python pipeline responsibilities
+## 🐍 Python pipeline responsibilities
 
 Lifecycle:
 
@@ -144,7 +136,7 @@ Temporary binary inputs use these patterns:
 | `gmm_means_<config>.bin` | Initial GMM means. |
 | `gmm_precisions_<config>.bin` | Initial GMM precisions. |
 
-## Profiling and forensic tools
+## 🔬 Profiling and forensic tools
 
 The project includes tools beyond normal benchmark execution.
 

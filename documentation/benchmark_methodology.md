@@ -1,8 +1,8 @@
-# Benchmark methodology
+# 📏 Benchmark methodology
 
 This document describes the benchmark methodology used by the pipeline: how inputs are generated, how initialization is controlled, what is included in the measured regions, and what limitations follow from those choices.
 
-## Dataset and initialization
+## 🌱 Dataset and initialization
 
 ### Synthetic datasets
 
@@ -43,7 +43,7 @@ The setup initialization is deterministic because it passes `random_state=42`. T
 
 So the K-Means++ benchmark runs on the same deterministic dataset, but the sampled centers can differ from run to run. The timing comparison therefore relies on a high number of benchmark iterations rather than identical sampled centers across repetitions.
 
-## Measurement boundary
+## 📏 Measurement boundary
 
 The benchmark distinguishes setup work from measured algorithm work.
 
@@ -67,7 +67,7 @@ For SoA conversion, the conversion is the thing being measured. The raw AoS data
 For Python benchmarks, each `bench_*.py` script loads the shared binary inputs before calling `pyperf.Runner.bench_func(...)`. The measured function is the wrapped scikit-learn operation. For Lloyd and GMM, estimator construction and `.fit(...)` are inside the measured function because they are part of the operation being compared.
 
 
-## Threading boundary
+## 🧵 Threading boundary
 
 The current C++ SIMD implementations are single-threaded.
 
@@ -75,7 +75,7 @@ The benchmark is not intended to measure thread scaling, scheduling overhead, in
 
 Adding thread parallelism to the C++ implementations should be a separate benchmark regime rather than an implicit change to these results. The natural parallelization strategy would be similar in spirit to scikit-learn's: distribute independent sample-wise work across threads, then combine per-thread reductions for quantities such as cluster sums, responsibilities, or accumulated costs. If that is added, the benchmark should document the thread count and compare against scikit-learn under a matching thread policy.
 
-## Timing and repetition
+## ⏲️ Timing and repetition
 
 The timing policy is controlled by three fields in [`python/benchmark_pipeline/config.py`](../python/benchmark_pipeline/config.py). [`python/benchmark_pipeline/tasks.py`](../python/benchmark_pipeline/tasks.py) maps those fields to the generated Python and C++ commands.
 
@@ -87,7 +87,7 @@ The timing policy is controlled by three fields in [`python/benchmark_pipeline/c
 
 Both benchmark frontends use one warmup. Postprocessing ignores warmup/calibration data and expands only recorded JSON `values` into timing records.
 
-## Metrics, speedups, and confidence intervals
+## 📊 Metrics, speedups, and confidence intervals
 
 Each language/phase/configuration summary reports descriptive statistics for total time and per-algorithm-iteration time. The statistics are produced by [`python/benchmark_postprocess/stats.py`](../python/benchmark_postprocess/stats.py): count, median, mean, standard deviation, MAD, min/max, and selected percentiles. For Lloyd and GMM, per-algorithm-iteration time is total measured time divided by the iteration count stored in the metrics file. For non-iterative phases, the iteration count is treated as `1`.
 
@@ -99,7 +99,7 @@ The bootstrap iteration count, confidence level, and base seed are command-line 
 
 Per-algorithm-iteration speedup intervals are not bootstrapped separately. They are derived from the total-time speedup interval by scaling with the C++ and Python algorithm-iteration counts.
 
-## Interpretation limits
+## ⚠️ Interpretation limits
 
 The benchmark results should be interpreted within the limits of this methodology:
 

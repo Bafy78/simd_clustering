@@ -1,10 +1,10 @@
-# scikit-learn parity and validation
+# ✅ Scikit-learn parity and validation
 
 This document describes what the project means by scikit-learn parity, which artifacts are compared, how C++ benchmark outputs are validated, and how to interpret parity failures.
 
 The short version is that scikit-learn is used as the behavioral reference for the Python side of the benchmark, but parity is not treated as a proof of mathematical optimality. It is an implementation-level check that the C++ kernels and the scikit-learn calls are solving the same configured problem from the same input artifacts and producing sufficiently close metrics.
 
-## Validation layers
+## ✔️ Validation layers
 
 The project has two different validation layers:
 
@@ -19,7 +19,7 @@ C++ vs scikit-learn parity is computed later, during postprocessing, from the ca
 
 The separation is intentional. Repeatability failures usually indicate nondeterminism, state leakage, or a bug in the benchmark harness. scikit-learn parity failures usually indicate either a real semantic mismatch, a numerical tolerance issue, or a known difference between the implementation under test and scikit-learn's exact behavior.
 
-## Phase coverage
+## 🧩 Phase coverage
 
 Not every benchmark phase has a scikit-learn parity check.
 
@@ -36,7 +36,7 @@ K-Means++ has C++ and Python timing support, but it currently does not emit a me
 
 Lloyd and GMM are the parity-bearing phases. They emit metrics files for both C++ and Python, and postprocessing compares those metrics with explicit thresholds.
 
-## Lloyd / K-Means parity
+## 🎯 Lloyd / K-Means parity
 
 The Python path recomputes inertia in the benchmark script instead of relying only on `kmeans.inertia_`. Although this value is documented as being the correct final value, there can be bugs in scikit-learn that make it incorrect ([GitHub issue](https://github.com/scikit-learn/scikit-learn/issues/34074)) The C++ path also computes inertia as a scalar verification pass outside the timed algorithm.
 
@@ -49,7 +49,7 @@ Postprocessing currently checks Lloyd parity with the thresholds in `LLOYD_PARIT
 
 The parity record also carries cluster counts and per-cluster inertia for debugging, but those fields are not currently pass/fail gates in `compute_lloyd_comparison(...)`.
 
-## GMM EM parity
+## 🫧 GMM EM parity
 
 Postprocessing currently checks GMM parity with the thresholds in `GMM_PARITY_THRESHOLDS`:
 
@@ -64,7 +64,7 @@ Postprocessing currently checks GMM parity with the thresholds in `GMM_PARITY_TH
 
 The covariance check uses relative error because covariance values can vary by scale. Weights and means use absolute error because their expected magnitudes are easier to interpret directly in this synthetic setup.
 
-## C++ timing-process metrics validation
+## ⏱️ C++ timing-process metrics validation
 
 C++ benchmark tasks are run once per configured timing process. Each process writes its own temporary timing JSON. For Lloyd and GMM, each process also writes its own temporary metrics file.
 
@@ -93,7 +93,7 @@ Scalar and array comparisons use a tight internal helper, `assert_close(...)`, w
 
 If validation succeeds, the first timing-process metrics record becomes the canonical C++ metrics file. If validation fails, the pipeline raises an error instead of silently merging timing data whose algorithm outputs disagree.
 
-## Postprocessing and summary output
+## 📦 Postprocessing and summary output
 
 The postprocessing entrypoint is [`python/postprocess_benchmarks.py`](../python/postprocess_benchmarks.py).
 
@@ -116,13 +116,13 @@ In the final summary, each parity-bearing phase gets a `parity` block containing
 
 This is deliberate. The summary should be self-describing enough that plots and notebooks do not need to reimplement the parity logic. Reporting should read the parity status and diagnostics from the summary artifact.
 
-## How to interpret failures
+## 🚨 How to interpret failures
 
 A parity failure does not automatically mean that the C++ kernel is wrong, but it does mean the corresponding benchmark result should not be treated as a clean scikit-learn-equivalent speed comparison without further investigation.
 
 When a parity check fails, the first things to inspect are the raw metrics files, not the timing summary. The metrics files contain the actual algorithm outputs used to decide the parity status.
 
-## Diagnostic tool for diagonal GMM
+## 🩺 Diagnostic tool for diagonal GMM
 
 The project includes [`python/explain_gmm_diag_scikit_parity.py`](../python/explain_gmm_diag_scikit_parity.py), a forensic script for diagonal GMM parity.
 
@@ -130,7 +130,7 @@ This tool is meant to explain differences between the C++ diagonal GMM path and 
 
 After running it, it generates [a markdown file](../diagnostics_results/gmm_diag_scikit_parity_explainer/gmm_diag_scikit_parity_explanation.md) that argues if the specific tested config's difference with scikit-learn can be explained by one of its tested explanations. The main thing is that, in low-D high-N, the covariances diff with scikit-learn is generally huge, way past thresholds. But when rerunning the alg with a BLAS call in the M step, this difference disappears. And algebraically, our kernel is doing the same. So the difference in this case is very likely reduction semantics, that we won't be trying to match.
 
-## Non-goals and limits
+## 🚧 Non-goals and limits
 
 The parity system has several limits:
 
