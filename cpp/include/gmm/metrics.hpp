@@ -68,6 +68,57 @@ void write_diagonal_gmm_covariances_json(
     out << "  ],\n";
 }
 
+
+
+template <eve::product_type SampleT>
+void write_full_gmm_covariances_json(
+    std::ostream& out,
+    const std::vector<float>& covariances,
+    std::size_t K
+) {
+    constexpr std::size_t D = kumi::size_v<SampleT>;
+
+    if (covariances.size() != K * D * D) {
+        throw std::runtime_error(
+            "Full GMM covariance count must be cluster count times dimension squared"
+        );
+    }
+
+    out << "  \"covariances\": [\n";
+    for (std::size_t k = 0; k < K; ++k) {
+        out << "    [\n";
+
+        for (std::size_t row = 0; row < D; ++row) {
+            out << "      [";
+
+            for (std::size_t col = 0; col < D; ++col) {
+                if (col != 0) {
+                    out << ", ";
+                }
+
+                out << static_cast<double>(covariances[(k * D + row) * D + col]);
+            }
+
+            out << "]";
+
+            if (row + 1 != D) {
+                out << ",";
+            }
+
+            out << "\n";
+        }
+
+        out << "    ]";
+
+        if (k + 1 != K) {
+            out << ",";
+        }
+
+        out << "\n";
+    }
+    out << "  ],\n";
+}
+
 template <eve::product_type SampleT>
 void write_gmm_covariances_json(
     std::ostream& out,
@@ -83,10 +134,9 @@ void write_gmm_covariances_json(
         write_diagonal_gmm_covariances_json<SampleT>(out, covariances, K);
         return;
     case gmm_covariance_type::full:
-    case gmm_covariance_type::tied:
-        throw std::runtime_error("GMM metrics support only spherical and diag covariance");
+        write_full_gmm_covariances_json<SampleT>(out, covariances, K);
+        return;
     }
-
     throw std::runtime_error("Unknown GMM covariance_type");
 }
 

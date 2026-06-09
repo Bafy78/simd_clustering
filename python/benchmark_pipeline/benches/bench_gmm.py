@@ -27,8 +27,6 @@ def import_runtime_deps():
 def covariance_shape(covariance_type, K, D):
     if covariance_type == "full":
         return (K, D, D)
-    if covariance_type == "tied":
-        return (D, D)
     if covariance_type == "diag":
         return (K, D)
     if covariance_type == "spherical":
@@ -139,7 +137,7 @@ if __name__ == "__main__":
     runner.argparser.add_argument("--K", type=int, required=True)
     runner.argparser.add_argument(
         "--covariance-type",
-        choices=("full", "tied", "diag", "spherical"),
+        choices=("full", "diag", "spherical"),
         default="spherical",
     )
     runner.argparser.add_argument("--gmm-weights-bin", required=True)

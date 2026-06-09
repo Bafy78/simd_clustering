@@ -81,7 +81,7 @@ def main() -> None:
     parser.add_argument("--K", type=int, required=True)
     parser.add_argument(
         "--gmm-covariance-type",
-        choices=("full", "tied", "diag", "spherical"),
+        choices=("full", "diag", "spherical"),
         default="spherical",
     )
     parser.add_argument("--skip-compile", action="store_true")

@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.cluster import kmeans_plusplus
 from sklearn.datasets import make_blobs
 
-CovarianceType = Literal["full", "tied", "diag", "spherical"]
+CovarianceType = Literal["full", "diag", "spherical"]
 
 
 def nearest_center_labels(
@@ -138,32 +138,6 @@ def _estimate_full_precisions(
     covariances[:, diag, diag] += reg_covar
     return np.linalg.inv(covariances)
 
-
-def _estimate_tied_precision(
-    X: np.ndarray,
-    labels: np.ndarray,
-    means: np.ndarray,
-    *,
-    reg_covar: float,
-    max_chunk_rows: int = 250_000,
-) -> np.ndarray:
-    N, D = X.shape
-    covariance = np.zeros((D, D), dtype=np.float64)
-    means64 = np.asarray(means, dtype=np.float64)
-
-    for start in range(0, N, max_chunk_rows):
-        stop = min(start + max_chunk_rows, N)
-        labels_chunk = labels[start:stop]
-        X_chunk = np.asarray(X[start:stop], dtype=np.float64)
-        diff = X_chunk - means64[labels_chunk]
-        covariance += diff.T @ diff
-
-    covariance /= float(N)
-    diag = np.arange(D)
-    covariance[diag, diag] += reg_covar
-    return np.linalg.inv(covariance)
-
-
 def estimate_gmm_initial_parameters(
     X: np.ndarray,
     means: np.ndarray,
@@ -206,13 +180,6 @@ def estimate_gmm_initial_parameters(
             counts,
             reg_covar=reg_covar,
         )
-    elif covariance_type == "tied":
-        precisions = _estimate_tied_precision(
-            X,
-            labels,
-            means,
-            reg_covar=reg_covar,
-        )
     else:
         raise ValueError(f"Unsupported covariance_type: {covariance_type!r}")
 
@@ -235,7 +202,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gmm-precisions-out")
     parser.add_argument(
         "--gmm-covariance-type",
-        choices=("full", "tied", "diag", "spherical"),
+        choices=("full", "diag", "spherical"),
         default="spherical",
     )
     parser.add_argument("--gmm-reg-covar", type=float, default=1e-6)

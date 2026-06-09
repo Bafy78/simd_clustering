@@ -8,8 +8,7 @@
 enum class gmm_covariance_type {
     spherical,
     diag,
-    full,
-    tied
+    full
 };
 
 inline gmm_covariance_type parse_gmm_covariance_type(std::string_view value) {
@@ -25,10 +24,6 @@ inline gmm_covariance_type parse_gmm_covariance_type(std::string_view value) {
         return gmm_covariance_type::full;
     }
 
-    if (value == "tied") {
-        return gmm_covariance_type::tied;
-    }
-
     throw std::runtime_error("Unsupported GMM covariance_type: " + std::string(value));
 }
 
@@ -40,10 +35,7 @@ inline const char* to_string(gmm_covariance_type covariance_type) {
         return "diag";
     case gmm_covariance_type::full:
         return "full";
-    case gmm_covariance_type::tied:
-        return "tied";
     }
-
     throw std::runtime_error("Unknown GMM covariance_type");
 }
 
@@ -59,10 +51,7 @@ inline std::size_t gmm_precision_value_count(
         return K * D;
     case gmm_covariance_type::full:
         return K * D * D;
-    case gmm_covariance_type::tied:
-        return D * D;
     }
-
     throw std::runtime_error("Unknown GMM covariance_type");
 }
 

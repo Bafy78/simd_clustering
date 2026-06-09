@@ -105,9 +105,12 @@ This is a simple and direct shape: samples are vectorized, dimensions are unroll
 
 The score is a weighted log probability instead of a K-Means assignment score.
 
-The spherical covariance model precomputes one score constant per cluster and caches the SIMD sample norm. Scoring is then mostly a dot product with the mean plus a norm term.
+The spherical covariance model keeps one variance/precision value per cluster. Its sample cache only needs the squared norm $||x||²$, and its second-order accumulator is one weighted norm sum per cluster. This is the lightest GMM covariance path: scoring and accumulation scale as $\mathcal{O}(KD)$ per SIMD sample batch, with very little per-cluster accumulator state.
 
-The diagonal covariance model precomputes per-cluster, per-dimension quadratic and linear terms. Scoring streams over the Kumi fields and applies those terms with FMAs.
+The diagonal covariance model keeps one variance/precision value per cluster and dimension. Its sample cache stores the per-dimension squares $x_d²$, and its second-order accumulator stores one weighted square sum per cluster and dimension. It has the same $\mathcal{O}(KD)$ scoring and accumulation shape as the spherical model, but with more coefficient data and more accumulator pressure.
+
+The full covariance model precomputes per-component constants, linear terms, and lower-triangular quadratic terms. The SIMD sample cache stores lower-triangular $x_i * x_j$ products, and the accumulator stores lower-triangular weighted raw
+second moments. This keeps the generic static-D EM interface but increases cache and register pressure as $D²$.
 
 After scoring, responsibilities and sufficient statistics are accumulated as SIMD vectors, then reduced later into scalar parameters.
 

@@ -36,7 +36,7 @@ SPILL_DETECTOR_PATTERN = (
     r")"
 )
 
-GMM_COVARIANCE_TYPES = ("spherical", "diag")
+GMM_COVARIANCE_TYPES = ("spherical", "diag", "full")
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,8 @@ def gmm_covariance_define(gmm_covariance_type: str | None) -> list[str]:
         return ["-DSPILL_GMM_COVARIANCE_SPHERICAL"]
     if gmm_covariance_type == "diag":
         return ["-DSPILL_GMM_COVARIANCE_DIAG"]
+    if gmm_covariance_type == "full":
+        return ["-DSPILL_GMM_COVARIANCE_FULL"]
     return []
 
 

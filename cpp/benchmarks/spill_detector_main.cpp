@@ -22,6 +22,9 @@ int main(int argc, char* argv[]) {
 #elif defined(SPILL_GMM_COVARIANCE_DIAG)
     auto bench_case = BENCH_CASE::make_for_spill_detector_diag(argc, argv);
     bench_case.run_once_diag();
+#elif defined(SPILL_GMM_COVARIANCE_FULL)
+    auto bench_case = BENCH_CASE::make_for_spill_detector_full(argc, argv);
+    bench_case.run_once_full();
 #else
     auto bench_case = BENCH_CASE::make_for_callgrind(argc, argv);
     bench_case.run_once();

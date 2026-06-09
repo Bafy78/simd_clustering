@@ -15,6 +15,7 @@
 #include "../../include/gmm/static_d/em.hpp"
 #include "../../include/gmm/static_d/spherical_covariance.hpp"
 #include "../../include/gmm/static_d/diagonal_covariance.hpp"
+#include "../../include/gmm/static_d/full_covariance.hpp"
 
 struct static_gmm_case {
     static constexpr int nanobench_argc = 12;
@@ -93,6 +94,19 @@ struct static_gmm_case {
         };
     }
 
+    static static_gmm_case make_for_spill_detector_full(int, char* argv[]) {
+        return static_gmm_case{
+            argv[1],
+            static_cast<std::size_t>(std::stoull(argv[2])),
+            std::stoi(argv[3]),
+            argv[4],
+            argv[5],
+            argv[6],
+            gmm_covariance_type::full,
+            argv[8]
+        };
+    }
+
     std::string title() const {
         return "EVE GaussianMixture " + std::to_string(D) + "D (EM)";
     }
@@ -131,6 +145,19 @@ struct static_gmm_case {
         store_result(std::move(result));
     }
 
+    void run_once_full() {
+        auto result = run_static_gmm_em(
+            samples_,
+            initial_weights_,
+            initial_means_,
+            full_covariance_model<SampleType>{
+                initial_precisions_,
+                static_cast<std::size_t>(K_)
+            }
+        );
+        store_result(std::move(result));
+    }
+
     void run_once() {
         switch (covariance_type_) {
         case gmm_covariance_type::spherical:
@@ -140,10 +167,8 @@ struct static_gmm_case {
             run_once_diag();
             return;
         case gmm_covariance_type::full:
-        case gmm_covariance_type::tied:
-            throw std::runtime_error(
-                "static_gmm_case supports only spherical and diag covariance"
-            );
+            run_once_full();
+            return;
         }
 
         throw std::runtime_error("Unknown static GMM covariance_type");
