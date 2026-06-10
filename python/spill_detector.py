@@ -59,7 +59,7 @@ def require_tool(tool: str) -> None:
 def case_tag(cpp_case: str, D: int, gmm_covariance_type: str | None = None) -> str:
     covariance_suffix = (
         f".{gmm_covariance_type}"
-        if cpp_case == "gmm_static" and gmm_covariance_type
+        if cpp_case in {"gmm_static", "gmm_dynamic"} and gmm_covariance_type
         else ""
     )
     return f"{cpp_case}{covariance_suffix}.{D}D"
@@ -498,7 +498,9 @@ def parse_args() -> argparse.Namespace:
         choices=GMM_COVARIANCE_TYPES,
         nargs="+",
         default=list(GMM_COVARIANCE_TYPES),
-        help="Covariance type(s) to compile separately for gmm_static. Defaults to both.",
+        help=(
+            "Covariance type(s) to compile separately for GMM cases. Defaults to all supported"
+        ),
     )
     parser.add_argument(
         "--out-dir",
@@ -534,6 +536,8 @@ def parse_args() -> argparse.Namespace:
 def scan_variants(cpp_case: str, gmm_covariance_types: list[str]) -> list[str | None]:
     if cpp_case == "gmm_static":
         return gmm_covariance_types
+    if cpp_case == "gmm_dynamic":
+        return [cov for cov in gmm_covariance_types if cov in {"spherical", "diag"}]
     return [None]
 
 

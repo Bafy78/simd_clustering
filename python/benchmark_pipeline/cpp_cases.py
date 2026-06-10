@@ -43,6 +43,16 @@ CPP_CASES: dict[str, CppCase] = {
         needs_gmm_init=True,
         needs_covariance_type_arg=True,
     ),
+    "gmm_dynamic": CppCase(
+        name="gmm_dynamic",
+        case_struct="dynamic_gmm_case",
+        case_header="cases/dynamic_gmm_case.hpp",
+        needs_init=False,
+        needs_metrics=True,
+        needs_clusters_arg=True,
+        needs_gmm_init=True,
+        needs_covariance_type_arg=True,
+    ),
     "pp": CppCase(
         name="pp",
         case_struct="static_pp_case",
@@ -104,7 +114,7 @@ def spill_detector_assembly_path(
     )
     covariance_suffix = (
         f".{gmm_covariance_type}"
-        if cpp_case == "gmm_static" and gmm_covariance_type
+        if cpp_case in {"gmm_static", "gmm_dynamic"} and gmm_covariance_type
         else ""
     )
     return root / f"asm.{cpp_case_def.name}{covariance_suffix}.{D}D.s"
@@ -152,6 +162,8 @@ def cpp_compile_command(
         f"-DTUPLE_SIZE={D}",
         "-DKMEANS_N_GROUP=2",
         "-DKMEANS_K_TILE=5",
+        "-DGMM_N_GROUP=2",
+        "-DGMM_K_TILE=5",
         f'-DBENCH_CASE_HEADER="{cpp_case_def.case_header}"',
         f"-DBENCH_CASE={cpp_case_def.case_struct}",
         *(extra_defines or []),

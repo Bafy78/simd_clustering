@@ -182,6 +182,36 @@ N_VECTORS * K_TILE
 
 plus the currently loaded sample-dimension vectors. If either knob is too large, the kernel can recreate the same register-pressure problem the dynamic path was trying to avoid.
 
+
+## 🌊 Dynamic-D GMM micro-GEMM kernel
+
+The dynamic-D GMM backend follows the same streamed sample layout as dynamic Lloyd, but the GMM E-step has an extra constraint: it needs every component score for each sample block so it can compute log-sum-exp normalization and responsibilities. Lloyd can keep only the best centroid; GMM cannot.
+
+The spherical and diagonal dynamic-D GMM policies therefore use a block-local score scratch rather than a global `N × K` responsibility matrix:
+
+```text
+for N_VECTORS SIMD sample vectors:
+    score all K components into local score_scratch
+    compute max score and denominator with log-sum-exp
+    convert scores to responsibilities
+    immediately accumulate Nk, sum_x, and covariance statistics
+```
+
+The coefficient layout is tile-major, matching the Lloyd micro-GEMM idea:
+
+```text
+packed[tile][dimension][component_in_tile]
+```
+
+For spherical covariance, the packed coefficient is `precision[k] * mean[k,d]`, and the sample block also caches `||x||²`. For diagonal covariance, two packed coefficient arrays are used:
+
+```text
+linear[k,d]    = mean[k,d] * precision[k,d]
+quadratic[k,d] = -0.5 * precision[k,d]
+```
+
+This keeps the important reuse pattern from dynamic Lloyd: each loaded sample dimension is reused across `K_TILE` components, and each packed coefficient is reused across `N_VECTORS` SIMD sample vectors. The extra GMM cost is the block-local score scratch, the exponential/log normalization, and the responsibility-weighted sufficient-statistic accumulation.
+
 ## ⚖️ Kernel comparison
 
 | Kernel family | SIMD lanes mean | Cluster loop shape | Reuse strategy | Main tunables |
@@ -191,3 +221,4 @@ plus the currently loaded sample-dimension vectors. If either knob is too large,
 | [Greedy K-Means++](../cpp/include/k_means/greedy_pp.hpp) | samples | scan candidate distances | reuse current min-distance array | `num_local_trials` |
 | [Dynamic centroid-tiled](../cpp/include/k_means/dynamic_d/assignment_centroid_tiled.hpp) | samples | scan grouped centroid tiles | reuse one sample dimension across several centroid scores | `K_TILE` |
 | [Dynamic micro-GEMM](../cpp/include/k_means/dynamic_d/assignment_micro_gemm.hpp) | samples | scan centroid tiles | reuse sample vectors across `K_TILE`; reuse coefficients across `N_VECTORS` | `N_VECTORS`, `K_TILE` |
+| [Dynamic-D GMM micro-GEMM](../cpp/include/gmm/dynamic_d/em.hpp) | samples | scan component tiles | same micro-GEMM reuse, plus block-local score scratch for log-sum-exp and fused sufficient statistics | `GMM_N_GROUP`, `GMM_K_TILE`, covariance type |

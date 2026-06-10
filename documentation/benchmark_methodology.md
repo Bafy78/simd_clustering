@@ -56,7 +56,7 @@ bench_case.keep_alive();
 
 The exact meaning of `run_once()` is defined by the C++ case adapter under [`cpp/benchmarks/cases/`](../cpp/benchmarks/cases/).
 
-For Lloyd, `run_once()` copies the initial centroids and runs the K-Means iterations. Any work performed inside the algorithm implementation itself is included. For example, if the implementation prepares centered data as part of the fit, that cost belongs to the measured algorithm call.
+For Lloyd, `run_once()` copies the initial centroids and runs the K-Means iterations. Any work performed inside the algorithm implementation itself is included. For example, the implementation prepares centered data as part of the fit, so that cost belongs to the measured algorithm call.
 
 For GMM, `run_once()` runs the EM fit from the preloaded initial weights, means, and precisions. Loading those initialization arrays is not timed.
 
