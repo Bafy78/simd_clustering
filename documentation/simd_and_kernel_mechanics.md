@@ -182,6 +182,21 @@ N_VECTORS * K_TILE
 
 plus the currently loaded sample-dimension vectors. If either knob is too large, the kernel can recreate the same register-pressure problem the dynamic path was trying to avoid.
 
+### Auto Lloyd dispatch
+
+The `lloyd_auto` C++ case dispatches between the static-D Lloyd implementation and the dynamic-D micro-GEMM implementation.  The dispatch rule is based on benchmark performance over a relatively dense `(K, N, D)` grid measured on one development machine:
+
+```text
+use dynamic-D micro-GEMM when D >= threshold(K, N)
+otherwise use static-D
+```
+
+The threshold model is small and lives next to the dispatch policy in [`./cpp/include/k_means/lloyd_dispatch.hpp`](.././cpp/include/k_means/lloyd_dispatch.hpp), not inside either kernel backend.  This keeps both implementations available as independent baselines while making the auto case the production-style choice.
+
+When the auto case selects dynamic-D micro-GEMM, it keeps `K_TILE` unchanged and chooses `N_VECTORS` from the available SIMD register count: `1` for 8 registers, `2` for 16 registers, and `4` for 32 registers.
+
+Because the fitted threshold currently comes from a single machine, it should be treated as an empirical dispatch heuristic rather than a portable performance law.  Future benchmark sweeps across multiple machines can either retune the constants toward a machine-independent middle ground, or add architecture-specific threshold constants if different CPU families show materially different scaling behavior.
+
 
 ## 🌊 Dynamic-D GMM micro-GEMM kernel
 

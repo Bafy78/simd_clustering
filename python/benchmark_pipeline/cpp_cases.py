@@ -33,6 +33,14 @@ CPP_CASES: dict[str, CppCase] = {
         needs_metrics=True,
         needs_clusters_arg=True,
     ),
+    "lloyd_auto": CppCase(
+        name="lloyd_auto",
+        case_struct="auto_lloyd_case",
+        case_header="cases/auto_lloyd_case.hpp",
+        needs_init=True,
+        needs_metrics=True,
+        needs_clusters_arg=True,
+    ),
     "gmm_static": CppCase(
         name="gmm_static",
         case_struct="static_gmm_case",

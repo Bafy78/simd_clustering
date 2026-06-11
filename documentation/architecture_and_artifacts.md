@@ -57,9 +57,7 @@ The registry maps C++ benchmark case names, or `cpp_case` values, such as:
 * `lloyd_dynamic`
 * `gmm_static`
 * `gmm_dynamic`
-* `pp`
-* `soa_static`
-* `soa_dynamic`
+* ...
 
 to compile instructions, benchmark case headers, case types, and mode-specific build options.
 
