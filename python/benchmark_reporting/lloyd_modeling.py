@@ -86,82 +86,105 @@ def fit_lloyd_timing_models(
     df_lloyd: pd.DataFrame,
     *,
     languages: Sequence[str] = (LANG_CPP, LANG_PY),
+    group_cols: Sequence[str] | None = None,
     model_name: str = ALL_COMBO_MODEL_NAME,
     vif_threshold: float = DEFAULT_VIF_THRESHOLD,
     coefficient_threshold: float = COEF_DISPLAY_THRESHOLD,
     sample_scale: float = DEFAULT_SAMPLE_SCALE,
 ) -> LloydTimingModelReport:
-    """Fit amortized Lloyd timing models for each requested language.
+    """Fit amortized Lloyd timing models.
 
-    ``sample_scale`` keeps the numerical conditioning of the original notebook
-    cell, which fitted sample-count terms in thousands, without mutating the
-    public ``N`` column in the returned prediction dataframe.
+    By default, models are fit independently per language. When the dataframe
+    contains more than one implementation variant, the default grouping becomes
+    language × variant so static and dynamic C++ implementations are not folded
+    into one fitted model.
     """
     df_model = prepare_lloyd_model_data(df_lloyd)
+    df_model = filter_bench(df_model, language=languages)
 
-    fits: dict[str, _FittedLloydModel] = {}
+    if group_cols is None:
+        group_cols = [COL_LANGUAGE]
+        if COL_VARIANT in df_model.columns and df_model[COL_VARIANT].nunique() > 1:
+            group_cols = [COL_LANGUAGE, COL_VARIANT]
+    else:
+        group_cols = list(group_cols)
 
-    for language in languages:
-        df_lang = filter_bench(df_model, language=language).copy()
+    fit_entries: list[tuple[dict[str, object], _FittedLloydModel]] = []
 
-        if df_lang.empty:
-            raise ValueError(f"No Lloyd rows found for language {language!r}.")
+    for group_values, df_group in df_model.groupby(list(group_cols), observed=True, dropna=False):
+        if not isinstance(group_values, tuple):
+            group_values = (group_values,)
 
-        fits[language] = _fit_amortized_model(
-            df_lang,
-            model_name=model_name,
-            vif_threshold=vif_threshold,
-            sample_scale=sample_scale,
+        group_record = dict(zip(group_cols, group_values))
+        group_label = " / ".join(str(group_record[col]) for col in group_cols)
+
+        if df_group.empty:
+            raise ValueError(f"No Lloyd rows found for group {group_label!r}.")
+
+        fit_entries.append(
+            (
+                group_record,
+                _fit_amortized_model(
+                    df_group,
+                    model_name=model_name,
+                    vif_threshold=vif_threshold,
+                    sample_scale=sample_scale,
+                ),
+            )
         )
 
+    if not fit_entries:
+        raise ValueError("No Lloyd rows found for the requested language/variant groups.")
+
     predictions = pd.concat(
-        [fit.predictions for fit in fits.values()],
+        [fit.predictions for _group_record, fit in fit_entries],
         ignore_index=True,
     )
 
-    summary = _summary_frame(fits, model_name)
+    summary = _summary_frame(fit_entries, model_name)
     coefficients_all = pd.concat(
         [
             _coefficient_frame(
-                language,
+                group_record,
                 model_name,
                 fit.terms,
                 fit.setup_coef,
                 fit.algorithm_iter_coef,
             )
-            for language, fit in fits.items()
+            for group_record, fit in fit_entries
         ],
         ignore_index=True,
     )
 
-    coefficients = (
-        coefficients_all[
-            coefficients_all[COL_COEFFICIENT].abs().gt(coefficient_threshold)
-        ]
-        .sort_values(
-            [COL_LANGUAGE, COL_COMPONENT, COL_COEFFICIENT],
-            ascending=[True, True, False],
-        )
-        .reset_index(drop=True)
-    )
+    sort_cols = [col for col in [COL_LANGUAGE, COL_VARIANT, COL_COMPONENT, COL_COEFFICIENT] if col in coefficients_all.columns]
+    ascending = [True] * len(sort_cols)
+    if sort_cols and sort_cols[-1] == COL_COEFFICIENT:
+        ascending[-1] = False
 
-    collinearity_removed = pd.concat(
-        [
-            fit.collinearity_removed.assign(**{COL_LANGUAGE: language})
-            for language, fit in fits.items()
-            if not fit.collinearity_removed.empty
-        ],
-        ignore_index=True,
-    )
+    coefficients = coefficients_all[
+        coefficients_all[COL_COEFFICIENT].abs().gt(coefficient_threshold)
+    ]
+    if sort_cols:
+        coefficients = coefficients.sort_values(sort_cols, ascending=ascending)
+    coefficients = coefficients.reset_index(drop=True)
 
-    if collinearity_removed.empty:
-        collinearity_removed = pd.DataFrame(
-            columns=[COL_LANGUAGE, "Removed Component", "Removed Term", "VIF"]
-        )
-    else:
+    collinearity_frames = []
+    for group_record, fit in fit_entries:
+        if fit.collinearity_removed.empty:
+            continue
+        collinearity_frames.append(fit.collinearity_removed.assign(**group_record))
+
+    if collinearity_frames:
+        collinearity_removed = pd.concat(collinearity_frames, ignore_index=True)
+        front_cols = [col for col in [COL_LANGUAGE, COL_VARIANT] if col in collinearity_removed.columns]
         collinearity_removed = collinearity_removed[
-            [COL_LANGUAGE, "Removed Component", "Removed Term", "VIF"]
+            front_cols + ["Removed Component", "Removed Term", "VIF"]
         ]
+    else:
+        front_cols = list(group_cols)
+        collinearity_removed = pd.DataFrame(
+            columns=front_cols + ["Removed Component", "Removed Term", "VIF"]
+        )
 
     return LloydTimingModelReport(
         predictions=predictions,
@@ -171,21 +194,20 @@ def fit_lloyd_timing_models(
         collinearity_removed=collinearity_removed,
     )
 
-
 def _summary_frame(
-    fits: dict[str, _FittedLloydModel],
+    fit_entries: Sequence[tuple[dict[str, object], _FittedLloydModel]],
     model_name: str,
 ) -> pd.DataFrame:
     records = []
 
-    for language, fit in fits.items():
-        df_lang = fit.predictions
-        y_true = df_lang[COL_TIME_PER_ALGORITHM_ITER_MS].to_numpy(dtype=float)
-        y_pred = df_lang[COL_PRED_TIME_PER_ALGORITHM_ITER_MS].to_numpy(dtype=float)
+    for group_record, fit in fit_entries:
+        df_group = fit.predictions
+        y_true = df_group[COL_TIME_PER_ALGORITHM_ITER_MS].to_numpy(dtype=float)
+        y_pred = df_group[COL_PRED_TIME_PER_ALGORITHM_ITER_MS].to_numpy(dtype=float)
 
         records.append(
             {
-                COL_LANGUAGE: language,
+                **group_record,
                 COL_MODEL_NAME: model_name,
                 COL_NUM_PARAMS: len(fit.full_coef),
                 COL_LOG_R2: r2_score(np.log(y_true), np.log(y_pred)),
@@ -194,7 +216,6 @@ def _summary_frame(
         )
 
     return pd.DataFrame(records)
-
 
 def _relative_error_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     abs_error_pct = np.abs(y_pred / y_true - 1) * 100
@@ -490,7 +511,7 @@ def _fit_amortized_model(
 
 
 def _coefficient_frame(
-    language: str,
+    group_record: dict[str, object],
     model_name: str,
     terms: Sequence[str],
     setup_coef: np.ndarray,
@@ -505,7 +526,7 @@ def _coefficient_frame(
         for term, coef in zip(terms, coef_values):
             records.append(
                 {
-                    COL_LANGUAGE: language,
+                    **group_record,
                     COL_MODEL_NAME: model_name,
                     COL_COMPONENT: component,
                     COL_TERM: term,

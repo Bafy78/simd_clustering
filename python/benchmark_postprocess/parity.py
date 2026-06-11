@@ -7,12 +7,12 @@ import numpy as np
 
 from benchmark_postprocess.io import load_json
 from benchmark_postprocess.naming import (
-    GMM_METRICS_JSON_RE,
-    LLOYD_METRICS_JSON_RE,
-    format_config_id,
-    parse_config_match,
+    LANGUAGE_REFERENCE_VARIANT,
+    parse_metrics_filename,
+    variant_display_name,
 )
 
+MetricsKey = tuple[str, str, str, str]
 REQUIRED_LANGUAGE_KEYS = ("cpp", "py")
 
 LLOYD_PARITY_THRESHOLDS = {
@@ -29,62 +29,76 @@ GMM_PARITY_THRESHOLDS = {
 }
 
 
+def metrics_key(config_id: str, variant_key: str, lang_key: str, params_key: str = "default") -> MetricsKey:
+    return (config_id, variant_key, lang_key, params_key)
+
+
 def _language_metrics(
-    metrics: dict[tuple[str, str], dict[str, Any]],
-    *,
+    metrics: dict[MetricsKey, dict[str, Any]],
     config_id: str,
+    variant_key: str,
     lang_key: str,
     phase_name: str,
+    params_key: str = "default",
 ) -> dict[str, Any]:
-    record = metrics.get((config_id, lang_key))
+    record = metrics.get(
+        metrics_key(config_id, variant_key, lang_key, params_key)
+    )
 
-    if record is None:
-        raise RuntimeError(
-            f"Missing {phase_name} metrics file for {lang_key} {config_id}. "
-            f"{phase_name} timing needs the algorithm-iteration count to report "
-            "time_per_algorithm_iteration_s."
-        )
+    if record is not None:
+        return record
 
-    return record
+    raise RuntimeError(
+        f"Missing {phase_name} metrics file for {lang_key} "
+        f"variant={variant_key} params={params_key} {config_id}. {phase_name} timing needs the "
+        "algorithm-iteration count to report time_per_algorithm_iteration_s."
+    )
 
 
 def lloyd_algorithm_iteration_count(
-    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
-    *,
+    lloyd_metrics: dict[MetricsKey, dict[str, Any]],
     config_id: str,
+    variant_key: str,
     lang_key: str,
+    params_key: str = "default",
 ) -> int:
     return int(
         _language_metrics(
             lloyd_metrics,
             config_id=config_id,
+            variant_key=variant_key,
             lang_key=lang_key,
             phase_name="Lloyd",
+            params_key=params_key,
         )["algorithm_iterations"]
     )
 
 
 def gmm_algorithm_iteration_count(
-    gmm_metrics: dict[tuple[str, str], dict[str, Any]],
-    *,
+    gmm_metrics: dict[MetricsKey, dict[str, Any]],
     config_id: str,
+    variant_key: str,
     lang_key: str,
+    params_key: str,
 ) -> int:
     return int(
         _language_metrics(
             gmm_metrics,
             config_id=config_id,
+            variant_key=variant_key,
             lang_key=lang_key,
             phase_name="GMM",
+            params_key=params_key,
         )["algorithm_iterations"]
     )
 
 
 def normalize_lloyd_metrics_record(
     record: dict[str, Any],
-    *,
     config_id: str,
+    variant_key: str,
     lang_key: str,
+    params_key: str = "default",
 ) -> dict[str, Any]:
     required_fields = [
         "phase",
@@ -111,6 +125,9 @@ def normalize_lloyd_metrics_record(
     return {
         **record,
         "config_id": config_id,
+        "variant_key": variant_key,
+        "variant": variant_display_name(variant_key),
+        "params_key": params_key,
         "language": lang_key,
         "algorithm_iterations": int(record["algorithm_iterations"]),
         "inertia": float(record["inertia"]),
@@ -119,9 +136,10 @@ def normalize_lloyd_metrics_record(
 
 def normalize_gmm_metrics_record(
     record: dict[str, Any],
-    *,
     config_id: str,
+    variant_key: str,
     lang_key: str,
+    params_key: str,
 ) -> dict[str, Any]:
     required_fields = [
         "phase",
@@ -144,9 +162,18 @@ def normalize_gmm_metrics_record(
             f"record says {record['language']!r}"
         )
 
+    if str(record["covariance_type"]) != params_key:
+        raise RuntimeError(
+            f"GMM metrics covariance mismatch: file params={params_key!r}, "
+            f"record says {record['covariance_type']!r}"
+        )
+
     return {
         **record,
         "config_id": config_id,
+        "variant_key": variant_key,
+        "variant": variant_display_name(variant_key),
+        "params_key": params_key,
         "language": lang_key,
         "algorithm_iterations": int(record["algorithm_iterations"]),
         "lower_bound": float(record["lower_bound"]),
@@ -154,96 +181,116 @@ def normalize_gmm_metrics_record(
     }
 
 
-def load_lloyd_metrics_map(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
-    metrics_records: dict[tuple[str, str], dict[str, Any]] = {}
+def load_lloyd_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
+    metrics_records: dict[MetricsKey, dict[str, Any]] = {}
 
     for path in sorted(data_dir.glob("lloyd_metrics_*.json")):
-        match = LLOYD_METRICS_JSON_RE.match(path.name)
+        parsed = parse_metrics_filename(path, "lloyd")
 
-        if not match:
+        if parsed is None:
             print(f"Skipping malformed Lloyd metrics filename: {path.name}")
             continue
 
-        lang_key = match.group("lang")
-        D, N, K = parse_config_match(match)
-        config_id = format_config_id(D, N, K)
+        lang_key = parsed["language_key"]
+        variant_key = parsed["variant_key"]
+        config_id = parsed["config_id"]
+        params_key = parsed["params_key"]
 
         metrics = normalize_lloyd_metrics_record(
             load_json(path),
             config_id=config_id,
+            variant_key=variant_key,
             lang_key=lang_key,
+            params_key=params_key,
         )
 
         if int(metrics.get("schema_version", 1)) != 1:
             raise RuntimeError(f"Unsupported Lloyd metrics schema in {path}")
 
-        metrics_records[(config_id, lang_key)] = metrics
+        metrics_records[
+            metrics_key(config_id, variant_key, lang_key, params_key)
+        ] = metrics
 
     print(f"Loaded {len(metrics_records)} Lloyd metrics records.")
 
     return metrics_records
 
 
-def load_gmm_metrics_map(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
-    metrics_records: dict[tuple[str, str], dict[str, Any]] = {}
+def load_gmm_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
+    metrics_records: dict[MetricsKey, dict[str, Any]] = {}
 
     for path in sorted(data_dir.glob("gmm_metrics_*.json")):
-        match = GMM_METRICS_JSON_RE.match(path.name)
+        parsed = parse_metrics_filename(path, "gmm")
 
-        if not match:
+        if parsed is None:
             print(f"Skipping malformed GMM metrics filename: {path.name}")
             continue
 
-        lang_key = match.group("lang")
-        D, N, K = parse_config_match(match)
-        config_id = format_config_id(D, N, K)
+        lang_key = parsed["language_key"]
+        variant_key = parsed["variant_key"]
+        config_id = parsed["config_id"]
+        params_key = parsed["params_key"]
 
         metrics = normalize_gmm_metrics_record(
             load_json(path),
             config_id=config_id,
+            variant_key=variant_key,
             lang_key=lang_key,
+            params_key=params_key,
         )
 
         if int(metrics.get("schema_version", 1)) != 1:
             raise RuntimeError(f"Unsupported GMM metrics schema in {path}")
 
-        metrics_records[(config_id, lang_key)] = metrics
+        metrics_records[
+            metrics_key(config_id, variant_key, lang_key, params_key)
+        ] = metrics
 
     print(f"Loaded {len(metrics_records)} GMM metrics records.")
 
     return metrics_records
 
 
-def completed_config_ids(
-    metrics: dict[tuple[str, str], dict[str, Any]],
-    *,
+def completed_metric_keys(
+    metrics: dict[MetricsKey, dict[str, Any]],
     required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
-) -> set[str]:
-    """Return configs with enough metrics for timing and C++/Python speedups."""
-    by_config: dict[str, set[str]] = {}
+) -> set[tuple[str, str]]:
+    """Return (config_id, params_key) pairs with C++ metrics plus a Python reference."""
+    by_config_params: dict[tuple[str, str], set[str]] = {}
 
-    for config_id, lang_key in metrics:
-        by_config.setdefault(config_id, set()).add(lang_key)
+    for config_id, _variant_key, lang_key, params_key in metrics:
+        by_config_params.setdefault((config_id, params_key), set()).add(lang_key)
 
     required = set(required_languages)
     return {
-        config_id
-        for config_id, languages in by_config.items()
+        key
+        for key, languages in by_config_params.items()
         if required.issubset(languages)
     }
 
 
+def completed_config_ids(
+    metrics: dict[MetricsKey, dict[str, Any]],
+    required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
+) -> set[str]:
+    return {
+        config_id
+        for config_id, _params_key in completed_metric_keys(
+            metrics,
+            required_languages=required_languages,
+        )
+    }
+
+
 def lloyd_completed_config_ids(
-    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
-    *,
+    lloyd_metrics: dict[MetricsKey, dict[str, Any]],
     required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
 ) -> set[str]:
     return completed_config_ids(lloyd_metrics, required_languages=required_languages)
 
 
 def gmm_completed_config_ids(
-    gmm_metrics: dict[tuple[str, str], dict[str, Any]],
-    *,
+    gmm_metrics: dict[MetricsKey, dict[str, Any]],
     required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
 ) -> set[str]:
     return completed_config_ids(gmm_metrics, required_languages=required_languages)
@@ -302,20 +349,28 @@ def _status_from_checks(checks: dict[str, bool]) -> tuple[str, list[str]]:
 
 
 def compute_lloyd_comparison(
-    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
-    *,
+    lloyd_metrics: dict[MetricsKey, dict[str, Any]],
     config_id: str,
+    cpp_variant_key: str,
+    py_variant_key: str = LANGUAGE_REFERENCE_VARIANT,
+    params_key: str = "default",
 ) -> dict[str, Any]:
-    cpp = lloyd_metrics.get((config_id, "cpp"))
-    py = lloyd_metrics.get((config_id, "py"))
-
-    if cpp is None or py is None:
-        missing = [
-            lang_key
-            for lang_key, record in (("cpp", cpp), ("py", py))
-            if record is None
-        ]
-        raise RuntimeError(f"Missing Lloyd metrics for {config_id}: {', '.join(missing)}")
+    cpp = _language_metrics(
+        lloyd_metrics,
+        config_id=config_id,
+        variant_key=cpp_variant_key,
+        lang_key="cpp",
+        phase_name="Lloyd",
+        params_key=params_key,
+    )
+    py = _language_metrics(
+        lloyd_metrics,
+        config_id=config_id,
+        variant_key=py_variant_key,
+        lang_key="py",
+        phase_name="Lloyd",
+        params_key=params_key,
+    )
 
     cpp_algorithm_iterations = int(cpp["algorithm_iterations"])
     py_algorithm_iterations = int(py["algorithm_iterations"])
@@ -343,6 +398,10 @@ def compute_lloyd_comparison(
 
     return {
         "config_id": config_id,
+        "variant_key": cpp_variant_key,
+        "variant": variant_display_name(cpp_variant_key),
+        "params_key": params_key,
+        "python_variant_key": py.get("variant_key", py_variant_key),
         "status": status,
         "failure_reasons": failure_reasons,
         "checks": checks,
@@ -362,21 +421,29 @@ def compute_lloyd_comparison(
 
 
 def compute_gmm_comparison(
-    gmm_metrics: dict[tuple[str, str], dict[str, Any]],
-    *,
+    gmm_metrics: dict[MetricsKey, dict[str, Any]],
     config_id: str,
+    cpp_variant_key: str,
+    params_key: str,
+    py_variant_key: str = LANGUAGE_REFERENCE_VARIANT,
 ) -> dict[str, Any]:
-    """Build GMM parity info from raw C++ and sklearn metrics."""
-    cpp = gmm_metrics.get((config_id, "cpp"))
-    py = gmm_metrics.get((config_id, "py"))
-
-    if cpp is None or py is None:
-        missing = [
-            lang_key
-            for lang_key, record in (("cpp", cpp), ("py", py))
-            if record is None
-        ]
-        raise RuntimeError(f"Missing GMM metrics for {config_id}: {', '.join(missing)}")
+    """Build GMM parity info from one C++ variant and the shared sklearn reference."""
+    cpp = _language_metrics(
+        gmm_metrics,
+        config_id=config_id,
+        variant_key=cpp_variant_key,
+        lang_key="cpp",
+        phase_name="GMM",
+        params_key=params_key,
+    )
+    py = _language_metrics(
+        gmm_metrics,
+        config_id=config_id,
+        variant_key=py_variant_key,
+        lang_key="py",
+        phase_name="GMM",
+        params_key=params_key,
+    )
 
     cpp_algorithm_iterations = int(cpp["algorithm_iterations"])
     py_algorithm_iterations = int(py["algorithm_iterations"])
@@ -423,6 +490,10 @@ def compute_gmm_comparison(
 
     return {
         "config_id": config_id,
+        "variant_key": cpp_variant_key,
+        "variant": variant_display_name(cpp_variant_key),
+        "params_key": params_key,
+        "python_variant_key": py.get("variant_key", py_variant_key),
         "status": status,
         "failure_reasons": failure_reasons,
         "checks": checks,

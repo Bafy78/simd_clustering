@@ -1,20 +1,11 @@
-import re
 from pathlib import Path
 import json
-from typing import Any
+from typing import Any, Iterator
 import pandas as pd
 
 from .constants import *
 
 SUMMARY_FILENAME = "benchmark_summary.json"
-
-
-def extract_config_params(filename):
-    """Extract Dimensions (D), Samples (N), and Clusters (K) from a config ID."""
-    match = re.search(r"(\d+)D_(\d+)N_(\d+)K", filename)
-    if match:
-        return int(match.group(1)), int(match.group(2)), int(match.group(3))
-    return None, None, None
 
 
 def _summary_path(
@@ -56,9 +47,24 @@ def _phase_display_name(phase_key: str, fallback: str) -> str:
     return PHASE_MAP.get(phase_key, fallback)
 
 
+def _variant_display_name(variant_key: str | None, fallback: str | None = None) -> str:
+    if fallback:
+        return fallback
+    if not variant_key:
+        return "Default"
+    return variant_key.replace("_", " ").title()
+
+
+def _params_display_name(params_key: str | None, fallback: str | None = None) -> str:
+    if fallback:
+        return fallback
+    if not params_key:
+        return "Default"
+    return params_key.replace("_", " ").title()
+
+
 def _copy_stats_with_prefix(
     record: dict[str, Any],
-    *,
     prefix: str,
     stats: dict[str, Any] | None,
 ) -> None:
@@ -71,7 +77,6 @@ def _copy_stats_with_prefix(
 
 def _selected_stat(
     language_entry: dict[str, Any],
-    *,
     time_field: str,
     statistic: str,
 ) -> float:
@@ -95,23 +100,36 @@ def _selected_stat(
     return float(value)
 
 
+def _iter_phase_variant_parameterizations(
+    phase_entry: dict[str, Any],
+) -> Iterator[tuple[str, dict[str, Any], str, dict[str, Any]]]:
+    """Yield schema v3 variant/parameterization entries."""
+    for variant_name, variant_entry in phase_entry.get("variants", {}).items():
+        parameterizations = variant_entry.get("parameterizations")
+        if parameterizations is None:
+            raise RuntimeError(
+                "Expected schema v3 summary entries with a 'parameterizations' block. "
+                "Run the current post-processing step again."
+            )
+
+        for params_name, parameterization_entry in parameterizations.items():
+            yield variant_name, variant_entry, params_name, parameterization_entry
+
+
 def load_benchmark_data(
     data_dir=Path("./datasets"),
-    *,
     summary_filename=SUMMARY_FILENAME,
     time_field: str = "time_s",
     statistic: str = "median",
 ) -> pd.DataFrame:
     """
-    Compatibility loader for the existing report notebook.
+    Compatibility loader for the report notebook.
 
     Returns one row per:
-        config × phase × language
+        config × phase × variant × params × language
 
-    COL_TIME_S is the selected summary statistic, by default median total time.
-
-    Iterative phases such as Lloyd and GMM use their recorded
-    algorithm-iteration count. Non-iterative phases use 1.
+    Python reference rows are repeated per C++ variant when the summary used a
+    shared reference to compute per-variant speedups.
     """
     summary = load_benchmark_summary(data_dir, summary_filename)
     records: list[dict[str, Any]] = []
@@ -120,65 +138,74 @@ def load_benchmark_data(
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
-        config_id = config["config_id"]
-        configuration = config.get(
-            "configuration",
-            f"{D}D | {N}N | {K}K",
-        )
-
         for phase_name_from_json, phase_entry in config.get("phases", {}).items():
             phase_key = phase_entry.get("phase_key")
             phase_name = _phase_display_name(phase_key, phase_name_from_json)
 
-            for language_name_from_json, language_entry in phase_entry.get(
-                "languages", {}
-            ).items():
-                language_name = _language_display_name(language_name_from_json)
-
-                selected_time = _selected_stat(
-                    language_entry,
-                    time_field=time_field,
-                    statistic=statistic,
+            for (
+                variant_name_from_json,
+                variant_entry,
+                params_name_from_json,
+                parameterization_entry,
+            ) in _iter_phase_variant_parameterizations(phase_entry):
+                variant_key = variant_entry.get("variant_key")
+                variant_name = _variant_display_name(
+                    variant_key,
+                    variant_entry.get("variant", variant_name_from_json),
+                )
+                params_key = parameterization_entry.get("params_key", "default")
+                params_name = _params_display_name(
+                    params_key,
+                    parameterization_entry.get("params", params_name_from_json),
                 )
 
-                algorithm_iterations = int(
-                    language_entry.get("algorithm_iterations", 1)
-                )
+                for language_name_from_json, language_entry in parameterization_entry.get(
+                    "languages", {}
+                ).items():
+                    language_name = _language_display_name(language_name_from_json)
 
-                record = {
-                    COL_PHASE: phase_name,
-                    COL_LANGUAGE: language_name,
-                    COL_DIMENSIONS: D,
-                    COL_SAMPLES: N,
-                    COL_CLUSTERS: K,
-                    COL_ALGORITHM_ITERATIONS: algorithm_iterations,
-                    COL_TIME_S: selected_time,
-                    COL_CONFIGURATION: configuration,
-                    COL_CONFIG_ID: config_id,
-                    COL_PHASE_KEY: phase_key,
-                    COL_TIME_FIELD: time_field,
-                    COL_TIME_STATISTIC: statistic,
-                    COL_TIMING_PROCESS_COUNT: language_entry.get(
-                        "timing_process_count"
-                    ),
-                    COL_TIMING_VALUE_COUNT: language_entry.get("timing_value_count"),
-                    COL_INERTIA: language_entry.get("inertia"),
-                    COL_COVARIANCE_TYPE: language_entry.get("covariance_type"),
-                    COL_LOWER_BOUND: language_entry.get("lower_bound"),
-                }
+                    selected_time = _selected_stat(
+                        language_entry,
+                        time_field=time_field,
+                        statistic=statistic,
+                    )
 
-                _copy_stats_with_prefix(
-                    record,
-                    prefix="time_s",
-                    stats=language_entry.get("time_s"),
-                )
-                _copy_stats_with_prefix(
-                    record,
-                    prefix="time_per_algorithm_iteration_s",
-                    stats=language_entry.get("time_per_algorithm_iteration_s"),
-                )
+                    algorithm_iterations = int(
+                        language_entry.get("algorithm_iterations", 1)
+                    )
+                    record = {
+                        COL_PHASE: phase_name,
+                        COL_LANGUAGE: language_name,
+                        COL_VARIANT: variant_name,
+                        COL_PARAMS: params_name,
+                        COL_DIMENSIONS: D,
+                        COL_SAMPLES: N,
+                        COL_CLUSTERS: K,
+                        COL_ALGORITHM_ITERATIONS: algorithm_iterations,
+                        COL_TIME_S: selected_time,
+                        COL_TIME_FIELD: time_field,
+                        COL_TIME_STATISTIC: statistic,
+                        COL_TIMING_PROCESS_COUNT: language_entry.get(
+                            "timing_process_count"
+                        ),
+                        COL_TIMING_VALUE_COUNT: language_entry.get("timing_value_count"),
+                        COL_INERTIA: language_entry.get("inertia"),
+                        COL_COVARIANCE_TYPE: language_entry.get("covariance_type"),
+                        COL_LOWER_BOUND: language_entry.get("lower_bound"),
+                    }
 
-                records.append(record)
+                    _copy_stats_with_prefix(
+                        record,
+                        prefix="time_s",
+                        stats=language_entry.get("time_s"),
+                    )
+                    _copy_stats_with_prefix(
+                        record,
+                        prefix="time_per_algorithm_iteration_s",
+                        stats=language_entry.get("time_per_algorithm_iteration_s"),
+                    )
+
+                    records.append(record)
 
     df = pd.DataFrame(records)
 
@@ -197,14 +224,31 @@ def load_benchmark_data(
         ordered=True,
     )
 
+    variant_order = ["Static", "Dynamic", "Auto", "Reference"]
+    present_variants = [v for v in variant_order if v in set(df[COL_VARIANT])]
+    extra_variants = sorted(set(df[COL_VARIANT]) - set(present_variants))
+    df[COL_VARIANT] = pd.Categorical(
+        df[COL_VARIANT],
+        categories=present_variants + extra_variants,
+        ordered=True,
+    )
+
+    params_order = ["Default"]
+    present_params = [p for p in params_order if p in set(df[COL_PARAMS])]
+    extra_params = sorted(set(df[COL_PARAMS]) - set(present_params))
+    df[COL_PARAMS] = pd.Categorical(
+        df[COL_PARAMS],
+        categories=present_params + extra_params,
+        ordered=True,
+    )
+
     return df.sort_values(
-        [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, COL_LANGUAGE]
+        [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, COL_LANGUAGE]
     ).reset_index(drop=True)
 
 
 def load_speedup_summary(
     data_dir=Path("./datasets"),
-    *,
     summary_filename=SUMMARY_FILENAME,
     time_field: str = "time_per_algorithm_iteration_s",
     ratio_statistic: str = "median_ratio",
@@ -222,42 +266,53 @@ def load_speedup_summary(
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
-        config_id = config["config_id"]
-        configuration = config.get(
-            "configuration",
-            f"{D}D | {N}N | {K}K",
-        )
-
         for phase_name_from_json, phase_entry in config.get("phases", {}).items():
             phase_key = phase_entry.get("phase_key")
             phase_name = _phase_display_name(phase_key, phase_name_from_json)
 
-            speedup_entry = (
-                phase_entry.get("speedup", {}).get(time_field, {}).get(ratio_statistic)
-            )
+            for (
+                variant_name_from_json,
+                variant_entry,
+                params_name_from_json,
+                parameterization_entry,
+            ) in _iter_phase_variant_parameterizations(phase_entry):
+                variant_key = variant_entry.get("variant_key")
+                variant_name = _variant_display_name(
+                    variant_key,
+                    variant_entry.get("variant", variant_name_from_json),
+                )
+                params_key = parameterization_entry.get("params_key", "default")
+                params_name = _params_display_name(
+                    params_key,
+                    parameterization_entry.get("params", params_name_from_json),
+                )
+                speedup_entry = (
+                    parameterization_entry.get("speedup", {})
+                    .get(time_field, {})
+                    .get(ratio_statistic)
+                )
 
-            if not speedup_entry:
-                continue
+                if not speedup_entry:
+                    continue
 
-            records.append(
-                {
-                    COL_PHASE: phase_name,
-                    COL_DIMENSIONS: D,
-                    COL_SAMPLES: N,
-                    COL_CLUSTERS: K,
-                    COL_CONFIGURATION: configuration,
-                    COL_CONFIG_ID: config_id,
-                    COL_PHASE_KEY: phase_key,
-                    COL_TIME_FIELD: time_field,
-                    COL_SPEEDUP_STATISTIC: ratio_statistic,
-                    COL_SPEEDUP: speedup_entry["point"],
-                    COL_SPEEDUP_CI_LOW: speedup_entry["ci_low"],
-                    COL_SPEEDUP_CI_HIGH: speedup_entry["ci_high"],
-                    COL_SPEEDUP_CI_LEVEL: speedup_entry["ci_level"],
-                    COL_CPP_POINT: speedup_entry.get("cpp_point"),
-                    COL_PY_POINT: speedup_entry.get("python_point"),
-                }
-            )
+                records.append(
+                    {
+                        COL_PHASE: phase_name,
+                        COL_VARIANT: variant_name,
+                        COL_PARAMS: params_name,
+                        COL_DIMENSIONS: D,
+                        COL_SAMPLES: N,
+                        COL_CLUSTERS: K,
+                        COL_TIME_FIELD: time_field,
+                        COL_SPEEDUP_STATISTIC: ratio_statistic,
+                        COL_SPEEDUP: speedup_entry["point"],
+                        COL_SPEEDUP_CI_LOW: speedup_entry["ci_low"],
+                        COL_SPEEDUP_CI_HIGH: speedup_entry["ci_high"],
+                        COL_SPEEDUP_CI_LEVEL: speedup_entry["ci_level"],
+                        COL_CPP_POINT: speedup_entry.get("cpp_point"),
+                        COL_PY_POINT: speedup_entry.get("python_point"),
+                    }
+                )
 
     df = pd.DataFrame(records)
 
@@ -270,21 +325,34 @@ def load_speedup_summary(
         ordered=True,
     )
 
+    variant_order = ["Static", "Dynamic", "Auto", "Reference"]
+    present_variants = [v for v in variant_order if v in set(df[COL_VARIANT])]
+    extra_variants = sorted(set(df[COL_VARIANT]) - set(present_variants))
+    df[COL_VARIANT] = pd.Categorical(
+        df[COL_VARIANT],
+        categories=present_variants + extra_variants,
+        ordered=True,
+    )
+
+    params_order = ["Default"]
+    present_params = [p for p in params_order if p in set(df[COL_PARAMS])]
+    extra_params = sorted(set(df[COL_PARAMS]) - set(present_params))
+    df[COL_PARAMS] = pd.Categorical(
+        df[COL_PARAMS],
+        categories=present_params + extra_params,
+        ordered=True,
+    )
+
     return df.sort_values(
-        [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+        [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
     ).reset_index(drop=True)
 
 
 def load_lloyd_parity_summary(
     data_dir=Path("./datasets"),
-    *,
     summary_filename=SUMMARY_FILENAME,
 ) -> pd.DataFrame:
-    """
-    Load Lloyd parity/inertia results from benchmark_summary.json.
-
-    Returns a dataframe compatible with the old validation display.
-    """
+    """Load Lloyd parity/inertia results from benchmark_summary.json."""
     summary = load_benchmark_summary(data_dir, summary_filename)
     records: list[dict[str, Any]] = []
 
@@ -292,53 +360,65 @@ def load_lloyd_parity_summary(
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
-        configuration = config.get(
-            "configuration",
-            f"{D}D | {N}N | {K}K",
-        )
-
         for phase_entry in config.get("phases", {}).values():
             if phase_entry.get("phase_key") != "lloyd":
                 continue
 
-            parity = phase_entry.get("parity")
-            if not parity:
-                continue
+            for (
+                variant_name_from_json,
+                variant_entry,
+                params_name_from_json,
+                parameterization_entry,
+            ) in _iter_phase_variant_parameterizations(phase_entry):
+                variant_key = variant_entry.get("variant_key")
+                variant_name = _variant_display_name(
+                    variant_key,
+                    variant_entry.get("variant", variant_name_from_json),
+                )
+                params_key = parameterization_entry.get("params_key", "default")
+                params_name = _params_display_name(
+                    params_key,
+                    parameterization_entry.get("params", params_name_from_json),
+                )
+                parity = parameterization_entry.get("parity")
+                if not parity:
+                    continue
 
-            diff_pct = float(parity["inertia_diff_pct"])
-            thresholds = parity.get("thresholds", {})
-            failure_reasons = parity.get("failure_reasons", [])
-            passed = parity.get("status") == "PASS"
+                diff_pct = float(parity["inertia_diff_pct"])
+                thresholds = parity.get("thresholds", {})
+                failure_reasons = parity.get("failure_reasons", [])
+                passed = parity.get("status") == "PASS"
 
-            records.append(
-                {
-                    COL_CONFIGURATION: configuration,
-                    COL_DIMENSIONS: D,
-                    COL_SAMPLES: N,
-                    COL_CLUSTERS: K,
-                    "Diff (%)": diff_pct,
-                    "Status": "✅ PASS" if passed else "❌ FAIL",
-                    "Failure Reasons": ", ".join(failure_reasons),
-                    "Lloyd C++ Algorithm Iterations": parity[
-                        "cpp_algorithm_iterations"
-                    ],
-                    "Lloyd Py Algorithm Iterations": parity[
-                        "python_algorithm_iterations"
-                    ],
-                    "Algorithm Iteration Diff Abs": parity.get(
-                        "algorithm_iteration_diff_abs"
-                    ),
-                    "C++ Inertia": parity["cpp_inertia"],
-                    "Py Inertia": parity["python_inertia"],
-                    "Inertia Diff Abs": parity["inertia_diff_abs"],
-                    "Inertia Diff Threshold (%)": thresholds.get(
-                        "inertia_diff_pct"
-                    ),
-                    "Algorithm Iteration Diff Threshold Abs": thresholds.get(
-                        "algorithm_iteration_diff_abs"
-                    ),
-                }
-            )
+                records.append(
+                    {
+                        COL_VARIANT: variant_name,
+                        COL_PARAMS: params_name,
+                        COL_DIMENSIONS: D,
+                        COL_SAMPLES: N,
+                        COL_CLUSTERS: K,
+                        "Diff (%)": diff_pct,
+                        "Status": "✅ PASS" if passed else "❌ FAIL",
+                        "Failure Reasons": ", ".join(failure_reasons),
+                        "Lloyd C++ Algorithm Iterations": parity[
+                            "cpp_algorithm_iterations"
+                        ],
+                        "Lloyd Py Algorithm Iterations": parity[
+                            "python_algorithm_iterations"
+                        ],
+                        "Algorithm Iteration Diff Abs": parity.get(
+                            "algorithm_iteration_diff_abs"
+                        ),
+                        "C++ Inertia": parity["cpp_inertia"],
+                        "Py Inertia": parity["python_inertia"],
+                        "Inertia Diff Abs": parity["inertia_diff_abs"],
+                        "Inertia Diff Threshold (%)": thresholds.get(
+                            "inertia_diff_pct"
+                        ),
+                        "Algorithm Iteration Diff Threshold Abs": thresholds.get(
+                            "algorithm_iteration_diff_abs"
+                        ),
+                    }
+                )
 
     df = pd.DataFrame(records)
 
@@ -350,7 +430,6 @@ def load_lloyd_parity_summary(
 
 def load_gmm_parity_summary(
     data_dir=Path("./datasets"),
-    *,
     summary_filename=SUMMARY_FILENAME,
 ) -> pd.DataFrame:
     """Load GMM C++/Python parity records from benchmark_summary.json."""
@@ -361,64 +440,76 @@ def load_gmm_parity_summary(
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
-        configuration = config.get(
-            "configuration",
-            f"{D}D | {N}N | {K}K",
-        )
-
         for phase_entry in config.get("phases", {}).values():
             if phase_entry.get("phase_key") != "gmm":
                 continue
 
-            parity = phase_entry.get("parity")
-            if not parity:
-                continue
+            for (
+                variant_name_from_json,
+                variant_entry,
+                params_name_from_json,
+                parameterization_entry,
+            ) in _iter_phase_variant_parameterizations(phase_entry):
+                variant_key = variant_entry.get("variant_key")
+                variant_name = _variant_display_name(
+                    variant_key,
+                    variant_entry.get("variant", variant_name_from_json),
+                )
+                params_key = parameterization_entry.get("params_key", "default")
+                params_name = _params_display_name(
+                    params_key,
+                    parameterization_entry.get("params", params_name_from_json),
+                )
+                parity = parameterization_entry.get("parity")
+                if not parity:
+                    continue
 
-            status = parity.get("status", "FAIL")
-            failure_reasons = parity.get("failure_reasons", [])
+                status = parity.get("status", "FAIL")
+                failure_reasons = parity.get("failure_reasons", [])
 
-            records.append(
-                {
-                    COL_CONFIGURATION: configuration,
-                    COL_DIMENSIONS: D,
-                    COL_SAMPLES: N,
-                    COL_CLUSTERS: K,
-                    "Status": "✅ PASS" if status == "PASS" else "❌ FAIL",
-                    "Failure Reasons": ", ".join(failure_reasons),
-                    "Covariance Type": parity.get("covariance_type"),
-                    "GMM C++ Algorithm Iterations": parity.get(
-                        "cpp_algorithm_iterations"
-                    ),
-                    "GMM Py Algorithm Iterations": parity.get(
-                        "python_algorithm_iterations"
-                    ),
-                    "Algorithm Iteration Diff Abs": parity.get(
-                        "algorithm_iteration_diff_abs"
-                    ),
-                    "C++ Lower Bound": parity.get("cpp_lower_bound"),
-                    "Py Lower Bound": parity.get("python_lower_bound"),
-                    "Lower Bound Diff Abs": parity.get("lower_bound_diff_abs"),
-                    "Lower Bound Diff (%)": parity.get("lower_bound_diff_pct"),
-                    "Weights Max Abs Diff": parity.get("weights_max_abs_diff"),
-                    "Means Max Abs Diff": parity.get("means_max_abs_diff"),
-                    "Covariances Max Rel Diff": parity.get("covariances_max_rel_diff"),
-                    "Lower Bound Diff Abs Threshold": parity.get("thresholds", {}).get(
-                        "lower_bound_diff_abs"
-                    ),
-                    "Weights Max Abs Diff Threshold": parity.get("thresholds", {}).get(
-                        "weights_max_abs_diff"
-                    ),
-                    "Means Max Abs Diff Threshold": parity.get("thresholds", {}).get(
-                        "means_max_abs_diff"
-                    ),
-                    "Covariances Max Rel Diff Threshold": parity.get("thresholds", {}).get(
-                        "covariances_max_rel_diff"
-                    ),
-                    "Algorithm Iteration Diff Threshold Abs": parity.get(
-                        "thresholds", {}
-                    ).get("algorithm_iteration_diff_abs"),
-                }
-            )
+                records.append(
+                    {
+                        COL_VARIANT: variant_name,
+                        COL_PARAMS: params_name,
+                        COL_DIMENSIONS: D,
+                        COL_SAMPLES: N,
+                        COL_CLUSTERS: K,
+                        "Status": "✅ PASS" if status == "PASS" else "❌ FAIL",
+                        "Failure Reasons": ", ".join(failure_reasons),
+                        "Covariance Type": parity.get("covariance_type"),
+                        "GMM C++ Algorithm Iterations": parity.get(
+                            "cpp_algorithm_iterations"
+                        ),
+                        "GMM Py Algorithm Iterations": parity.get(
+                            "python_algorithm_iterations"
+                        ),
+                        "Algorithm Iteration Diff Abs": parity.get(
+                            "algorithm_iteration_diff_abs"
+                        ),
+                        "C++ Lower Bound": parity.get("cpp_lower_bound"),
+                        "Py Lower Bound": parity.get("python_lower_bound"),
+                        "Lower Bound Diff Abs": parity.get("lower_bound_diff_abs"),
+                        "Lower Bound Diff (%)": parity.get("lower_bound_diff_pct"),
+                        "Weights Max Abs Diff": parity.get("weights_max_abs_diff"),
+                        "Means Max Abs Diff": parity.get("means_max_abs_diff"),
+                        "Covariances Max Rel Diff": parity.get("covariances_max_rel_diff"),
+                        "Lower Bound Diff Abs Threshold": parity.get("thresholds", {}).get(
+                            "lower_bound_diff_abs"
+                        ),
+                        "Weights Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                            "weights_max_abs_diff"
+                        ),
+                        "Means Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                            "means_max_abs_diff"
+                        ),
+                        "Covariances Max Rel Diff Threshold": parity.get("thresholds", {}).get(
+                            "covariances_max_rel_diff"
+                        ),
+                        "Algorithm Iteration Diff Threshold Abs": parity.get(
+                            "thresholds", {}
+                        ).get("algorithm_iteration_diff_abs"),
+                    }
+                )
 
     df = pd.DataFrame(records)
 
@@ -429,9 +520,11 @@ def load_gmm_parity_summary(
         by=[
             "Status",
             "Lower Bound Diff Abs",
+            COL_VARIANT,
+            COL_PARAMS,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
         ],
-        ascending=[True, False, True, True, True],
+        ascending=[True, False, True, True, True, True, True],
     ).reset_index(drop=True)

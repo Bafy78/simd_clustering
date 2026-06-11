@@ -4,6 +4,7 @@ from typing import Any
 from benchmark_postprocess.io import load_json
 from benchmark_postprocess.naming import parse_benchmark_filename
 from benchmark_postprocess.parity import (
+    MetricsKey,
     gmm_algorithm_iteration_count,
     lloyd_algorithm_iteration_count,
 )
@@ -50,32 +51,39 @@ def iter_timing_values(path: Path):
 
 def load_timing_process_aware_records(
     data_dir: Path,
-    *,
-    lloyd_metrics: dict[tuple[str, str], dict[str, Any]],
-    gmm_metrics: dict[tuple[str, str], dict[str, Any]] | None = None,
+    lloyd_metrics: dict[MetricsKey, dict[str, Any]],
+    gmm_metrics: dict[MetricsKey, dict[str, Any]] | None = None,
     completed_config_ids_by_phase: dict[str, set[str]] | None = None,
+    completed_metric_keys_by_phase: dict[str, set[tuple[str, str]]] | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
 
+    known_artifact_prefixes = (
+        "lloyd_metrics_",
+        "gmm_metrics_",
+    )
+
     for json_path in sorted(data_dir.glob("*.json")):
+        if json_path.name == "benchmark_summary.json" or json_path.name.startswith(
+            known_artifact_prefixes
+        ):
+            continue
+
         parsed = parse_benchmark_filename(json_path)
         if parsed is None:
-            known_artifact_prefixes = (
-                "lloyd_metrics_",
-                "gmm_metrics_",
-            )
-
-            if json_path.name == "benchmark_summary.json" or json_path.name.startswith(
-                known_artifact_prefixes
-            ):
-                continue
-
             print(f"Skipping non-benchmark JSON: {json_path.name}")
             continue
 
         phase_key = parsed["phase_key"]
         lang_key = parsed["language_key"]
+        variant_key = parsed["variant_key"]
         config_id = parsed["config_id"]
+        params_key = parsed["params_key"]
+
+        if completed_metric_keys_by_phase is not None and phase_key in completed_metric_keys_by_phase:
+            allowed_metric_keys = completed_metric_keys_by_phase[phase_key]
+            if (config_id, params_key) not in allowed_metric_keys:
+                continue
 
         if completed_config_ids_by_phase is not None:
             allowed_config_ids = completed_config_ids_by_phase.get(phase_key)
@@ -86,7 +94,9 @@ def load_timing_process_aware_records(
             algorithm_iterations = lloyd_algorithm_iteration_count(
                 lloyd_metrics,
                 config_id=config_id,
+                variant_key=variant_key,
                 lang_key=lang_key,
+                params_key=params_key,
             )
         elif phase_key == "gmm":
             if gmm_metrics is None:
@@ -95,7 +105,9 @@ def load_timing_process_aware_records(
             algorithm_iterations = gmm_algorithm_iteration_count(
                 gmm_metrics,
                 config_id=config_id,
+                variant_key=variant_key,
                 lang_key=lang_key,
+                params_key=params_key,
             )
         else:
             algorithm_iterations = 1

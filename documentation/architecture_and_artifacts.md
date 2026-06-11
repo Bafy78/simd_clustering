@@ -3,7 +3,7 @@
 This document describes how the benchmark code is organized and which files are produced by the normal pipeline.
 
 The main conceptual coordinates used throughout the project are `D` for dimensions, `N` for samples, and `K` for clusters or mixture components. All benchmark configurations
-are identified by these three coordinates, together with the algorithm phase, implementation language, and sometimes algorithm variant. All the code also uses this naming convention.
+are identified by these three coordinates, together with the algorithm phase, implementation language, algorithm variant, and, for algorithms that need it, an algorithm parameter key. All the code also uses this naming convention.
 
 ## 🧩 Main supported algorithmic phases
 
@@ -59,7 +59,13 @@ The registry maps C++ benchmark case names, or `cpp_case` values, such as:
 * `gmm_dynamic`
 * ...
 
-to compile instructions, benchmark case headers, case types, and mode-specific build options.
+to compile instructions, benchmark case headers, case types, mode-specific build options, and the semantic keys needed by artifact naming:
+
+* `phase_key`, such as `lloyd` or `gmm`;
+* `variant_key`, such as `static`, `dynamic`, or `auto`;
+* GMM covariance support for cases that do not implement every covariance type.
+
+The `variant_key` is deliberately shared across phases so postprocessing can pair related artifacts, for example `soa_static` with `lloyd_static` and `soa_dynamic` with `lloyd_dynamic`. Python/scikit-learn tasks use a shared `reference` variant and are compared against each C++ variant without duplicating the Python benchmark task.
 
 This registry is reused by all the tools.
 
@@ -68,11 +74,11 @@ This registry is reused by all the tools.
 Lifecycle:
 
 1. **Configuration:** [`python/benchmark_pipeline/config.py`](../python/benchmark_pipeline/config.py) and [`python/benchmark_pipeline/tasks.py`](../python/benchmark_pipeline/tasks.py).\
-   * Define the sweep over `Dimensions`, `Samples`, `Clusters`, algorithm-specific parameters (eg. `gmm_covariance_type`), and benchmark parameters (described in more details in the [Benchmark methodology](benchmark_methodology.md#timing-and-repetition))
-   * In `tasks.py`, tasks can be added, removed, or reordered in the pipeline. So you can choose not to run a specific algorithm by simply commenting out its corresponding tasks.
+   * Define the sweep over `Dimensions`, `Samples`, `Clusters`, algorithm-specific parameters (eg. `gmm_covariance_types`), and benchmark parameters (described in more details in the [Benchmark methodology](benchmark_methodology.md#timing-and-repetition))
+   * `tasks.py` derives the task graph from the explicit config fields. To add or remove work, change the selected C++ cases and Python phase booleans in the config
 
 2. **Dataset generation:** [`python/benchmark_pipeline/tools/dataset_gen.py`](../python/benchmark_pipeline/tools/dataset_gen.py).
-   * Generate input data and initialization artifacts shared by C++ and Python. It is currently using `make_blobs` and K-Means++ initial centers (converted to GMM parameters for GMM).
+   * Generate input data and initialization artifacts shared by C++ and Python. It is currently using `make_blobs` and K-Means++ initial centers. GMM initialization is generated only when at least one GMM task is enabled: weights and means are shared across covariance types, while precision files are generated only for the requested covariance types.
 
 3. **C++ compilation**
    * Compile the required benchmark binaries for the selected cases and dimensions. As the pipeline is running the dimensions as the main loop, compilation is done once per dimension.
@@ -103,37 +109,6 @@ The main orchestrator builds a task graph from the selected configuration. This 
 When running the [benchmark_pipeline](../python/benchmark_orchestrator.py), many artifacts get produced in the destination folder. Some are intermediate and are automatically cleaned up, the rest should persist until we run the [postprocessing step](../python/postprocess_benchmarks.py).
 
 When this step is finished, it produces a summary artifact that is the canonical input for the [reporting step](../benchmark_analysis.ipynb). The postprocessing and reporting steps can both be run as many times as needed, as long as they still have access to their necessary artifacts
-
-### Generated artifact names
-
-Artifact names are derived from the configuration id `<D>D_<N>N_<K>K`. For example, the configuration `D=3`, `N=15000`, `K=10` uses `3D_15000N_10K`.
-
-Persistent benchmark outputs use these patterns:
-
-| Pattern | Meaning |
-| --- | --- |
-| `soa_cpp_<config>.json` | C++ SoA/native-layout timing. |
-| `pp_cpp_<config>.json` | C++ K-Means++ timing. |
-| `pp_py_<config>.json` | Python/scikit-learn K-Means++ timing. |
-| `lloyd_cpp_<config>.json` | C++ Lloyd timing. |
-| `lloyd_py_<config>.json` | Python/scikit-learn Lloyd timing. |
-| `lloyd_metrics_cpp_<config>.json` | C++ Lloyd validation metrics. |
-| `lloyd_metrics_py_<config>.json` | Python Lloyd validation metrics. |
-| `gmm_cpp_<config>.json` | C++ GMM EM timing. |
-| `gmm_py_<config>.json` | Python/scikit-learn GMM EM timing. |
-| `gmm_metrics_cpp_<config>.json` | C++ GMM validation metrics. |
-| `gmm_metrics_py_<config>.json` | Python GMM validation metrics. |
-| `benchmark_summary.json` | Postprocessed summary consumed by reporting. |
-
-Temporary binary inputs use these patterns:
-
-| Pattern | Meaning |
-| --- | --- |
-| `data_<config>.bin` | Generated `float32` AoS dataset. |
-| `init_<config>.bin` | K-Means++ initial centroids shared by Lloyd runs. |
-| `gmm_weights_<config>.bin` | Initial GMM weights. |
-| `gmm_means_<config>.bin` | Initial GMM means. |
-| `gmm_precisions_<config>.bin` | Initial GMM precisions. |
 
 ## 🔬 Profiling and forensic tools
 

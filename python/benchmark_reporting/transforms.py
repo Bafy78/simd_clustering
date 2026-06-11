@@ -13,6 +13,8 @@ def filter_bench(
     *,
     phase=None,
     language=None,
+    variant=None,
+    params=None,
     dimensions=None,
     samples=None,
     clusters=None,
@@ -22,6 +24,8 @@ def filter_bench(
     filters = {
         COL_PHASE: phase,
         COL_LANGUAGE: language,
+        COL_VARIANT: variant,
+        COL_PARAMS: params,
         COL_DIMENSIONS: dimensions,
         COL_SAMPLES: samples,
         COL_CLUSTERS: clusters,
@@ -112,10 +116,14 @@ def add_speedup_retention(
 ):
     require_speedup_columns(df_speedup)
 
+    result = df_speedup.copy()
+
     if group_cols is None:
         group_cols = [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES]
-
-    result = df_speedup.copy()
+        if COL_VARIANT in result.columns:
+            group_cols = [COL_PHASE, COL_VARIANT, COL_DIMENSIONS, COL_SAMPLES]
+        if COL_PARAMS in result.columns:
+            group_cols = [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES]
 
     if base_clusters is None:
         base_clusters = int(result[COL_CLUSTERS].min())
@@ -292,9 +300,14 @@ def prepare_speedup_comparison_data(
         ordered=True,
     )
 
-    return result.sort_values(
-        [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
-    ).reset_index(drop=True)
+    sort_cols = [COL_PHASE]
+    if COL_VARIANT in result.columns:
+        sort_cols.append(COL_VARIANT)
+    if COL_PARAMS in result.columns:
+        sort_cols.append(COL_PARAMS)
+    sort_cols += [COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+
+    return result.sort_values(sort_cols).reset_index(drop=True)
 
 
 def iter_speedup_phase_data(df_speedup, *, phases=None):
@@ -326,10 +339,6 @@ def _safe_ratio(numerator, denominator):
     )
 
 
-def _algorithm_iteration_pressure(diff_abs):
-    return pd.to_numeric(diff_abs, errors="coerce")
-
-
 def add_gmm_parity_pressure(df):
     out = df.copy()
 
@@ -351,8 +360,9 @@ def add_gmm_parity_pressure(df):
                 out["Covariances Max Rel Diff"],
                 out["Covariances Max Rel Diff Threshold"],
             ),
-            "algorithm_iterations": _algorithm_iteration_pressure(
+            "algorithm_iterations": _safe_ratio(
                 out["Algorithm Iteration Diff Abs"],
+                out["Algorithm Iteration Diff Threshold Abs"],
             ),
         }
     )
@@ -372,8 +382,9 @@ def add_lloyd_parity_pressure(df):
                 out["Diff (%)"],
                 out["Inertia Diff Threshold (%)"],
             ),
-            "algorithm_iterations": _algorithm_iteration_pressure(
+            "algorithm_iterations": _safe_ratio(
                 out["Algorithm Iteration Diff Abs"],
+                out["Algorithm Iteration Diff Threshold Abs"],
             ),
         }
     )

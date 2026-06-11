@@ -1,4 +1,13 @@
+import sys
+from pathlib import Path
+
+PYTHON_DIR = Path(__file__).resolve().parents[2]
+if str(PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(PYTHON_DIR))
+
 import pyperf
+
+from benchmark_pipeline.gmm_covariance import SUPPORTED_GMM_COVARIANCE_TYPES
 
 threadpool_limits = None
 GaussianMixture = None
@@ -137,8 +146,8 @@ if __name__ == "__main__":
     runner.argparser.add_argument("--K", type=int, required=True)
     runner.argparser.add_argument(
         "--covariance-type",
-        choices=("full", "diag", "spherical"),
-        default="spherical",
+        choices=SUPPORTED_GMM_COVARIANCE_TYPES,
+        required=True,
     )
     runner.argparser.add_argument("--gmm-weights-bin", required=True)
     runner.argparser.add_argument("--gmm-means-bin", required=True)

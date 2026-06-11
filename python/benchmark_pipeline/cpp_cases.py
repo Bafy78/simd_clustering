@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from benchmark_pipeline.gmm_covariance import SUPPORTED_GMM_COVARIANCE_TYPES
 from benchmark_pipeline.paths import BIN_DIR, repo_path
 
 
@@ -12,8 +13,12 @@ class CppCase:
     needs_init: bool
     needs_metrics: bool
     needs_clusters_arg: bool
+    phase_key: str
+    variant_key: str
+    display_name: str
     needs_gmm_init: bool = False
     needs_covariance_type_arg: bool = False
+    supported_gmm_covariance_types: tuple[str, ...] = ()
 
 
 CPP_CASES: dict[str, CppCase] = {
@@ -24,6 +29,9 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=True,
         needs_metrics=True,
         needs_clusters_arg=True,
+        phase_key="lloyd",
+        variant_key="static",
+        display_name="Lloyd static C++",
     ),
     "lloyd_dynamic": CppCase(
         name="lloyd_dynamic",
@@ -32,6 +40,9 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=True,
         needs_metrics=True,
         needs_clusters_arg=True,
+        phase_key="lloyd",
+        variant_key="dynamic",
+        display_name="Lloyd dynamic C++",
     ),
     "lloyd_auto": CppCase(
         name="lloyd_auto",
@@ -40,6 +51,9 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=True,
         needs_metrics=True,
         needs_clusters_arg=True,
+        phase_key="lloyd",
+        variant_key="auto",
+        display_name="Lloyd auto C++",
     ),
     "gmm_static": CppCase(
         name="gmm_static",
@@ -48,8 +62,12 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=False,
         needs_metrics=True,
         needs_clusters_arg=True,
+        phase_key="gmm",
+        variant_key="static",
+        display_name="GMM static C++",
         needs_gmm_init=True,
         needs_covariance_type_arg=True,
+        supported_gmm_covariance_types=SUPPORTED_GMM_COVARIANCE_TYPES,
     ),
     "gmm_dynamic": CppCase(
         name="gmm_dynamic",
@@ -58,8 +76,12 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=False,
         needs_metrics=True,
         needs_clusters_arg=True,
+        phase_key="gmm",
+        variant_key="dynamic",
+        display_name="GMM dynamic C++",
         needs_gmm_init=True,
         needs_covariance_type_arg=True,
+        supported_gmm_covariance_types=("spherical", "diag"),
     ),
     "pp": CppCase(
         name="pp",
@@ -68,6 +90,9 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=False,
         needs_metrics=False,
         needs_clusters_arg=True,
+        phase_key="pp",
+        variant_key="static",
+        display_name="K-Means++ static C++",
     ),
     "soa_static": CppCase(
         name="soa_static",
@@ -76,6 +101,9 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=False,
         needs_metrics=False,
         needs_clusters_arg=False,
+        phase_key="soa",
+        variant_key="static",
+        display_name="AoS to static SoA C++",
     ),
     "soa_dynamic": CppCase(
         name="soa_dynamic",
@@ -84,6 +112,9 @@ CPP_CASES: dict[str, CppCase] = {
         needs_init=False,
         needs_metrics=False,
         needs_clusters_arg=False,
+        phase_key="soa",
+        variant_key="dynamic",
+        display_name="AoS to dynamic SoA C++",
     ),
 }
 
@@ -101,7 +132,6 @@ def get_cpp_case(cpp_case: str) -> CppCase:
 def nanobench_binary_path(cpp_case: str) -> str:
     cpp_case_def = get_cpp_case(cpp_case)
     return str(BIN_DIR / f"bench_{cpp_case_def.name}.bin")
-
 
 def callgrind_binary_path(cpp_case: str, D: int) -> Path:
     cpp_case_def = get_cpp_case(cpp_case)
@@ -122,14 +152,13 @@ def spill_detector_assembly_path(
     )
     covariance_suffix = (
         f".{gmm_covariance_type}"
-        if cpp_case in {"gmm_static", "gmm_dynamic"} and gmm_covariance_type
+        if cpp_case_def.needs_gmm_init and gmm_covariance_type
         else ""
     )
     return root / f"asm.{cpp_case_def.name}{covariance_suffix}.{D}D.s"
 
 
 def cpp_compile_command(
-    *,
     D: int,
     cpp_case: str,
     mode: str,

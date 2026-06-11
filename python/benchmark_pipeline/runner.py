@@ -12,7 +12,7 @@ from benchmark_pipeline.cpp_cases import (
     cpp_compile_command,
     nanobench_binary_path,
 )
-from benchmark_pipeline.paths import REPO_ROOT, repo_path
+from benchmark_pipeline.paths import DATASETS_DIR, REPO_ROOT, repo_path
 from benchmark_pipeline.tasks import (
     Task,
     build_pipeline,
@@ -129,7 +129,7 @@ def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]) -> None:
     print(f"--- Compiling C++ Binaries for {D}D ---")
     print(f"{'=' * 50}")
 
-    os.makedirs(os.path.dirname(nanobench_binary_path("lloyd_static")), exist_ok=True)
+    os.makedirs(os.path.dirname(nanobench_binary_path(cases[0])), exist_ok=True)
 
     for cpp_case in cases:
         cmd = cpp_compile_command(D=D, cpp_case=cpp_case, mode="nanobench")
@@ -144,7 +144,7 @@ def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]) -> None:
             sys.exit(1)
 
 
-def delete_if_exists(path: str, *, label: str | None = "intermediate artifact") -> None:
+def delete_if_exists(path: str, label: str | None = "intermediate artifact") -> None:
     try:
         os.remove(path)
         if label is not None:
@@ -160,10 +160,11 @@ def cleanup_config_inputs(case_id: str) -> None:
         dataset_path(f"init_{case_id}.bin"),
         dataset_path(f"gmm_weights_{case_id}.bin"),
         dataset_path(f"gmm_means_{case_id}.bin"),
-        dataset_path(f"gmm_precisions_{case_id}.bin"),
     ]:
         delete_if_exists(path, label="temporary input")
 
+    for path in DATASETS_DIR.glob(f"gmm_precisions_*_{case_id}.bin"):
+        delete_if_exists(str(path), label="temporary input")
 
 
 
@@ -174,7 +175,14 @@ def execute_pipeline(
     timing_processes: int,
     timing_values: int,
     timing_min_time: float,
-    gmm_covariance_type: str = "spherical",
+    gmm_covariance_types: tuple[str, ...],
+    cpp_soa_cases: tuple[str, ...],
+    run_cpp_pp: bool,
+    run_python_pp: bool,
+    cpp_lloyd_cases: tuple[str, ...],
+    run_python_lloyd: bool,
+    cpp_gmm_cases: tuple[str, ...],
+    run_python_gmm: bool,
 ):
     print(f"\n--- Running Config: {configuration_label(D, N, K)} ---")
 
@@ -185,7 +193,14 @@ def execute_pipeline(
         timing_processes,
         timing_values,
         timing_min_time,
-        gmm_covariance_type=gmm_covariance_type,
+        gmm_covariance_types=gmm_covariance_types,
+        cpp_soa_cases=cpp_soa_cases,
+        run_cpp_pp=run_cpp_pp,
+        run_python_pp=run_python_pp,
+        cpp_lloyd_cases=cpp_lloyd_cases,
+        run_python_lloyd=run_python_lloyd,
+        cpp_gmm_cases=cpp_gmm_cases,
+        run_python_gmm=run_python_gmm,
     )
 
     for task in pipeline:

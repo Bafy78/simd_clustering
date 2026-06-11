@@ -10,6 +10,7 @@ from benchmark_pipeline.cpp_cases import (
     callgrind_binary_path,
     cpp_compile_command,
 )
+from benchmark_pipeline.gmm_covariance import SUPPORTED_GMM_COVARIANCE_TYPES
 from benchmark_pipeline.paths import REPO_ROOT, repo_path
 from benchmark_pipeline.runner import run_command
 from benchmark_pipeline.tasks import build_pipeline, config_id, dataset_path
@@ -81,7 +82,7 @@ def main() -> None:
     parser.add_argument("--K", type=int, required=True)
     parser.add_argument(
         "--gmm-covariance-type",
-        choices=("full", "diag", "spherical"),
+        choices=SUPPORTED_GMM_COVARIANCE_TYPES,
         default="spherical",
     )
     parser.add_argument("--skip-compile", action="store_true")
@@ -100,6 +101,13 @@ def main() -> None:
     require_tool("callgrind_annotate")
 
     target = CPP_CASES[args.cpp_case]
+    if target.needs_gmm_init and args.gmm_covariance_type not in target.supported_gmm_covariance_types:
+        supported = ", ".join(target.supported_gmm_covariance_types)
+        raise SystemExit(
+            f"C++ case {args.cpp_case!r} does not support GMM covariance "
+            f"type {args.gmm_covariance_type!r}. Supported values: {supported}"
+        )
+
     config_id_value = config_id(args.D, args.N, args.K)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -117,7 +125,14 @@ def main() -> None:
             timing_processes=1,
             timing_values=1,
             timing_min_time=0.0,
-            gmm_covariance_type=args.gmm_covariance_type,
+            gmm_covariance_types=(args.gmm_covariance_type,) if target.needs_gmm_init else (),
+            cpp_soa_cases=(),
+            run_cpp_pp=False,
+            run_python_pp=False,
+            cpp_lloyd_cases=(),
+            run_python_lloyd=False,
+            cpp_gmm_cases=(args.cpp_case,) if target.needs_gmm_init else (),
+            run_python_gmm=False,
         )[0]
         run_command(dataset_task.name, dataset_task.command)
 
@@ -125,7 +140,9 @@ def main() -> None:
     init_bin = dataset_path(f"init_{config_id_value}.bin")
     gmm_weights_bin = dataset_path(f"gmm_weights_{config_id_value}.bin")
     gmm_means_bin = dataset_path(f"gmm_means_{config_id_value}.bin")
-    gmm_precisions_bin = dataset_path(f"gmm_precisions_{config_id_value}.bin")
+    gmm_precisions_bin = dataset_path(
+        f"gmm_precisions_{args.gmm_covariance_type}_{config_id_value}.bin"
+    )
 
     callgrind_out = out_dir / f"callgrind.{args.cpp_case}.{config_id_value}.out"
     metrics_out = out_dir / f"{args.cpp_case}_metrics_cpp.{config_id_value}.json"

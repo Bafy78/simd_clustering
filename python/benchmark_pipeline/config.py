@@ -11,13 +11,20 @@ class BenchmarkConfig:
     timing_processes: int
     timing_values: int
     timing_min_time: float
-    gmm_covariance_type: str
+    gmm_covariance_types: tuple[str, ...]
+    cpp_soa_cases: tuple[str, ...]
+    run_cpp_pp: bool
+    run_python_pp: bool
+    cpp_lloyd_cases: tuple[str, ...]
+    run_python_lloyd: bool
+    cpp_gmm_cases: tuple[str, ...]
+    run_python_gmm: bool
     datasets_dir: str = str(DATASETS_DIR)
 
 
 def default_config() -> BenchmarkConfig:
     return BenchmarkConfig(
-        test_Ds=[3, 5, 7, 9, 12, 15, 20, 30],
+        test_Ds=[1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 17, 23, 30, 40, 63, 80, 100, 150],
         test_Ns=[
             4_000,
             15_000,
@@ -28,9 +35,16 @@ def default_config() -> BenchmarkConfig:
             2_000_000,
             10_000_000,
         ],
-        test_Ks=[10, 25, 50, 100],
+        test_Ks=[10, 25, 50],
         timing_processes=8,
         timing_values=6,
         timing_min_time=0.05,
-        gmm_covariance_type="spherical",
+        gmm_covariance_types=(),
+        cpp_soa_cases=("soa_static", "soa_dynamic"),
+        run_cpp_pp=True,
+        run_python_pp=True,
+        cpp_lloyd_cases=("lloyd_dynamic", "lloyd_static", "lloyd_auto"),
+        run_python_lloyd=True,
+        cpp_gmm_cases=(),
+        run_python_gmm=False,
     )

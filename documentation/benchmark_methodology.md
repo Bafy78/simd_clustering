@@ -20,7 +20,7 @@ The setup step also generates shared initial centers with `sklearn.cluster.kmean
 
 Those seeded centers are used by the Lloyd / K-Means benchmarks. As a result, C++ and Python start from the same centroids for a given `(D, N, K)` configuration, and repeated pipeline runs regenerate the same initialization.
 
-The GMM initialization is derived from those same K-Means++ centers. The generator assigns samples to their nearest initial center, derives initial mixture weights from those assignments, and estimates the requested precision parameters from the resulting groups. The GMM benchmarks therefore also start from deterministic, shared initialization artifacts.
+The GMM initialization is derived from those same K-Means++ centers only when the selected task graph contains GMM work. The generator assigns samples to their nearest initial center, derives initial mixture weights from those assignments, and estimates the requested precision parameters from the resulting groups. The GMM benchmarks therefore also start from deterministic, shared initialization artifacts.
 
 This makes the Lloyd and GMM comparisons reproducible in the important experimental sense: the input data and initialization are fixed for each configuration.
 
@@ -89,7 +89,7 @@ Both benchmark frontends use one warmup. Postprocessing ignores warmup/calibrati
 
 ## 📊 Metrics, speedups, and confidence intervals
 
-Each language/phase/configuration summary reports descriptive statistics for total time and per-algorithm-iteration time. The statistics are produced by [`python/benchmark_postprocess/stats.py`](../python/benchmark_postprocess/stats.py): count, median, mean, standard deviation, MAD, min/max, and selected percentiles. For Lloyd and GMM, per-algorithm-iteration time is total measured time divided by the iteration count stored in the metrics file. For non-iterative phases, the iteration count is treated as `1`.
+Each language/phase/variant/parameterization/configuration summary reports descriptive statistics for total time and per-algorithm-iteration time. The statistics are produced by [`python/benchmark_postprocess/stats.py`](../python/benchmark_postprocess/stats.py): count, median, mean, standard deviation, MAD, min/max, and selected percentiles. For Lloyd and GMM, per-algorithm-iteration time is total measured time divided by the iteration count stored in the metrics file. For non-iterative phases, the iteration count is treated as `1`.
 
 Speedup is defined as `python_time / cpp_time`. Values above `1` therefore mean that the C++ implementation is faster for that phase and configuration. Postprocessing reports both median-based and mean-based speedups.
 

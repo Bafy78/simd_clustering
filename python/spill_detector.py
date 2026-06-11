@@ -9,6 +9,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from benchmark_pipeline.config import default_config
+from benchmark_pipeline.gmm_covariance import (
+    SUPPORTED_GMM_COVARIANCE_TYPES,
+    spill_detector_define,
+)
 from benchmark_pipeline.cpp_cases import (
     CPP_CASES,
     cpp_compile_command,
@@ -36,7 +40,6 @@ SPILL_DETECTOR_PATTERN = (
     r")"
 )
 
-GMM_COVARIANCE_TYPES = ("spherical", "diag", "full")
 
 
 @dataclass(frozen=True)

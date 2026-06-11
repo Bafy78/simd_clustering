@@ -3,6 +3,7 @@ from pathlib import Path
 
 from benchmark_postprocess.io import write_json
 from benchmark_postprocess.parity import (
+    completed_metric_keys,
     gmm_completed_config_ids,
     lloyd_completed_config_ids,
     load_gmm_metrics_map,
@@ -37,10 +38,15 @@ def main() -> None:
     print(f"Step 2/4: Loading benchmark records from {args.data_dir}...")
     lloyd_config_ids = lloyd_completed_config_ids(lloyd_metrics)
     gmm_config_ids = gmm_completed_config_ids(gmm_metrics)
+    lloyd_metric_keys = completed_metric_keys(lloyd_metrics)
+    gmm_metric_keys = completed_metric_keys(gmm_metrics)
     completed_config_ids_by_phase = {
         "soa": lloyd_config_ids | gmm_config_ids,
-        "lloyd": lloyd_config_ids,
-        "gmm": gmm_config_ids,
+        "pp": lloyd_config_ids | gmm_config_ids,
+    }
+    completed_metric_keys_by_phase = {
+        "lloyd": lloyd_metric_keys,
+        "gmm": gmm_metric_keys,
     }
 
     records = load_timing_process_aware_records(
@@ -48,6 +54,7 @@ def main() -> None:
         lloyd_metrics=lloyd_metrics,
         gmm_metrics=gmm_metrics,
         completed_config_ids_by_phase=completed_config_ids_by_phase,
+        completed_metric_keys_by_phase=completed_metric_keys_by_phase,
     )
 
     print("Step 3/4: Building summary and running bootstrap intervals...")
@@ -70,8 +77,10 @@ def main() -> None:
     print(f"Bootstrap iterations: {args.bootstrap_iterations}")
     print(f"Lloyd metrics records: {len(lloyd_metrics)}")
     print(f"Lloyd completed configs: {len(lloyd_config_ids)}")
+    print(f"Lloyd completed config/params keys: {len(lloyd_metric_keys)}")
     print(f"GMM metrics records: {len(gmm_metrics)}")
     print(f"GMM completed configs: {len(gmm_config_ids)}")
+    print(f"GMM completed config/params keys: {len(gmm_metric_keys)}")
 
 
 if __name__ == "__main__":
