@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include <eve/module/algo.hpp>
 #include <eve/module/core.hpp>
 #include <eve/module/math.hpp>
 #include <eve/wide.hpp>
@@ -23,6 +24,7 @@ template <eve::product_type SampleT>
 struct full_covariance_model {
     static constexpr std::size_t D = kumi::size_v<SampleT>;
     static constexpr std::size_t Tri = D * (D + 1) / 2;
+    static constexpr float default_reg_covar = 1e-6f;
 
     using simd_sum_triangle = std::array<wide_f, Tri>;
     using scalar_sample = std::array<float, D>;
@@ -40,7 +42,8 @@ struct full_covariance_model {
     std::vector<simd_sum_triangle> sum_xx_w;
     std::vector<float> log_precision_dets;
     std::vector<unsigned char> covariance_current;
-    float reg_covar = 1e-6f;
+    std::vector<unsigned char> covariance_needs_stable_recompute;
+    float reg_covar = default_reg_covar;
 
     struct sample_cache {
         simd_sum_triangle xx;
@@ -49,7 +52,7 @@ struct full_covariance_model {
     full_covariance_model(
         std::vector<float> precisions_,
         std::size_t K,
-        float reg_covar_ = 1e-6f
+        float reg_covar_ = default_reg_covar
     )
         : precisions(std::move(precisions_)),
           covariances(K * D * D),
@@ -57,6 +60,7 @@ struct full_covariance_model {
           sum_xx_w(K),
           log_precision_dets(K, -std::numeric_limits<float>::infinity()),
           covariance_current(K, 0),
+          covariance_needs_stable_recompute(K, 0),
           reg_covar(reg_covar_) {}
 
     static constexpr std::size_t triangle_offset(std::size_t row, std::size_t col) {
@@ -104,6 +108,12 @@ struct full_covariance_model {
 
         if (covariance_current.size() != K) {
             throw std::runtime_error("Full GMM covariance state count must match cluster count");
+        }
+
+        if (covariance_needs_stable_recompute.size() != K) {
+            throw std::runtime_error(
+                "Full GMM stable-recompute state count must match cluster count"
+            );
         }
     }
 
@@ -258,13 +268,29 @@ struct full_covariance_model {
         auto covariance = matrix_span(covariances, k);
         auto precision = matrix_span(precisions, k);
 
+        covariance_needs_stable_recompute[k] = 0;
+        bool cancellation_risk = false;
+
         for (std::size_t row = 0; row < D; ++row) {
             for (std::size_t col = 0; col <= row; ++col) {
                 const float avg_xx = eve::reduce(
                     sum_xx_w[k][triangle_offset(row, col)]
                 ) / N_k;
 
-                float covariance_value = avg_xx - mean_values[row] * mean_values[col];
+                const float mean_product = mean_values[row] * mean_values[col];
+                float covariance_value = avg_xx - mean_product;
+
+                if (!std::isfinite(covariance_value)) {
+                    cancellation_risk = true;
+                }
+
+                if (row == col && diagonal_variance_is_suspicious(
+                    avg_xx,
+                    mean_product,
+                    covariance_value
+                )) {
+                    cancellation_risk = true;
+                }
 
                 if (row == col) {
                     covariance_value += reg_covar;
@@ -275,18 +301,183 @@ struct full_covariance_model {
             }
         }
 
-        const float covariance_logdet = invert_spd_matrix(
-            covariance,
-            precision,
-            "Full GMM covariance"
+        if (cancellation_risk) {
+            covariance_needs_stable_recompute[k] = 1;
+            return;
+        }
+
+        try {
+            const float covariance_logdet = invert_spd_matrix(
+                covariance,
+                precision,
+                "Full GMM covariance"
+            );
+            log_precision_dets[k] = -covariance_logdet;
+            covariance_current[k] = 1;
+        } catch (const std::runtime_error&) {
+            covariance_needs_stable_recompute[k] = 1;
+        }
+    }
+
+    template <class Samples, class ComponentCounts, class Means, class Scratch>
+    void recompute_unstable_clusters(
+        const Samples& samples,
+        const ComponentCounts& component_counts,
+        const Means& means,
+        Scratch& score_scratch
+    ) {
+        if (!has_clusters_requiring_stable_recompute()) {
+            return;
+        }
+
+        std::vector<simd_sum_triangle> stable_sum_xx_w(K());
+        std::vector<scalar_sample> stable_means(K());
+        const auto zero = wide_zero_f;
+
+        for (std::size_t k = 0; k < K(); ++k) {
+            if (covariance_needs_stable_recompute[k] != 0) {
+                stable_sum_xx_w[k].fill(zero);
+                stable_means[k] = sample_to_array(means[k]);
+            }
+        }
+
+        eve::algo::for_each(
+            samples,
+            [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
+                const auto sample = eve::load[ignore](it);
+                const auto sample_cache = make_sample_cache(sample);
+
+                auto max_score = wide_f(-std::numeric_limits<float>::infinity());
+
+                for (std::size_t k = 0; k < K(); ++k) {
+                    const auto score = compute_weighted_log_prob(
+                        sample,
+                        sample_cache,
+                        means[k],
+                        k
+                    );
+                    score_scratch[k] = score;
+                    max_score = eve::max(max_score, score);
+                }
+
+                auto denom = wide_zero_f;
+
+                for (std::size_t k = 0; k < K(); ++k) {
+                    const auto unnormalized_resp = eve::exp(score_scratch[k] - max_score);
+                    score_scratch[k] = unnormalized_resp;
+                    denom += unnormalized_resp;
+                }
+
+                const auto inv_denom = wide_f(1.0f) / denom;
+
+                for (std::size_t k = 0; k < K(); ++k) {
+                    if (covariance_needs_stable_recompute[k] == 0) {
+                        continue;
+                    }
+
+                    const auto resp = score_scratch[k] * inv_denom;
+                    const auto& mean_values = stable_means[k];
+                    std::array<wide_f, D> diff{};
+
+                    kumi::for_each_index(
+                        [&](auto index, auto x) {
+                            diff[index] = x - wide_f(mean_values[index]);
+                        },
+                        sample
+                    );
+
+                    for (std::size_t row = 0; row < D; ++row) {
+                        for (std::size_t col = 0; col <= row; ++col) {
+                            const auto diff_product = diff[row] * diff[col];
+                            auto& accumulator = stable_sum_xx_w[k][triangle_offset(row, col)];
+
+                            accumulator = eve::fma[ignore](resp, diff_product, accumulator);
+                        }
+                    }
+                }
+            }
         );
-        log_precision_dets[k] = -covariance_logdet;
-        covariance_current[k] = 1;
+
+        for (std::size_t k = 0; k < K(); ++k) {
+            if (covariance_needs_stable_recompute[k] == 0) {
+                continue;
+            }
+
+            const float N_k = component_counts[k];
+            const float inv_N_k = 1.0f / N_k;
+            auto covariance = matrix_span(covariances, k);
+            auto precision = matrix_span(precisions, k);
+
+            for (std::size_t row = 0; row < D; ++row) {
+                for (std::size_t col = 0; col <= row; ++col) {
+                    float covariance_value = eve::reduce(
+                        stable_sum_xx_w[k][triangle_offset(row, col)]
+                    ) * inv_N_k;
+
+                    if (row == col) {
+                        covariance_value += reg_covar;
+                    }
+
+                    covariance[row * D + col] = covariance_value;
+                    covariance[col * D + row] = covariance_value;
+                }
+            }
+
+            const float covariance_logdet = invert_spd_matrix(
+                covariance,
+                precision,
+                "Full GMM stable covariance recompute"
+            );
+            log_precision_dets[k] = -covariance_logdet;
+            covariance_current[k] = 1;
+            covariance_needs_stable_recompute[k] = 0;
+        }
     }
 
 private:
     std::size_t K() const {
         return score_data.size();
+    }
+
+    bool has_clusters_requiring_stable_recompute() const {
+        return std::any_of(
+            covariance_needs_stable_recompute.begin(),
+            covariance_needs_stable_recompute.end(),
+            [](unsigned char value) { return value != 0; }
+        );
+    }
+
+    static bool diagonal_variance_is_suspicious(
+        float avg_xx,
+        float mean_square,
+        float raw_variance
+    ) {
+        if (
+            !std::isfinite(avg_xx)
+            || !std::isfinite(mean_square)
+            || !std::isfinite(raw_variance)
+        ) {
+            return true;
+        }
+
+        if (!(raw_variance > 0.0f)) {
+            return true;
+        }
+
+        const float cancellation_scale = std::max(std::abs(avg_xx), std::abs(mean_square));
+
+        if (!(cancellation_scale > 1.0f)) {
+            return false;
+        }
+
+        constexpr float raw_moment_error_factor = 64.0f;
+        constexpr float tolerated_covariance_relative_error = 1e-2f;
+
+        constexpr float cancellation_threshold =
+            raw_moment_error_factor * std::numeric_limits<float>::epsilon()
+            / tolerated_covariance_relative_error;
+
+        return std::abs(raw_variance) / cancellation_scale < cancellation_threshold;
     }
 
     template <eve::product_type AnySampleT>
@@ -369,7 +560,11 @@ private:
                     if (!(sum > 0.0f) || !std::isfinite(sum)) {
                         throw std::runtime_error(
                             std::string(label)
-                            + " is not positive definite; try increasing reg_covar"
+                            + " is not positive definite while computing Cholesky pivot at index "
+                            + std::to_string(row)
+                            + "; pivot value = "
+                            + std::to_string(sum)
+                            + "; try increasing reg_covar"
                         );
                     }
 

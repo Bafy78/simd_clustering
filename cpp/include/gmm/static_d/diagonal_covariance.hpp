@@ -208,4 +208,12 @@ struct diagonal_covariance_model {
             mean
         );
     }
+
+    template <class Samples, class ComponentCounts, class Means, class Scratch>
+    void recompute_unstable_clusters(
+        const Samples&,
+        const ComponentCounts&,
+        const Means&,
+        Scratch&
+    ) {}
 };

@@ -64,6 +64,38 @@ Postprocessing currently checks GMM parity with the thresholds in `GMM_PARITY_TH
 
 The covariance check uses relative error because covariance values can vary by scale. Weights and means use absolute error because their expected magnitudes are easier to interpret directly in this synthetic setup.
 
+
+### Full-covariance GMM and scikit-learn's centered covariance update
+
+For `covariance_type="full"`, scikit-learn's GaussianMixture does not estimate covariance with the raw-moment identity
+
+```text
+cov = E[x xᵀ] - μ μᵀ
+```
+
+Its current full-covariance M-step first forms component-centered residuals and then computes the weighted covariance:
+
+```python
+diff = X - means[k, :]
+covariances[k] = ((resp[:, k] * diff.T) @ diff) / nk[k]
+```
+
+That difference matters for parity. The raw-moment identity is algebraically equivalent in exact arithmetic, but it can lose most of the meaningful bits when samples have a large absolute offset and the true within-component variance is small. In that case both `E[x xᵀ]` and `μ μᵀ` are large, and the covariance is recovered by subtracting two nearly equal large quantities.
+
+This is not only a theoretical distinction. Older scikit-learn GMM code used the raw-moment formula for full covariance. It was changed in [scikit-learn PR #3945](https://github.com/scikit-learn/scikit-learn/pull/3945) after [issue #2640](https://github.com/scikit-learn/scikit-learn/issues/2640), where roundoff could produce covariance matrices that were not positive definite and caused Cholesky failures. The PR discussion explicitly states that the raw formula can lead to matrices with large negative eigenvalues, and that the centered-residual replacement may use more memory and may take longer to compute.
+
+The cost model is different in this project. scikit-learn's EM loop already materializes the `N * K` responsibility matrix and then runs a separate M-step, so the centered full-covariance update reuses stored responsibilities. The static C++ full-covariance path is intentionally fused: responsibilities are computed while sufficient statistics are accumulated, and the implementation does not store an `N * K` responsibility matrix. An always-centered full-covariance M-step would therefore require either storing responsibilities or recomputing them in a second pass.
+
+The fallback implementation is the compromise used here for full covariance. The first attempt uses the fused raw-moment update. Before accepting it, the implementation checks the unregularized diagonal variances for non-finite values, non-positive values, and large-offset cancellation risk. If a component is suspicious, or if its Cholesky factorization fails, that component's covariance is recomputed in a second pass using the current EM iteration's responsibilities and centered residuals around the newly estimated mean. Responsibilities are recomputed for the fallback pass rather than stored.
+
+This means full-covariance parity should be interpreted carefully:
+
+* if the fallback triggers, that component's covariance update is much closer to scikit-learn's centered-residual update;
+* if the fallback does not trigger, the component keeps the faster raw-moment update and is not formula-level equivalent to scikit-learn;
+* the fallback is intended to catch the same non-positive-definite / cancellation failure class that motivated scikit-learn's change, not to make every full-covariance M-step identical to scikit-learn's implementation.
+
+I didn't bother including a diagnostic script here, but basically if you change the code to always run the fallback (setting `covariance_needs_stable_recompute[k] = 1` all the time), you will see that we lose about **half the performance** (each EM iteration is basically ran twice) but almost all the covariance parity pressure disappears.
+
 ## ⏱️ C++ timing-process metrics validation
 
 C++ benchmark tasks are run once per configured timing process. Each process writes its own temporary timing JSON. For Lloyd and GMM, each process also writes its own temporary metrics file.

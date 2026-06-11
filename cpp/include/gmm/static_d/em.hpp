@@ -184,8 +184,15 @@ struct static_gmm_em_state {
             );
 
             covariance.update_cluster_from_sufficient_statistics(k, N_k, means[k]);
+        }
 
-            weights[k] = N_k / N_k_sum;
+        // The covariance model may need to recompute selected sufficient statistics
+        // from the responsibilities of the just-finished E-step. Score data has not
+        // been refreshed yet, so it still represents the old EM parameters.
+        covariance.recompute_unstable_clusters(samples, weights, means, score_scratch);
+
+        for (std::size_t k = 0; k < K(); ++k) {
+            weights[k] /= N_k_sum;
         }
 
         covariance.refresh_score_data(weights, means);

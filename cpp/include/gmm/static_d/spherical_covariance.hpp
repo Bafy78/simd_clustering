@@ -166,4 +166,12 @@ struct spherical_covariance_model {
 
         precisions[k] = 1.0f / covariance;
     }
+
+    template <class Samples, class ComponentCounts, class Means, class Scratch>
+    void recompute_unstable_clusters(
+        const Samples&,
+        const ComponentCounts&,
+        const Means&,
+        Scratch&
+    ) {}
 };
