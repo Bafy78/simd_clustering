@@ -19,7 +19,7 @@ def cpp_cases_for_dimension(config, _D: int) -> set[str]:
 
 def main() -> None:
     config = default_config()
-    prepare_datasets_dir(config.datasets_dir)
+    datasets_dir = prepare_datasets_dir(config.datasets_dir)
 
     for D in config.test_Ds:
         compile_cpp_binaries(D, cpp_cases_for_dimension(config, D))
@@ -41,6 +41,8 @@ def main() -> None:
                     run_python_lloyd=config.run_python_lloyd,
                     cpp_gmm_cases=config.cpp_gmm_cases,
                     run_python_gmm=config.run_python_gmm,
+                    datasets_dir=datasets_dir,
+                    keep_inputs=config.keep_inputs,
                 )
 
     print("\nAll benchmarking finished successfully!")

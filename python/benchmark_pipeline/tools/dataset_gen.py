@@ -1,5 +1,4 @@
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -222,6 +221,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def ensure_parent_dir(path: str | Path) -> None:
+    Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+
+
 def _parse_gmm_precision_outputs(raw_outputs: list[list[str]]) -> dict[str, str]:
     outputs: dict[str, str] = {}
 
@@ -241,7 +244,8 @@ def _parse_gmm_precision_outputs(raw_outputs: list[list[str]]) -> dict[str, str]
 def main() -> None:
     args = parse_args()
 
-    os.makedirs(os.path.dirname(args.dataset_out), exist_ok=True)
+    ensure_parent_dir(args.dataset_out)
+    ensure_parent_dir(args.centroids_out)
 
     # 1. Generate Dataset
     X, _, *_ = make_blobs(
@@ -275,6 +279,11 @@ def main() -> None:
         X_float32,
         centers_float32,
     )
+
+    ensure_parent_dir(args.gmm_weights_out)
+    ensure_parent_dir(args.gmm_means_out)
+    for path in precision_outputs.values():
+        ensure_parent_dir(path)
 
     weights.tofile(args.gmm_weights_out)
     means.tofile(args.gmm_means_out)

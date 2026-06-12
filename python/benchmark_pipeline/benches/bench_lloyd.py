@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pyperf
 
 threadpool_limits = None
@@ -115,6 +117,8 @@ def write_lloyd_metrics(path, *, X, kmeans, K):
         # Optional but useful for debugging sklearn drift.
         "sklearn_inertia": float(kmeans.inertia_),
     }
+
+    Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)

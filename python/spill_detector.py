@@ -18,7 +18,7 @@ from benchmark_pipeline.cpp_cases import (
     cpp_compile_command,
     spill_detector_assembly_path,
 )
-from benchmark_pipeline.paths import REPO_ROOT, repo_path
+from benchmark_pipeline.paths import REPO_ROOT, repo_path, repo_relative_path
 
 SPILL_DETECTOR_PATTERN = (
     r"(?m)(?="
@@ -549,7 +549,7 @@ def main() -> None:
 
     require_tool(args.rg)
 
-    out_dir = Path(args.out_dir)
+    out_dir = repo_relative_path(args.out_dir)
     if args.skip_compile:
         out_dir.mkdir(parents=True, exist_ok=True)
     else:

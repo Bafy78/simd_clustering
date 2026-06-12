@@ -117,6 +117,8 @@ def write_gmm_metrics(path, *, gmm, covariance_type):
         },
     }
 
+    Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)
         f.write("\n")

@@ -20,6 +20,7 @@ class BenchmarkConfig:
     cpp_gmm_cases: tuple[str, ...]
     run_python_gmm: bool
     datasets_dir: str = str(DATASETS_DIR)
+    keep_inputs: bool = False
 
 
 def default_config() -> BenchmarkConfig:

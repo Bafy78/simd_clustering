@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 
@@ -11,6 +12,8 @@ def load_json(path: str) -> dict[str, Any]:
 
 
 def save_json(path: str, data: dict[str, Any]) -> None:
+    Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
         f.write("\n")

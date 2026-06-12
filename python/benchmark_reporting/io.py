@@ -3,15 +3,17 @@ import json
 from typing import Any, Iterator
 import pandas as pd
 
+from benchmark_pipeline.paths import repo_relative_path
+
 from .constants import *
 
 SUMMARY_FILENAME = "benchmark_summary.json"
 
 
 def _summary_path(
-    data_dir=Path("./datasets"), summary_filename=SUMMARY_FILENAME
+    data_dir=Path("datasets"), summary_filename=SUMMARY_FILENAME
 ) -> Path:
-    data_dir = Path(data_dir)
+    data_dir = repo_relative_path(data_dir)
 
     if data_dir.is_file():
         return data_dir
@@ -20,7 +22,7 @@ def _summary_path(
 
 
 def load_benchmark_summary(
-    data_dir=Path("./datasets"),
+    data_dir=Path("datasets"),
     summary_filename=SUMMARY_FILENAME,
 ) -> dict[str, Any]:
     path = _summary_path(data_dir, summary_filename)
@@ -117,7 +119,7 @@ def _iter_phase_variant_parameterizations(
 
 
 def load_benchmark_data(
-    data_dir=Path("./datasets"),
+    data_dir=Path("datasets"),
     summary_filename=SUMMARY_FILENAME,
     time_field: str = "time_s",
     statistic: str = "median",
@@ -248,7 +250,7 @@ def load_benchmark_data(
 
 
 def load_speedup_summary(
-    data_dir=Path("./datasets"),
+    data_dir=Path("datasets"),
     summary_filename=SUMMARY_FILENAME,
     time_field: str = "time_per_algorithm_iteration_s",
     ratio_statistic: str = "median_ratio",
@@ -349,7 +351,7 @@ def load_speedup_summary(
 
 
 def load_lloyd_parity_summary(
-    data_dir=Path("./datasets"),
+    data_dir=Path("datasets"),
     summary_filename=SUMMARY_FILENAME,
 ) -> pd.DataFrame:
     """Load Lloyd parity/inertia results from benchmark_summary.json."""
@@ -429,7 +431,7 @@ def load_lloyd_parity_summary(
 
 
 def load_gmm_parity_summary(
-    data_dir=Path("./datasets"),
+    data_dir=Path("datasets"),
     summary_filename=SUMMARY_FILENAME,
 ) -> pd.DataFrame:
     """Load GMM C++/Python parity records from benchmark_summary.json."""

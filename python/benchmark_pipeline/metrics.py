@@ -1,5 +1,6 @@
 import json
 from collections.abc import Sequence
+from pathlib import Path
 
 
 def load_json(path: str):
@@ -8,6 +9,8 @@ def load_json(path: str):
 
 
 def write_json(path: str, payload: dict) -> None:
+    Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)
         f.write("\n")

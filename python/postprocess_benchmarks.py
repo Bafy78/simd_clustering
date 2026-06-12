@@ -11,16 +11,13 @@ from benchmark_postprocess.parity import (
 )
 from benchmark_postprocess.records import load_timing_process_aware_records
 from benchmark_postprocess.summary import build_summary
+from benchmark_pipeline.paths import repo_relative_path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", type=Path, default=Path("./datasets"))
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("./datasets/benchmark_summary.json"),
-    )
+    parser.add_argument("--data-dir", type=Path, default=Path("datasets"))
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--bootstrap-iterations", type=int, default=1_000)
     parser.add_argument("--ci-level", type=float, default=0.95)
     parser.add_argument("--bootstrap-seed", type=int, default=12345)
@@ -30,6 +27,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    args.data_dir = repo_relative_path(args.data_dir)
+    args.output = (
+        repo_relative_path(args.output)
+        if args.output is not None
+        else args.data_dir / "benchmark_summary.json"
+    )
 
     print("Step 1/4: Loading Lloyd and GMM metrics artifacts...")
     lloyd_metrics = load_lloyd_metrics_map(args.data_dir)

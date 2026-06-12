@@ -56,7 +56,7 @@ python python/benchmark_orchestrator.py
 
 The orchestrator prepares the datasets directory, compiles the required C++ cases for each configured dimension, then executes the configured task graph for each `(D, N, K)` combination.
 
-Raw timing and metrics files are written under `datasets/`. Temporary binary input files are created during each configuration run and removed by the normal orchestrator. The expected artifact naming convention is documented in [Generated artifact names](architecture_and_artifacts.md#generated-artifact-names).
+Raw timing and metrics files are written under `datasets/`. Temporary binary input files are created during each configuration run and removed by the normal orchestrator. Running the orchestrator deletes the existing datasets directory before starting.
 
 ## 5. Postprocess benchmark outputs
 

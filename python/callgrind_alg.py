@@ -11,7 +11,12 @@ from benchmark_pipeline.cpp_cases import (
     cpp_compile_command,
 )
 from benchmark_pipeline.gmm_covariance import SUPPORTED_GMM_COVARIANCE_TYPES
-from benchmark_pipeline.paths import REPO_ROOT, repo_path
+from benchmark_pipeline.paths import (
+    DATASETS_DIR,
+    REPO_ROOT,
+    repo_path,
+    repo_relative_path,
+)
 from benchmark_pipeline.runner import run_command
 from benchmark_pipeline.tasks import build_pipeline, config_id, dataset_path
 
@@ -87,6 +92,7 @@ def main() -> None:
     )
     parser.add_argument("--skip-compile", action="store_true")
     parser.add_argument("--skip-generate", action="store_true")
+    parser.add_argument("--datasets-dir", default=str(DATASETS_DIR))
     parser.add_argument("--out-dir", default=repo_path("callgrind_results"))
 
     # Optional explicit cache model. Example:
@@ -109,7 +115,8 @@ def main() -> None:
         )
 
     config_id_value = config_id(args.D, args.N, args.K)
-    out_dir = Path(args.out_dir)
+    datasets_dir = repo_relative_path(args.datasets_dir)
+    out_dir = repo_relative_path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     binary = callgrind_binary_path(args.cpp_case, args.D)
@@ -133,15 +140,17 @@ def main() -> None:
             run_python_lloyd=False,
             cpp_gmm_cases=(args.cpp_case,) if target.needs_gmm_init else (),
             run_python_gmm=False,
+            datasets_dir=datasets_dir,
         )[0]
         run_command(dataset_task.name, dataset_task.command)
 
-    dataset_bin = dataset_path(f"data_{config_id_value}.bin")
-    init_bin = dataset_path(f"init_{config_id_value}.bin")
-    gmm_weights_bin = dataset_path(f"gmm_weights_{config_id_value}.bin")
-    gmm_means_bin = dataset_path(f"gmm_means_{config_id_value}.bin")
+    dataset_bin = dataset_path(f"data_{config_id_value}.bin", datasets_dir)
+    init_bin = dataset_path(f"init_{config_id_value}.bin", datasets_dir)
+    gmm_weights_bin = dataset_path(f"gmm_weights_{config_id_value}.bin", datasets_dir)
+    gmm_means_bin = dataset_path(f"gmm_means_{config_id_value}.bin", datasets_dir)
     gmm_precisions_bin = dataset_path(
-        f"gmm_precisions_{args.gmm_covariance_type}_{config_id_value}.bin"
+        f"gmm_precisions_{args.gmm_covariance_type}_{config_id_value}.bin",
+        datasets_dir,
     )
 
     callgrind_out = out_dir / f"callgrind.{args.cpp_case}.{config_id_value}.out"

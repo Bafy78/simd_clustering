@@ -1,10 +1,11 @@
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from benchmark_pipeline.cpp_cases import get_cpp_case, nanobench_binary_path
 from benchmark_pipeline.gmm_covariance import validate_gmm_covariance_types
-from benchmark_pipeline.paths import DATASETS_DIR, repo_path
+from benchmark_pipeline.paths import DATASETS_DIR, repo_path, repo_relative_path
 
 NO_PARAMS = "default"
 REFERENCE_VARIANT = "reference"
@@ -27,16 +28,20 @@ def configuration_label(D: int, N: int, K: int) -> str:
     return f"{D}D | {N}N | {K}K"
 
 
-def dataset_path(filename: str) -> str:
-    return str(DATASETS_DIR / filename)
+def dataset_path(filename: str, datasets_dir: str | Path = DATASETS_DIR) -> str:
+    return str(repo_relative_path(datasets_dir) / filename)
 
 
 def gmm_precisions_filename(covariance_type: str, case_id: str) -> str:
     return f"gmm_precisions_{covariance_type}_{case_id}.bin"
 
 
-def gmm_precisions_path(covariance_type: str, case_id: str) -> str:
-    return dataset_path(gmm_precisions_filename(covariance_type, case_id))
+def gmm_precisions_path(
+    covariance_type: str,
+    case_id: str,
+    datasets_dir: str | Path = DATASETS_DIR,
+) -> str:
+    return dataset_path(gmm_precisions_filename(covariance_type, case_id), datasets_dir)
 
 
 def artifact_name_parts(
@@ -98,6 +103,7 @@ def timing_artifact_path(
     language_key: str,
     case_id: str,
     params_key: str = NO_PARAMS,
+    datasets_dir: str | Path = DATASETS_DIR,
 ) -> str:
     return dataset_path(
         timing_artifact_name(
@@ -106,7 +112,8 @@ def timing_artifact_path(
             language_key,
             case_id,
             params_key,
-        )
+        ),
+        datasets_dir,
     )
 
 
@@ -116,6 +123,7 @@ def metrics_artifact_path(
     language_key: str,
     case_id: str,
     params_key: str = NO_PARAMS,
+    datasets_dir: str | Path = DATASETS_DIR,
 ) -> str:
     return dataset_path(
         metrics_artifact_name(
@@ -124,7 +132,8 @@ def metrics_artifact_path(
             language_key,
             case_id,
             params_key,
-        )
+        ),
+        datasets_dir,
     )
 
 
@@ -169,16 +178,17 @@ def build_pipeline(
     run_python_lloyd: bool,
     cpp_gmm_cases: tuple[str, ...],
     run_python_gmm: bool,
+    datasets_dir: str | Path = DATASETS_DIR,
 ) -> list[Task]:
     """Defines the strict contract of tasks for a single D/N/K configuration."""
     validate_gmm_covariance_types(gmm_covariance_types)
 
     case_id = config_id(D, N, K)
 
-    dataset_bin = dataset_path(f"data_{case_id}.bin")
-    init_centroids_bin = dataset_path(f"init_{case_id}.bin")
-    gmm_weights_bin = dataset_path(f"gmm_weights_{case_id}.bin")
-    gmm_means_bin = dataset_path(f"gmm_means_{case_id}.bin")
+    dataset_bin = dataset_path(f"data_{case_id}.bin", datasets_dir)
+    init_centroids_bin = dataset_path(f"init_{case_id}.bin", datasets_dir)
+    gmm_weights_bin = dataset_path(f"gmm_weights_{case_id}.bin", datasets_dir)
+    gmm_means_bin = dataset_path(f"gmm_means_{case_id}.bin", datasets_dir)
 
     for cpp_case in cpp_gmm_cases:
         case = get_cpp_case(cpp_case)
@@ -226,7 +236,7 @@ def build_pipeline(
                 [
                     "--gmm-precisions-out",
                     covariance_type,
-                    gmm_precisions_path(covariance_type, case_id),
+                    gmm_precisions_path(covariance_type, case_id, datasets_dir),
                 ]
             )
 
@@ -250,6 +260,7 @@ def build_pipeline(
                     case.variant_key,
                     "cpp",
                     case_id,
+                    datasets_dir=datasets_dir,
                 ),
                 str(timing_values),
                 str(timing_min_time),
@@ -273,6 +284,7 @@ def build_pipeline(
                     case.variant_key,
                     "cpp",
                     case_id,
+                    datasets_dir=datasets_dir,
                 ),
                 str(timing_values),
                 str(timing_min_time),
@@ -302,7 +314,13 @@ def build_pipeline(
                     "--min-time",
                     str(timing_min_time),
                     "--output",
-                    timing_artifact_path("pp", REFERENCE_VARIANT, "py", case_id),
+                    timing_artifact_path(
+                        "pp",
+                        REFERENCE_VARIANT,
+                        "py",
+                        case_id,
+                        datasets_dir=datasets_dir,
+                    ),
                 ],
             )
         )
@@ -323,12 +341,14 @@ def build_pipeline(
                     case.variant_key,
                     "cpp",
                     case_id,
+                    datasets_dir=datasets_dir,
                 ),
                 timing_artifact_path(
                     case.phase_key,
                     case.variant_key,
                     "cpp",
                     case_id,
+                    datasets_dir=datasets_dir,
                 ),
                 str(timing_values),
                 str(timing_min_time),
@@ -355,7 +375,13 @@ def build_pipeline(
                     "--init-centroids-bin",
                     init_centroids_bin,
                     "--metrics-file",
-                    metrics_artifact_path("lloyd", REFERENCE_VARIANT, "py", case_id),
+                    metrics_artifact_path(
+                        "lloyd",
+                        REFERENCE_VARIANT,
+                        "py",
+                        case_id,
+                        datasets_dir=datasets_dir,
+                    ),
                     "--processes",
                     str(timing_processes),
                     "--values",
@@ -363,13 +389,19 @@ def build_pipeline(
                     "--min-time",
                     str(timing_min_time),
                     "--output",
-                    timing_artifact_path("lloyd", REFERENCE_VARIANT, "py", case_id),
+                    timing_artifact_path(
+                        "lloyd",
+                        REFERENCE_VARIANT,
+                        "py",
+                        case_id,
+                        datasets_dir=datasets_dir,
+                    ),
                 ],
             )
         )
 
     for covariance_type in gmm_covariance_types:
-        gmm_precisions_bin = gmm_precisions_path(covariance_type, case_id)
+        gmm_precisions_bin = gmm_precisions_path(covariance_type, case_id, datasets_dir)
 
         for cpp_case in cpp_gmm_cases:
             case = get_cpp_case(cpp_case)
@@ -391,6 +423,7 @@ def build_pipeline(
                         "cpp",
                         case_id,
                         covariance_type,
+                        datasets_dir=datasets_dir,
                     ),
                     timing_artifact_path(
                         case.phase_key,
@@ -398,6 +431,7 @@ def build_pipeline(
                         "cpp",
                         case_id,
                         covariance_type,
+                        datasets_dir=datasets_dir,
                     ),
                     str(timing_values),
                     str(timing_min_time),
@@ -437,6 +471,7 @@ def build_pipeline(
                             "py",
                             case_id,
                             covariance_type,
+                            datasets_dir=datasets_dir,
                         ),
                         "--processes",
                         str(timing_processes),
@@ -451,6 +486,7 @@ def build_pipeline(
                             "py",
                             case_id,
                             covariance_type,
+                            datasets_dir=datasets_dir,
                         ),
                     ],
                 )

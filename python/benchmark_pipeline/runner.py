@@ -2,7 +2,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
+from pathlib import Path
 
 from benchmark_pipeline.metrics import (
     validate_cpp_timing_process_metrics,
@@ -12,7 +14,14 @@ from benchmark_pipeline.cpp_cases import (
     cpp_compile_command,
     nanobench_binary_path,
 )
-from benchmark_pipeline.paths import DATASETS_DIR, REPO_ROOT, repo_path
+from benchmark_pipeline.paths import (
+    BIN_DIR,
+    DATASETS_DIR,
+    PYTHON_DIR,
+    REPO_ROOT,
+    repo_path,
+    repo_relative_path,
+)
 from benchmark_pipeline.tasks import (
     Task,
     build_pipeline,
@@ -22,12 +31,50 @@ from benchmark_pipeline.tasks import (
 )
 
 
-def prepare_datasets_dir(datasets_dir: str) -> None:
-    if os.path.exists(datasets_dir):
+def _is_relative_to(path: Path, other: Path) -> bool:
+    try:
+        path.relative_to(other)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_datasets_dir_for_cleaning(datasets_dir: Path) -> None:
+    protected_paths = {
+        Path(datasets_dir.anchor).resolve(),
+        Path.home().resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+        REPO_ROOT.resolve(),
+        PYTHON_DIR.resolve(),
+        BIN_DIR.resolve(),
+        REPO_ROOT.parent.resolve(),
+    }
+
+    if datasets_dir in protected_paths:
+        raise ValueError(f"Refusing to clean protected directory: {datasets_dir}")
+
+    if _is_relative_to(REPO_ROOT.resolve(), datasets_dir):
+        raise ValueError(
+            f"Refusing to clean {datasets_dir}: it contains the repository root."
+        )
+
+    if datasets_dir.exists() and not datasets_dir.is_dir():
+        raise ValueError(f"Datasets path exists but is not a directory: {datasets_dir}")
+
+    if datasets_dir.is_symlink():
+        raise ValueError(f"Refusing to clean symlinked datasets directory: {datasets_dir}")
+
+
+def prepare_datasets_dir(datasets_dir: str | Path) -> Path:
+    datasets_dir = repo_relative_path(datasets_dir)
+    _validate_datasets_dir_for_cleaning(datasets_dir)
+
+    if datasets_dir.exists():
         print(f"Cleaning {datasets_dir}...")
         shutil.rmtree(datasets_dir)
 
-    os.makedirs(datasets_dir, exist_ok=True)
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    return datasets_dir
 
 
 def run_command(task_name: str, command: list[str]) -> None:
@@ -153,19 +200,22 @@ def delete_if_exists(path: str, label: str | None = "intermediate artifact") -> 
         pass
 
 
+def cleanup_config_inputs(
+    case_id: str,
+    datasets_dir: str | Path = DATASETS_DIR,
+) -> None:
+    datasets_dir = repo_relative_path(datasets_dir)
 
-def cleanup_config_inputs(case_id: str) -> None:
     for path in [
-        dataset_path(f"data_{case_id}.bin"),
-        dataset_path(f"init_{case_id}.bin"),
-        dataset_path(f"gmm_weights_{case_id}.bin"),
-        dataset_path(f"gmm_means_{case_id}.bin"),
+        dataset_path(f"data_{case_id}.bin", datasets_dir),
+        dataset_path(f"init_{case_id}.bin", datasets_dir),
+        dataset_path(f"gmm_weights_{case_id}.bin", datasets_dir),
+        dataset_path(f"gmm_means_{case_id}.bin", datasets_dir),
     ]:
         delete_if_exists(path, label="temporary input")
 
-    for path in DATASETS_DIR.glob(f"gmm_precisions_*_{case_id}.bin"):
+    for path in datasets_dir.glob(f"gmm_precisions_*_{case_id}.bin"):
         delete_if_exists(str(path), label="temporary input")
-
 
 
 def execute_pipeline(
@@ -183,6 +233,8 @@ def execute_pipeline(
     run_python_lloyd: bool,
     cpp_gmm_cases: tuple[str, ...],
     run_python_gmm: bool,
+    datasets_dir: str | Path = DATASETS_DIR,
+    keep_inputs: bool = False,
 ):
     print(f"\n--- Running Config: {configuration_label(D, N, K)} ---")
 
@@ -201,6 +253,7 @@ def execute_pipeline(
         run_python_lloyd=run_python_lloyd,
         cpp_gmm_cases=cpp_gmm_cases,
         run_python_gmm=run_python_gmm,
+        datasets_dir=datasets_dir,
     )
 
     for task in pipeline:
@@ -210,4 +263,5 @@ def execute_pipeline(
             print(f"[{task.name}] Running...")
             run_command(task.name, task.command)
 
-    cleanup_config_inputs(config_id(D, N, K))
+    if not keep_inputs:
+        cleanup_config_inputs(config_id(D, N, K), datasets_dir)
