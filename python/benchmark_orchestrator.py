@@ -10,11 +10,9 @@ from benchmark_pipeline.tasks import BenchmarkCase
 def cpp_cases_for_dimension(config: BenchmarkConfig, _D: int) -> set[str]:
     options = config.pipeline
     cpp_cases = set(options.cpp_soa_cases)
+    cpp_cases.update(options.cpp_pp_cases)
     cpp_cases.update(options.cpp_lloyd_cases)
     cpp_cases.update(options.cpp_gmm_cases)
-
-    if options.run_cpp_pp:
-        cpp_cases.add("pp")
 
     return cpp_cases
 

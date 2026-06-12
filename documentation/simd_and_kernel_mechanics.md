@@ -233,7 +233,8 @@ This keeps the important reuse pattern from dynamic Lloyd: each loaded sample di
 | ------------- | --------------- | ------------------ | -------------- | ------------- |
 | [Static-D K-Means](../cpp/include/k_means/static_d/backend.hpp) | samples | scan all centroids | tuple fields are compile-time dimensions | None |
 | [Static-D GMM](../cpp/include/gmm/static_d/em.hpp) | samples | scan all components | precomputed score constants / terms | covariance type |
-| [Greedy K-Means++](../cpp/include/k_means/greedy_pp.hpp) | samples | scan candidate distances | reuse current min-distance array | `num_local_trials` |
+| [Static-D K-Means++](../cpp/include/k_means/static_d/greedy_pp.hpp) | samples | scan one local-trial candidate at a time | tuple fields are compile-time dimensions; reuse current min-distance array | `num_local_trials` |
+| [Dynamic-D K-Means++](../cpp/include/k_means/dynamic_d/greedy_pp.hpp) | samples | scan local-trial candidate tiles | reuse sample dimension loads across `LOCAL_TRIAL_TILE`; reuse candidates across `N_VECTORS` sample vectors | `N_VECTORS`, `LOCAL_TRIAL_TILE`, `num_local_trials` |
 | [Dynamic centroid-tiled](../cpp/include/k_means/dynamic_d/assignment_centroid_tiled.hpp) | samples | scan grouped centroid tiles | reuse one sample dimension across several centroid scores | `K_TILE` |
 | [Dynamic micro-GEMM](../cpp/include/k_means/dynamic_d/assignment_micro_gemm.hpp) | samples | scan centroid tiles | reuse sample vectors across `K_TILE`; reuse coefficients across `N_VECTORS` | `N_VECTORS`, `K_TILE` |
 | [Dynamic-D GMM micro-GEMM](../cpp/include/gmm/dynamic_d/em.hpp) | samples | scan component tiles | same micro-GEMM reuse, plus block-local score scratch for log-sum-exp and fused sufficient statistics | `GMM_N_GROUP`, `GMM_K_TILE`, covariance type |

@@ -389,8 +389,7 @@ def build_pipeline(
             options=options,
         )
 
-    if options.run_cpp_pp:
-        cpp_case = "pp"
+    for cpp_case in options.cpp_pp_cases:
         cpp_case_info = get_cpp_case(cpp_case)
         add_cpp_case_task(
             tasks,

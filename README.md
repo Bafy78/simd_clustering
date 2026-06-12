@@ -10,7 +10,7 @@ The C++ side contains optimized clustering implementations and benchmark entry p
 
 The project currently covers:
 
-- (Greedy) K-Means++ (not fully)
+- (Greedy) K-Means++
 - Lloyd / K-Means
 - GMM EM
 

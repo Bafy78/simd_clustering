@@ -43,10 +43,11 @@ def main() -> None:
     gmm_config_ids = gmm_completed_config_ids(gmm_metrics)
     lloyd_metric_keys = completed_metric_keys(lloyd_metrics)
     gmm_metric_keys = completed_metric_keys(gmm_metrics)
-    completed_config_ids_by_phase = {
-        "soa": lloyd_config_ids | gmm_config_ids,
-        "pp": lloyd_config_ids | gmm_config_ids,
-    }
+    completed_algorithm_config_ids = lloyd_config_ids | gmm_config_ids
+    completed_config_ids_by_phase = {}
+    if completed_algorithm_config_ids:
+        completed_config_ids_by_phase["soa"] = completed_algorithm_config_ids
+
     completed_metric_keys_by_phase = {
         "lloyd": lloyd_metric_keys,
         "gmm": gmm_metric_keys,

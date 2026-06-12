@@ -83,8 +83,8 @@ CPP_CASES: dict[str, CppCase] = {
         needs_covariance_type_arg=True,
         supported_gmm_covariance_types=("spherical", "diag"),
     ),
-    "pp": CppCase(
-        name="pp",
+    "pp_static": CppCase(
+        name="pp_static",
         case_struct="static_pp_case",
         case_header="cases/static_pp_case.hpp",
         needs_init=False,
@@ -93,6 +93,17 @@ CPP_CASES: dict[str, CppCase] = {
         phase_key="pp",
         variant_key="static",
         display_name="K-Means++ static C++",
+    ),
+    "pp_dynamic": CppCase(
+        name="pp_dynamic",
+        case_struct="dynamic_pp_case",
+        case_header="cases/dynamic_pp_case.hpp",
+        needs_init=False,
+        needs_metrics=False,
+        needs_clusters_arg=True,
+        phase_key="pp",
+        variant_key="dynamic",
+        display_name="K-Means++ dynamic C++",
     ),
     "soa_static": CppCase(
         name="soa_static",
@@ -199,6 +210,8 @@ def cpp_compile_command(
         f"-DTUPLE_SIZE={D}",
         "-DKMEANS_N_GROUP=2",
         "-DKMEANS_K_TILE=5",
+        "-DKMEANS_PP_N_VECTORS=2",
+        "-DKMEANS_PP_LOCAL_TRIAL_TILE=5",
         "-DGMM_N_GROUP=2",
         "-DGMM_K_TILE=5",
         f'-DBENCH_CASE_HEADER="{cpp_case_def.case_header}"',

@@ -10,7 +10,7 @@ class PipelineOptions:
     timing_min_time: float
     gmm_covariance_types: tuple[str, ...]
     cpp_soa_cases: tuple[str, ...]
-    run_cpp_pp: bool
+    cpp_pp_cases: tuple[str, ...]
     run_python_pp: bool
     cpp_lloyd_cases: tuple[str, ...]
     run_python_lloyd: bool
@@ -48,7 +48,7 @@ def default_config() -> BenchmarkConfig:
             timing_min_time=0.05,
             gmm_covariance_types=(),
             cpp_soa_cases=("soa_static", "soa_dynamic"),
-            run_cpp_pp=False,
+            cpp_pp_cases=(),
             run_python_pp=False,
             cpp_lloyd_cases=("lloyd_dynamic", "lloyd_static", "lloyd_auto"),
             run_python_lloyd=True,

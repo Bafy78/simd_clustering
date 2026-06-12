@@ -2,15 +2,23 @@
 
 #include <cstddef>
 #include <string>
-#include <vector>
+#include <utility>
 
 #include <nanobench.h>
 
-#include "../../include/k_means/static_d/greedy_pp.hpp"
 #include "../../include/io/binary.hpp"
-#include "../../include/k_means/static_d/input.hpp"
+#include "../../include/k_means/dynamic_d/greedy_pp.hpp"
+#include "../../include/k_means/dynamic_d/input.hpp"
 
-struct static_pp_case {
+#ifndef KMEANS_PP_N_VECTORS
+#define KMEANS_PP_N_VECTORS 2
+#endif
+
+#ifndef KMEANS_PP_LOCAL_TRIAL_TILE
+#define KMEANS_PP_LOCAL_TRIAL_TILE 5
+#endif
+
+struct dynamic_pp_case {
     static constexpr int nanobench_argc = 7;
     static constexpr int callgrind_argc = 4;
 
@@ -25,8 +33,8 @@ struct static_pp_case {
             + " <dataset_bin> <N> <K>";
     }
 
-    static static_pp_case make_for_nanobench(int, char* argv[]) {
-        static_pp_case out{
+    static dynamic_pp_case make_for_nanobench(int, char* argv[]) {
+        dynamic_pp_case out{
             argv[1],
             static_cast<std::size_t>(std::stoull(argv[2])),
             std::stoi(argv[3])
@@ -39,8 +47,8 @@ struct static_pp_case {
         return out;
     }
 
-    static static_pp_case make_for_callgrind(int, char* argv[]) {
-        return static_pp_case{
+    static dynamic_pp_case make_for_callgrind(int, char* argv[]) {
+        return dynamic_pp_case{
             argv[1],
             static_cast<std::size_t>(std::stoull(argv[2])),
             std::stoi(argv[3])
@@ -48,7 +56,12 @@ struct static_pp_case {
     }
 
     std::string title() const {
-        return "EVE K-Means " + std::to_string(D) + "D (K-Means++ Init)";
+        return "EVE K-Means "
+            + std::to_string(D)
+            + "D dynamic-D tiled K-Means++ Init N_VECTORS="
+            + std::to_string(KMEANS_PP_N_VECTORS)
+            + ", LOCAL_TRIAL_TILE="
+            + std::to_string(KMEANS_PP_LOCAL_TRIAL_TILE);
     }
 
     std::string run_name() const {
@@ -60,17 +73,22 @@ struct static_pp_case {
     double min_epoch_seconds() const { return min_epoch_seconds_; }
 
     void run_once() {
-        final_centroids_ = greedy_kmeans_pp_init(samples_, K_);
+        final_centroids_ = greedy_kmeans_pp_init_dynamic<
+            D,
+            KMEANS_PP_N_VECTORS,
+            KMEANS_PP_LOCAL_TRIAL_TILE
+        >(samples_storage_.view(), K_);
     }
 
     void keep_alive() const {
-        ankerl::nanobench::doNotOptimizeAway(final_centroids_.data());
+        ankerl::nanobench::doNotOptimizeAway(final_centroids_.row_major.data());
+        ankerl::nanobench::doNotOptimizeAway(final_centroids_.row_major.size());
     }
 
     void write_outputs() const {}
 
 private:
-    static_pp_case(
+    dynamic_pp_case(
         const std::string& dataset_bin,
         std::size_t N,
         int K
@@ -78,7 +96,7 @@ private:
         : N_(N),
           K_(K) {
         auto raw_samples = read_aos_f32(dataset_bin, N_, D);
-        samples_ = make_static_samples_from_aos<D>(raw_samples, N_);
+        samples_storage_ = make_dynamic_samples_from_aos<D>(raw_samples, N_);
     }
 
     std::size_t N_ = 0;
@@ -87,6 +105,6 @@ private:
     std::size_t bench_epochs_ = 0;
     double min_epoch_seconds_ = 0.0;
 
-    static_samples_soa_vector<D> samples_;
-    std::vector<SampleType> final_centroids_;
+    samples_soa_storage<D> samples_storage_;
+    centroids_storage<D> final_centroids_;
 };
