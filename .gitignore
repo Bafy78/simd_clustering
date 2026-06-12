@@ -5,6 +5,7 @@
 .vscode/
 bin/
 docs/
+notes/
 datasets*/
 **/__pycache__/
 callgrind_results/

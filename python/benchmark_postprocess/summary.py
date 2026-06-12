@@ -3,38 +3,25 @@ from typing import Any
 
 from benchmark_postprocess.naming import (
     LANG_MAP,
-    LANGUAGE_REFERENCE_VARIANT,
-    PHASE_MAP,
-    format_config_id,
+    BenchmarkIdentity,
+    MetricsKey,
     params_display_name,
-    variant_display_name,
 )
 from benchmark_postprocess.parity import (
-    MetricsKey,
     compute_gmm_comparison,
     compute_lloyd_comparison,
-    metrics_key,
 )
 from benchmark_postprocess.speedup import build_speedup_block, stable_child_seed
 from benchmark_postprocess.stats import summary_stats
 
-RecordGroupKey = tuple[int, int, int, str, str, str, str]
+RecordGroupKey = BenchmarkIdentity
 
 
 def group_records(records: list[dict[str, Any]]):
     grouped: dict[RecordGroupKey, list[dict[str, Any]]] = defaultdict(list)
 
     for record in records:
-        key = (
-            record["dimensions"],
-            record["samples"],
-            record["clusters"],
-            record["phase_key"],
-            record["variant_key"],
-            record["language_key"],
-            record["params_key"],
-        )
-        grouped[key].append(record)
+        grouped[BenchmarkIdentity.from_record(record)].append(record)
 
     return grouped
 
@@ -99,41 +86,44 @@ def summarize_language_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _config_entry(configs: dict[tuple[int, int, int], dict[str, Any]], D: int, N: int, K: int):
-    config_key = (D, N, K)
-
-    if config_key not in configs:
-        configs[config_key] = {
-            "dimensions": D,
-            "samples": N,
-            "clusters": K,
-            "config_id": format_config_id(D, N, K),
+def _config_entry(
+    configs: dict[tuple[int, int, int], dict[str, Any]],
+    identity: BenchmarkIdentity,
+) -> dict[str, Any]:
+    if identity.config_key not in configs:
+        configs[identity.config_key] = {
+            "dimensions": identity.dimensions,
+            "samples": identity.samples,
+            "clusters": identity.clusters,
+            "config_id": identity.config_id,
             "phases": {},
         }
 
-    return configs[config_key]
+    return configs[identity.config_key]
 
 
-def _phase_entry(config_entry: dict[str, Any], phase_key: str) -> dict[str, Any]:
-    phase_name = PHASE_MAP[phase_key]
-
+def _phase_entry(
+    config_entry: dict[str, Any],
+    identity: BenchmarkIdentity,
+) -> dict[str, Any]:
     return config_entry["phases"].setdefault(
-        phase_name,
+        identity.phase,
         {
-            "phase_key": phase_key,
+            "phase_key": identity.phase_key,
             "variants": {},
         },
     )
 
 
-def _variant_entry(phase_entry: dict[str, Any], variant_key: str) -> dict[str, Any]:
-    variant_name = variant_display_name(variant_key)
-
+def _variant_entry(
+    phase_entry: dict[str, Any],
+    identity: BenchmarkIdentity,
+) -> dict[str, Any]:
     return phase_entry["variants"].setdefault(
-        variant_name,
+        identity.variant,
         {
-            "variant_key": variant_key,
-            "variant": variant_name,
+            "variant_key": identity.variant_key,
+            "variant": identity.variant,
             "parameterizations": {},
         },
     )
@@ -141,15 +131,13 @@ def _variant_entry(phase_entry: dict[str, Any], variant_key: str) -> dict[str, A
 
 def _parameterization_entry(
     variant_entry: dict[str, Any],
-    params_key: str,
+    identity: BenchmarkIdentity,
 ) -> dict[str, Any]:
-    params_name = params_display_name(params_key)
-
     return variant_entry["parameterizations"].setdefault(
-        params_name,
+        identity.params,
         {
-            "params_key": params_key,
-            "params": params_name,
+            "params_key": identity.params_key,
+            "params": identity.params,
             "languages": {},
         },
     )
@@ -157,15 +145,9 @@ def _parameterization_entry(
 
 def _py_reference_records(
     grouped: dict[RecordGroupKey, list[dict[str, Any]]],
-    D: int,
-    N: int,
-    K: int,
-    phase_key: str,
-    params_key: str,
+    identity: BenchmarkIdentity,
 ) -> list[dict[str, Any]] | None:
-    records = grouped.get(
-        (D, N, K, phase_key, LANGUAGE_REFERENCE_VARIANT, "py", params_key)
-    )
+    records = grouped.get(identity.python_reference())
     if records:
         return records
 
@@ -174,20 +156,9 @@ def _py_reference_records(
 
 def _metrics_for(
     metrics: dict[MetricsKey, dict[str, Any]],
-    config_id: str,
-    variant_key: str,
-    lang_key: str,
-    params_key: str,
+    identity: BenchmarkIdentity,
 ) -> dict[str, Any] | None:
-    return metrics.get(metrics_key(config_id, variant_key, lang_key, params_key))
-
-
-def _py_metrics_for(
-    metrics: dict[MetricsKey, dict[str, Any]],
-    config_id: str,
-    params_key: str,
-) -> dict[str, Any] | None:
-    return metrics.get(metrics_key(config_id, LANGUAGE_REFERENCE_VARIANT, "py", params_key))
+    return metrics.get(identity.metrics_key)
 
 
 def _append_parity_status(records: list[dict[str, Any]], phase_name: str) -> None:
@@ -231,30 +202,22 @@ def build_summary(
     # First add all concrete C++ variants. Python reference timing is attached
     # to each C++ variant later, so one Python run can be compared to many C++
     # implementations for the same parameterization.
-    for (
-        D,
-        N,
-        K,
-        phase_key,
-        variant_key,
-        language_key,
-        params_key,
-    ), group in sorted(grouped.items()):
-        if language_key == "py" and variant_key == LANGUAGE_REFERENCE_VARIANT:
+    for identity, group in sorted(grouped.items()):
+        if identity.is_python_reference:
             continue
 
-        config_entry = _config_entry(configs, D, N, K)
-        phase_entry = _phase_entry(config_entry, phase_key)
-        variant_entry = _variant_entry(phase_entry, variant_key)
-        parameterization_entry = _parameterization_entry(variant_entry, params_key)
-        language_name = LANG_MAP[language_key]
-        parameterization_entry["languages"][language_name] = summarize_language_records(group)
+        config_entry = _config_entry(configs, identity)
+        phase_entry = _phase_entry(config_entry, identity)
+        variant_entry = _variant_entry(phase_entry, identity)
+        parameterization_entry = _parameterization_entry(variant_entry, identity)
+        parameterization_entry["languages"][identity.language] = (
+            summarize_language_records(group)
+        )
 
     # Attach the shared Python reference to every concrete C++ variant and build
     # speedup/parity per config × phase × variant × parameterization.
     for config_key, config_entry in configs.items():
         D, N, K = config_key
-        config_id = format_config_id(D, N, K)
 
         for phase_entry in config_entry["phases"].values():
             phase_key = phase_entry["phase_key"]
@@ -265,18 +228,17 @@ def build_summary(
                 for parameterization_entry in variant_entry.get(
                     "parameterizations", {}
                 ).values():
-                    params_key = parameterization_entry["params_key"]
-                    cpp_records = grouped.get(
-                        (D, N, K, phase_key, variant_key, "cpp", params_key)
+                    identity = BenchmarkIdentity(
+                        dimensions=D,
+                        samples=N,
+                        clusters=K,
+                        phase_key=phase_key,
+                        variant_key=variant_key,
+                        language_key="cpp",
+                        params_key=parameterization_entry["params_key"],
                     )
-                    py_records = _py_reference_records(
-                        grouped,
-                        D,
-                        N,
-                        K,
-                        phase_key,
-                        params_key,
-                    )
+                    cpp_records = grouped.get(identity)
+                    py_records = _py_reference_records(grouped, identity)
 
                     if py_records:
                         parameterization_entry["languages"][LANG_MAP["py"]] = (
@@ -286,10 +248,10 @@ def build_summary(
                     if cpp_records and py_records:
                         speedup_seed = stable_child_seed(
                             bootstrap_seed,
-                            config_id,
-                            phase_key,
-                            variant_key,
-                            params_key,
+                            identity.config_id,
+                            identity.phase_key,
+                            identity.variant_key,
+                            identity.params_key,
                         )
 
                         parameterization_entry["speedup"] = build_speedup_block(
@@ -300,12 +262,12 @@ def build_summary(
                             seed=speedup_seed,
                         )
 
-                    if phase_key == "lloyd" and cpp_records and py_records:
+                    if identity.phase_key == "lloyd" and cpp_records and py_records:
                         parity = compute_lloyd_comparison(
                             lloyd_metrics,
-                            config_id=config_id,
-                            cpp_variant_key=variant_key,
-                            params_key=params_key,
+                            config_id=identity.config_id,
+                            cpp_variant_key=identity.variant_key,
+                            params_key=identity.params_key,
                         )
 
                         parameterization_entry["languages"].setdefault(LANG_MAP["cpp"], {})[
@@ -318,15 +280,9 @@ def build_summary(
                         parameterization_entry["parity"] = parity
                         lloyd_comparison_records.append(parity)
 
-                    if phase_key == "gmm" and gmm_metrics is not None:
-                        cpp_metrics = _metrics_for(
-                            gmm_metrics,
-                            config_id,
-                            variant_key,
-                            "cpp",
-                            params_key,
-                        )
-                        py_metrics = _py_metrics_for(gmm_metrics, config_id, params_key)
+                    if identity.phase_key == "gmm" and gmm_metrics is not None:
+                        cpp_metrics = _metrics_for(gmm_metrics, identity)
+                        py_metrics = _metrics_for(gmm_metrics, identity.python_reference())
 
                         if cpp_metrics is not None:
                             parameterization_entry["languages"].setdefault(
@@ -351,9 +307,9 @@ def build_summary(
                         if cpp_records and py_records:
                             parity = compute_gmm_comparison(
                                 gmm_metrics,
-                                config_id=config_id,
-                                cpp_variant_key=variant_key,
-                                params_key=params_key,
+                                config_id=identity.config_id,
+                                cpp_variant_key=identity.variant_key,
+                                params_key=identity.params_key,
                             )
                             parameterization_entry["parity"] = parity
                             gmm_parity_records.append(parity)

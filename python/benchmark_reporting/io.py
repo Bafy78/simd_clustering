@@ -3,7 +3,7 @@ import json
 from typing import Any, Iterator
 import pandas as pd
 
-from benchmark_pipeline.paths import repo_relative_path
+from python.benchmark_pipeline.paths import repo_relative_path
 
 from .constants import *
 

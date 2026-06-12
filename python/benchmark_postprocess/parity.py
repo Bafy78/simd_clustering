@@ -8,11 +8,11 @@ import numpy as np
 from benchmark_postprocess.io import load_json
 from benchmark_postprocess.naming import (
     LANGUAGE_REFERENCE_VARIANT,
+    BenchmarkIdentity,
+    MetricsKey,
     parse_metrics_filename,
     variant_display_name,
 )
-
-MetricsKey = tuple[str, str, str, str]
 REQUIRED_LANGUAGE_KEYS = ("cpp", "py")
 
 LLOYD_PARITY_THRESHOLDS = {
@@ -29,7 +29,12 @@ GMM_PARITY_THRESHOLDS = {
 }
 
 
-def metrics_key(config_id: str, variant_key: str, lang_key: str, params_key: str = "default") -> MetricsKey:
+def metrics_key(
+    config_id: str,
+    variant_key: str,
+    lang_key: str,
+    params_key: str = "default",
+) -> MetricsKey:
     return (config_id, variant_key, lang_key, params_key)
 
 
@@ -95,10 +100,7 @@ def gmm_algorithm_iteration_count(
 
 def normalize_lloyd_metrics_record(
     record: dict[str, Any],
-    config_id: str,
-    variant_key: str,
-    lang_key: str,
-    params_key: str = "default",
+    identity: BenchmarkIdentity,
 ) -> dict[str, Any]:
     required_fields = [
         "phase",
@@ -111,24 +113,28 @@ def normalize_lloyd_metrics_record(
 
     for field in required_fields:
         if field not in record:
-            raise RuntimeError(f"Missing {field!r} in Lloyd metrics for {config_id}")
+            raise RuntimeError(
+                f"Missing {field!r} in Lloyd metrics for {identity.config_id}"
+            )
 
     if record["phase"] != "lloyd":
-        raise RuntimeError(f"Unexpected phase in Lloyd metrics for {config_id}")
-
-    if record["language"] != lang_key:
         raise RuntimeError(
-            f"Lloyd metrics language mismatch: file is {lang_key}, "
+            f"Unexpected phase in Lloyd metrics for {identity.config_id}"
+        )
+
+    if record["language"] != identity.language_key:
+        raise RuntimeError(
+            f"Lloyd metrics language mismatch: file is {identity.language_key}, "
             f"record says {record['language']!r}"
         )
 
     return {
         **record,
-        "config_id": config_id,
-        "variant_key": variant_key,
-        "variant": variant_display_name(variant_key),
-        "params_key": params_key,
-        "language": lang_key,
+        "config_id": identity.config_id,
+        "variant_key": identity.variant_key,
+        "variant": identity.variant,
+        "params_key": identity.params_key,
+        "language": identity.language_key,
         "algorithm_iterations": int(record["algorithm_iterations"]),
         "inertia": float(record["inertia"]),
     }
@@ -136,10 +142,7 @@ def normalize_lloyd_metrics_record(
 
 def normalize_gmm_metrics_record(
     record: dict[str, Any],
-    config_id: str,
-    variant_key: str,
-    lang_key: str,
-    params_key: str,
+    identity: BenchmarkIdentity,
 ) -> dict[str, Any]:
     required_fields = [
         "phase",
@@ -151,30 +154,34 @@ def normalize_gmm_metrics_record(
 
     for field in required_fields:
         if field not in record:
-            raise RuntimeError(f"Missing {field!r} in GMM metrics for {config_id}")
+            raise RuntimeError(
+                f"Missing {field!r} in GMM metrics for {identity.config_id}"
+            )
 
     if record["phase"] != "gmm":
-        raise RuntimeError(f"Unexpected phase in GMM metrics for {config_id}")
-
-    if record["language"] != lang_key:
         raise RuntimeError(
-            f"GMM metrics language mismatch: file is {lang_key}, "
+            f"Unexpected phase in GMM metrics for {identity.config_id}"
+        )
+
+    if record["language"] != identity.language_key:
+        raise RuntimeError(
+            f"GMM metrics language mismatch: file is {identity.language_key}, "
             f"record says {record['language']!r}"
         )
 
-    if str(record["covariance_type"]) != params_key:
+    if str(record["covariance_type"]) != identity.params_key:
         raise RuntimeError(
-            f"GMM metrics covariance mismatch: file params={params_key!r}, "
+            f"GMM metrics covariance mismatch: file params={identity.params_key!r}, "
             f"record says {record['covariance_type']!r}"
         )
 
     return {
         **record,
-        "config_id": config_id,
-        "variant_key": variant_key,
-        "variant": variant_display_name(variant_key),
-        "params_key": params_key,
-        "language": lang_key,
+        "config_id": identity.config_id,
+        "variant_key": identity.variant_key,
+        "variant": identity.variant,
+        "params_key": identity.params_key,
+        "language": identity.language_key,
         "algorithm_iterations": int(record["algorithm_iterations"]),
         "lower_bound": float(record["lower_bound"]),
         "covariance_type": str(record["covariance_type"]),
@@ -185,31 +192,18 @@ def load_lloyd_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
     metrics_records: dict[MetricsKey, dict[str, Any]] = {}
 
     for path in sorted(data_dir.glob("lloyd_metrics_*.json")):
-        parsed = parse_metrics_filename(path, "lloyd")
+        identity = parse_metrics_filename(path, "lloyd")
 
-        if parsed is None:
+        if identity is None:
             print(f"Skipping malformed Lloyd metrics filename: {path.name}")
             continue
 
-        lang_key = parsed["language_key"]
-        variant_key = parsed["variant_key"]
-        config_id = parsed["config_id"]
-        params_key = parsed["params_key"]
-
-        metrics = normalize_lloyd_metrics_record(
-            load_json(path),
-            config_id=config_id,
-            variant_key=variant_key,
-            lang_key=lang_key,
-            params_key=params_key,
-        )
+        metrics = normalize_lloyd_metrics_record(load_json(path), identity)
 
         if int(metrics.get("schema_version", 1)) != 1:
             raise RuntimeError(f"Unsupported Lloyd metrics schema in {path}")
 
-        metrics_records[
-            metrics_key(config_id, variant_key, lang_key, params_key)
-        ] = metrics
+        metrics_records[identity.metrics_key] = metrics
 
     print(f"Loaded {len(metrics_records)} Lloyd metrics records.")
 
@@ -220,31 +214,18 @@ def load_gmm_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
     metrics_records: dict[MetricsKey, dict[str, Any]] = {}
 
     for path in sorted(data_dir.glob("gmm_metrics_*.json")):
-        parsed = parse_metrics_filename(path, "gmm")
+        identity = parse_metrics_filename(path, "gmm")
 
-        if parsed is None:
+        if identity is None:
             print(f"Skipping malformed GMM metrics filename: {path.name}")
             continue
 
-        lang_key = parsed["language_key"]
-        variant_key = parsed["variant_key"]
-        config_id = parsed["config_id"]
-        params_key = parsed["params_key"]
-
-        metrics = normalize_gmm_metrics_record(
-            load_json(path),
-            config_id=config_id,
-            variant_key=variant_key,
-            lang_key=lang_key,
-            params_key=params_key,
-        )
+        metrics = normalize_gmm_metrics_record(load_json(path), identity)
 
         if int(metrics.get("schema_version", 1)) != 1:
             raise RuntimeError(f"Unsupported GMM metrics schema in {path}")
 
-        metrics_records[
-            metrics_key(config_id, variant_key, lang_key, params_key)
-        ] = metrics
+        metrics_records[identity.metrics_key] = metrics
 
     print(f"Loaded {len(metrics_records)} GMM metrics records.")
 

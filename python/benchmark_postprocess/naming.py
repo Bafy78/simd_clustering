@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ VARIANT_MAP = {
 
 NO_PARAMS = "default"
 LANGUAGE_REFERENCE_VARIANT = "reference"
+MetricsKey = tuple[str, str, str, str]
 TOKEN_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_-]*"
 VARIANT_PATTERN = rf"(?P<variant>{TOKEN_PATTERN})"
 PARAMS_PATTERN = rf"(?P<params>{TOKEN_PATTERN})"
@@ -47,6 +49,103 @@ LLOYD_METRICS_JSON_RE = re.compile(
 GMM_METRICS_JSON_RE = re.compile(
     rf"^gmm_metrics_{VARIANT_PATTERN}_{PARAMS_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
+
+
+@dataclass(frozen=True, order=True)
+class BenchmarkIdentity:
+    dimensions: int
+    samples: int
+    clusters: int
+    phase_key: str
+    variant_key: str
+    language_key: str
+    params_key: str = NO_PARAMS
+
+    @classmethod
+    def from_record(cls, record: dict[str, Any]) -> "BenchmarkIdentity":
+        return cls(
+            dimensions=int(record["dimensions"]),
+            samples=int(record["samples"]),
+            clusters=int(record["clusters"]),
+            phase_key=str(record["phase_key"]),
+            variant_key=str(record["variant_key"]),
+            language_key=str(record["language_key"]),
+            params_key=str(record.get("params_key", NO_PARAMS)),
+        )
+
+    @property
+    def config_id(self) -> str:
+        return format_config_id(self.dimensions, self.samples, self.clusters)
+
+    @property
+    def config_key(self) -> tuple[int, int, int]:
+        return (self.dimensions, self.samples, self.clusters)
+
+    @property
+    def metrics_key(self) -> MetricsKey:
+        return (
+            self.config_id,
+            self.variant_key,
+            self.language_key,
+            self.params_key,
+        )
+
+    @property
+    def phase(self) -> str:
+        return PHASE_MAP[self.phase_key]
+
+    @property
+    def variant(self) -> str:
+        return variant_display_name(self.variant_key)
+
+    @property
+    def params(self) -> str:
+        return params_display_name(self.params_key)
+
+    @property
+    def language(self) -> str:
+        return LANG_MAP[self.language_key]
+
+    @property
+    def is_python_reference(self) -> bool:
+        return (
+            self.language_key == "py"
+            and self.variant_key == LANGUAGE_REFERENCE_VARIANT
+        )
+
+    def with_language(
+        self,
+        language_key: str,
+        variant_key: str | None = None,
+    ) -> "BenchmarkIdentity":
+        return BenchmarkIdentity(
+            dimensions=self.dimensions,
+            samples=self.samples,
+            clusters=self.clusters,
+            phase_key=self.phase_key,
+            variant_key=self.variant_key if variant_key is None else variant_key,
+            language_key=language_key,
+            params_key=self.params_key,
+        )
+
+    def python_reference(self) -> "BenchmarkIdentity":
+        return self.with_language("py", variant_key=LANGUAGE_REFERENCE_VARIANT)
+
+    def as_record_fields(self) -> dict[str, Any]:
+        return {
+            "phase_key": self.phase_key,
+            "phase": self.phase,
+            "variant_key": self.variant_key,
+            "variant": self.variant,
+            "params_key": self.params_key,
+            "params": self.params,
+            "language_key": self.language_key,
+            "language": self.language,
+            "dimensions": self.dimensions,
+            "samples": self.samples,
+            "clusters": self.clusters,
+            "config_id": self.config_id,
+        }
 
 
 def format_config_id(D: int, N: int, K: int) -> str:
@@ -78,28 +177,21 @@ def _parsed_common(
     match: re.Match[str],
     phase_key: str,
     params_key: str = NO_PARAMS,
-) -> dict[str, Any]:
-    lang_key = match.group("lang")
-    variant_key = match.group("variant")
+) -> BenchmarkIdentity:
     D, N, K = parse_config_match(match)
 
-    return {
-        "phase_key": phase_key,
-        "phase": PHASE_MAP[phase_key],
-        "variant_key": variant_key,
-        "variant": variant_display_name(variant_key),
-        "params_key": params_key,
-        "params": params_display_name(params_key),
-        "language_key": lang_key,
-        "language": LANG_MAP[lang_key],
-        "dimensions": D,
-        "samples": N,
-        "clusters": K,
-        "config_id": format_config_id(D, N, K),
-    }
+    return BenchmarkIdentity(
+        dimensions=D,
+        samples=N,
+        clusters=K,
+        phase_key=phase_key,
+        variant_key=match.group("variant"),
+        language_key=match.group("lang"),
+        params_key=params_key,
+    )
 
 
-def parse_benchmark_filename(path: Path) -> dict[str, Any] | None:
+def parse_benchmark_filename(path: Path) -> BenchmarkIdentity | None:
     match = BENCHMARK_JSON_RE.match(path.name)
     if match:
         return _parsed_common(match, phase_key=match.group("phase"))
@@ -115,7 +207,7 @@ def parse_benchmark_filename(path: Path) -> dict[str, Any] | None:
     return None
 
 
-def parse_metrics_filename(path: Path, phase_key: str) -> dict[str, Any] | None:
+def parse_metrics_filename(path: Path, phase_key: str) -> BenchmarkIdentity | None:
     if phase_key == "lloyd":
         match = LLOYD_METRICS_JSON_RE.match(path.name)
         params_key = NO_PARAMS

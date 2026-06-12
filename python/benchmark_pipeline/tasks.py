@@ -1,8 +1,8 @@
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
+from benchmark_pipeline.config import PipelineOptions
 from benchmark_pipeline.cpp_cases import get_cpp_case, nanobench_binary_path
 from benchmark_pipeline.gmm_covariance import validate_gmm_covariance_types
 from benchmark_pipeline.paths import DATASETS_DIR, repo_path, repo_relative_path
@@ -11,21 +11,43 @@ NO_PARAMS = "default"
 REFERENCE_VARIANT = "reference"
 
 
+@dataclass(frozen=True, order=True)
+class BenchmarkCase:
+    D: int
+    N: int
+    K: int
+
+    @property
+    def case_id(self) -> str:
+        return f"{self.D}D_{self.N}N_{self.K}K"
+
+    @property
+    def label(self) -> str:
+        return f"{self.D}D | {self.N}N | {self.K}K"
+
+    def dimension_args(self) -> list[str]:
+        return ["--D", str(self.D), "--N", str(self.N), "--K", str(self.K)]
+
+
+def benchmark_case(D: int, N: int, K: int) -> BenchmarkCase:
+    return BenchmarkCase(D=D, N=N, K=K)
+
+
 @dataclass
 class Task:
     name: str
     command: list[str]
-    cpp_case: Optional[str] = None
-    cpp_json_arg: Optional[int] = None
-    cpp_metrics_arg: Optional[int] = None
+    cpp_case: str | None = None
+    cpp_json_arg: int | None = None
+    cpp_metrics_arg: int | None = None
 
 
 def config_id(D: int, N: int, K: int) -> str:
-    return f"{D}D_{N}N_{K}K"
+    return benchmark_case(D, N, K).case_id
 
 
 def configuration_label(D: int, N: int, K: int) -> str:
-    return f"{D}D | {N}N | {K}K"
+    return benchmark_case(D, N, K).label
 
 
 def dataset_path(filename: str, datasets_dir: str | Path = DATASETS_DIR) -> str:
@@ -137,6 +159,74 @@ def metrics_artifact_path(
     )
 
 
+@dataclass(frozen=True)
+class BenchmarkArtifacts:
+    case_id: str
+    datasets_dir: str | Path = DATASETS_DIR
+
+    @classmethod
+    def for_case(
+        cls,
+        case: BenchmarkCase,
+        datasets_dir: str | Path = DATASETS_DIR,
+    ) -> "BenchmarkArtifacts":
+        return cls(case.case_id, datasets_dir)
+
+    def dataset(self, filename: str) -> str:
+        return dataset_path(filename, self.datasets_dir)
+
+    @property
+    def dataset_bin(self) -> str:
+        return self.dataset(f"data_{self.case_id}.bin")
+
+    @property
+    def init_centroids_bin(self) -> str:
+        return self.dataset(f"init_{self.case_id}.bin")
+
+    @property
+    def gmm_weights_bin(self) -> str:
+        return self.dataset(f"gmm_weights_{self.case_id}.bin")
+
+    @property
+    def gmm_means_bin(self) -> str:
+        return self.dataset(f"gmm_means_{self.case_id}.bin")
+
+    def gmm_precisions_bin(self, covariance_type: str) -> str:
+        return gmm_precisions_path(covariance_type, self.case_id, self.datasets_dir)
+
+    def timing(
+        self,
+        phase_key: str,
+        variant_key: str,
+        language_key: str,
+        params_key: str = NO_PARAMS,
+    ) -> str:
+        return timing_artifact_path(
+            phase_key,
+            variant_key,
+            language_key,
+            self.case_id,
+            params_key,
+            self.datasets_dir,
+        )
+
+    def metrics(
+        self,
+        phase_key: str,
+        variant_key: str,
+        language_key: str,
+        params_key: str = NO_PARAMS,
+    ) -> str:
+        return metrics_artifact_path(
+            phase_key,
+            variant_key,
+            language_key,
+            self.case_id,
+            params_key,
+            self.datasets_dir,
+        )
+
+
 def cpp_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
     case = get_cpp_case(cpp_case)
     if case.phase_key == "gmm" and params_key != NO_PARAMS:
@@ -144,14 +234,44 @@ def cpp_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
     return f"C++: {case.display_name}"
 
 
+def cpp_timing_args(options: PipelineOptions) -> list[str]:
+    return [str(options.timing_values), str(options.timing_min_time)]
+
+
+def python_pyperf_args(options: PipelineOptions, output: str) -> list[str]:
+    return [
+        "--processes",
+        str(options.timing_processes),
+        "--values",
+        str(options.timing_values),
+        "--min-time",
+        str(options.timing_min_time),
+        "--output",
+        output,
+    ]
+
+
 def add_cpp_case_task(
     tasks: list[Task],
     cpp_case: str,
-    command: list[str],
-    cpp_json_arg: int,
-    cpp_metrics_arg: int | None = None,
+    command_args: list[str],
+    *,
+    json_out: str,
+    options: PipelineOptions,
+    metrics_out: str | None = None,
     params_key: str = NO_PARAMS,
 ) -> None:
+    command = [nanobench_binary_path(cpp_case), *command_args]
+    cpp_metrics_arg = None
+
+    if metrics_out is not None:
+        cpp_metrics_arg = len(command)
+        command.append(metrics_out)
+
+    cpp_json_arg = len(command)
+    command.append(json_out)
+    command.extend(cpp_timing_args(options))
+
     tasks.append(
         Task(
             name=cpp_task_name(cpp_case, params_key),
@@ -163,33 +283,55 @@ def add_cpp_case_task(
     )
 
 
-def build_pipeline(
-    D: int,
-    N: int,
-    K: int,
-    timing_processes: int,
-    timing_values: int,
-    timing_min_time: float,
-    gmm_covariance_types: tuple[str, ...],
-    cpp_soa_cases: tuple[str, ...],
-    run_cpp_pp: bool,
-    run_python_pp: bool,
-    cpp_lloyd_cases: tuple[str, ...],
-    run_python_lloyd: bool,
-    cpp_gmm_cases: tuple[str, ...],
-    run_python_gmm: bool,
+def build_dataset_setup_task(
+    case: BenchmarkCase,
+    gmm_covariance_types: tuple[str, ...] = (),
     datasets_dir: str | Path = DATASETS_DIR,
-) -> list[Task]:
-    """Defines the strict contract of tasks for a single D/N/K configuration."""
+) -> Task:
     validate_gmm_covariance_types(gmm_covariance_types)
 
-    case_id = config_id(D, N, K)
+    artifacts = BenchmarkArtifacts.for_case(case, datasets_dir)
 
-    dataset_bin = dataset_path(f"data_{case_id}.bin", datasets_dir)
-    init_centroids_bin = dataset_path(f"init_{case_id}.bin", datasets_dir)
-    gmm_weights_bin = dataset_path(f"gmm_weights_{case_id}.bin", datasets_dir)
-    gmm_means_bin = dataset_path(f"gmm_means_{case_id}.bin", datasets_dir)
+    setup_command = [
+        sys.executable,
+        repo_path("python", "benchmark_pipeline", "tools", "dataset_gen.py"),
+        *case.dimension_args(),
+        "--dataset-out",
+        artifacts.dataset_bin,
+        "--centroids-out",
+        artifacts.init_centroids_bin,
+    ]
 
+    if gmm_covariance_types:
+        setup_command.extend(
+            [
+                "--gmm-weights-out",
+                artifacts.gmm_weights_bin,
+                "--gmm-means-out",
+                artifacts.gmm_means_bin,
+            ]
+        )
+
+        for covariance_type in gmm_covariance_types:
+            setup_command.extend(
+                [
+                    "--gmm-precisions-out",
+                    covariance_type,
+                    artifacts.gmm_precisions_bin(covariance_type),
+                ]
+            )
+
+    setup_name = "Setup: Generate Dataset & K-Means++ Init"
+    if gmm_covariance_types:
+        setup_name += " & GMM Init"
+
+    return Task(name=setup_name, command=setup_command)
+
+
+def _validate_cpp_gmm_cases(
+    cpp_gmm_cases: tuple[str, ...],
+    gmm_covariance_types: tuple[str, ...],
+) -> None:
     for cpp_case in cpp_gmm_cases:
         case = get_cpp_case(cpp_case)
         unsupported = sorted(
@@ -202,97 +344,71 @@ def build_pipeline(
                 f"type(s) {unsupported}. Supported values: {supported}"
             )
 
-    needs_gmm_init = bool(cpp_gmm_cases) or run_python_gmm
-    if needs_gmm_init and not gmm_covariance_types:
+
+def build_pipeline(
+    case: BenchmarkCase,
+    options: PipelineOptions,
+    datasets_dir: str | Path = DATASETS_DIR,
+) -> list[Task]:
+    """Defines the strict contract of tasks for a single D/N/K configuration."""
+    validate_gmm_covariance_types(options.gmm_covariance_types)
+    _validate_cpp_gmm_cases(options.cpp_gmm_cases, options.gmm_covariance_types)
+
+    needs_gmm_init = bool(options.cpp_gmm_cases) or options.run_python_gmm
+    if needs_gmm_init and not options.gmm_covariance_types:
         raise ValueError(
             "At least one GMM covariance type is required when GMM tasks are enabled."
         )
 
-    setup_command = [
-        sys.executable,
-        repo_path("python", "benchmark_pipeline", "tools", "dataset_gen.py"),
-        "--D",
-        str(D),
-        "--N",
-        str(N),
-        "--K",
-        str(K),
-        "--dataset-out",
-        dataset_bin,
-        "--centroids-out",
-        init_centroids_bin,
+    artifacts = BenchmarkArtifacts.for_case(case, datasets_dir)
+    setup_gmm_covariance_types = (
+        options.gmm_covariance_types if needs_gmm_init else ()
+    )
+    tasks: list[Task] = [
+        build_dataset_setup_task(
+            case,
+            setup_gmm_covariance_types,
+            datasets_dir,
+        )
     ]
 
-    if needs_gmm_init:
-        setup_command.extend([
-            "--gmm-weights-out",
-            gmm_weights_bin,
-            "--gmm-means-out",
-            gmm_means_bin,
-        ])
-
-        for covariance_type in gmm_covariance_types:
-            setup_command.extend(
-                [
-                    "--gmm-precisions-out",
-                    covariance_type,
-                    gmm_precisions_path(covariance_type, case_id, datasets_dir),
-                ]
-            )
-
-    setup_name = "Setup: Generate Dataset & K-Means++ Init"
-    if needs_gmm_init:
-        setup_name += " & GMM Init"
-
-    tasks: list[Task] = [Task(name=setup_name, command=setup_command)]
-
-    for cpp_case in cpp_soa_cases:
-        case = get_cpp_case(cpp_case)
+    for cpp_case in options.cpp_soa_cases:
+        cpp_case_info = get_cpp_case(cpp_case)
         add_cpp_case_task(
             tasks,
             cpp_case,
             [
-                nanobench_binary_path(cpp_case),
-                dataset_bin,
-                str(N),
-                timing_artifact_path(
-                    case.phase_key,
-                    case.variant_key,
-                    "cpp",
-                    case_id,
-                    datasets_dir=datasets_dir,
-                ),
-                str(timing_values),
-                str(timing_min_time),
+                artifacts.dataset_bin,
+                str(case.N),
             ],
-            cpp_json_arg=3,
+            json_out=artifacts.timing(
+                cpp_case_info.phase_key,
+                cpp_case_info.variant_key,
+                "cpp",
+            ),
+            options=options,
         )
 
-    if run_cpp_pp:
+    if options.run_cpp_pp:
         cpp_case = "pp"
-        case = get_cpp_case(cpp_case)
+        cpp_case_info = get_cpp_case(cpp_case)
         add_cpp_case_task(
             tasks,
             cpp_case,
             [
-                nanobench_binary_path(cpp_case),
-                dataset_bin,
-                str(N),
-                str(K),
-                timing_artifact_path(
-                    case.phase_key,
-                    case.variant_key,
-                    "cpp",
-                    case_id,
-                    datasets_dir=datasets_dir,
-                ),
-                str(timing_values),
-                str(timing_min_time),
+                artifacts.dataset_bin,
+                str(case.N),
+                str(case.K),
             ],
-            cpp_json_arg=4,
+            json_out=artifacts.timing(
+                cpp_case_info.phase_key,
+                cpp_case_info.variant_key,
+                "cpp",
+            ),
+            options=options,
         )
 
-    if run_python_pp:
+    if options.run_python_pp:
         tasks.append(
             Task(
                 name="Python: K-Means++ Initialization",
@@ -300,64 +416,41 @@ def build_pipeline(
                     sys.executable,
                     repo_path("python", "benchmark_pipeline", "benches", "bench_pp.py"),
                     "--dataset-bin",
-                    dataset_bin,
-                    "--D",
-                    str(D),
-                    "--N",
-                    str(N),
-                    "--K",
-                    str(K),
-                    "--processes",
-                    str(timing_processes),
-                    "--values",
-                    str(timing_values),
-                    "--min-time",
-                    str(timing_min_time),
-                    "--output",
-                    timing_artifact_path(
-                        "pp",
-                        REFERENCE_VARIANT,
-                        "py",
-                        case_id,
-                        datasets_dir=datasets_dir,
+                    artifacts.dataset_bin,
+                    *case.dimension_args(),
+                    *python_pyperf_args(
+                        options,
+                        artifacts.timing("pp", REFERENCE_VARIANT, "py"),
                     ),
                 ],
             )
         )
 
-    for cpp_case in cpp_lloyd_cases:
-        case = get_cpp_case(cpp_case)
+    for cpp_case in options.cpp_lloyd_cases:
+        cpp_case_info = get_cpp_case(cpp_case)
         add_cpp_case_task(
             tasks,
             cpp_case,
             [
-                nanobench_binary_path(cpp_case),
-                dataset_bin,
-                str(N),
-                str(K),
-                init_centroids_bin,
-                metrics_artifact_path(
-                    case.phase_key,
-                    case.variant_key,
-                    "cpp",
-                    case_id,
-                    datasets_dir=datasets_dir,
-                ),
-                timing_artifact_path(
-                    case.phase_key,
-                    case.variant_key,
-                    "cpp",
-                    case_id,
-                    datasets_dir=datasets_dir,
-                ),
-                str(timing_values),
-                str(timing_min_time),
+                artifacts.dataset_bin,
+                str(case.N),
+                str(case.K),
+                artifacts.init_centroids_bin,
             ],
-            cpp_metrics_arg=5,
-            cpp_json_arg=6,
+            metrics_out=artifacts.metrics(
+                cpp_case_info.phase_key,
+                cpp_case_info.variant_key,
+                "cpp",
+            ),
+            json_out=artifacts.timing(
+                cpp_case_info.phase_key,
+                cpp_case_info.variant_key,
+                "cpp",
+            ),
+            options=options,
         )
 
-    if run_python_lloyd:
+    if options.run_python_lloyd:
         tasks.append(
             Task(
                 name="Python: Lloyd Algorithm",
@@ -365,83 +458,54 @@ def build_pipeline(
                     sys.executable,
                     repo_path("python", "benchmark_pipeline", "benches", "bench_lloyd.py"),
                     "--dataset-bin",
-                    dataset_bin,
-                    "--D",
-                    str(D),
-                    "--N",
-                    str(N),
-                    "--K",
-                    str(K),
+                    artifacts.dataset_bin,
+                    *case.dimension_args(),
                     "--init-centroids-bin",
-                    init_centroids_bin,
+                    artifacts.init_centroids_bin,
                     "--metrics-file",
-                    metrics_artifact_path(
-                        "lloyd",
-                        REFERENCE_VARIANT,
-                        "py",
-                        case_id,
-                        datasets_dir=datasets_dir,
-                    ),
-                    "--processes",
-                    str(timing_processes),
-                    "--values",
-                    str(timing_values),
-                    "--min-time",
-                    str(timing_min_time),
-                    "--output",
-                    timing_artifact_path(
-                        "lloyd",
-                        REFERENCE_VARIANT,
-                        "py",
-                        case_id,
-                        datasets_dir=datasets_dir,
+                    artifacts.metrics("lloyd", REFERENCE_VARIANT, "py"),
+                    *python_pyperf_args(
+                        options,
+                        artifacts.timing("lloyd", REFERENCE_VARIANT, "py"),
                     ),
                 ],
             )
         )
 
-    for covariance_type in gmm_covariance_types:
-        gmm_precisions_bin = gmm_precisions_path(covariance_type, case_id, datasets_dir)
+    for covariance_type in options.gmm_covariance_types:
+        gmm_precisions_bin = artifacts.gmm_precisions_bin(covariance_type)
 
-        for cpp_case in cpp_gmm_cases:
-            case = get_cpp_case(cpp_case)
+        for cpp_case in options.cpp_gmm_cases:
+            cpp_case_info = get_cpp_case(cpp_case)
             add_cpp_case_task(
                 tasks,
                 cpp_case,
                 [
-                    nanobench_binary_path(cpp_case),
-                    dataset_bin,
-                    str(N),
-                    str(K),
-                    gmm_weights_bin,
-                    gmm_means_bin,
+                    artifacts.dataset_bin,
+                    str(case.N),
+                    str(case.K),
+                    artifacts.gmm_weights_bin,
+                    artifacts.gmm_means_bin,
                     gmm_precisions_bin,
                     covariance_type,
-                    metrics_artifact_path(
-                        case.phase_key,
-                        case.variant_key,
-                        "cpp",
-                        case_id,
-                        covariance_type,
-                        datasets_dir=datasets_dir,
-                    ),
-                    timing_artifact_path(
-                        case.phase_key,
-                        case.variant_key,
-                        "cpp",
-                        case_id,
-                        covariance_type,
-                        datasets_dir=datasets_dir,
-                    ),
-                    str(timing_values),
-                    str(timing_min_time),
                 ],
-                cpp_metrics_arg=8,
-                cpp_json_arg=9,
+                metrics_out=artifacts.metrics(
+                    cpp_case_info.phase_key,
+                    cpp_case_info.variant_key,
+                    "cpp",
+                    covariance_type,
+                ),
+                json_out=artifacts.timing(
+                    cpp_case_info.phase_key,
+                    cpp_case_info.variant_key,
+                    "cpp",
+                    covariance_type,
+                ),
+                options=options,
                 params_key=covariance_type,
             )
 
-        if run_python_gmm:
+        if options.run_python_gmm:
             tasks.append(
                 Task(
                     name=f"Python: GaussianMixture EM ({covariance_type} covariance)",
@@ -449,44 +513,31 @@ def build_pipeline(
                         sys.executable,
                         repo_path("python", "benchmark_pipeline", "benches", "bench_gmm.py"),
                         "--dataset-bin",
-                        dataset_bin,
-                        "--D",
-                        str(D),
-                        "--N",
-                        str(N),
-                        "--K",
-                        str(K),
+                        artifacts.dataset_bin,
+                        *case.dimension_args(),
                         "--covariance-type",
                         covariance_type,
                         "--gmm-weights-bin",
-                        gmm_weights_bin,
+                        artifacts.gmm_weights_bin,
                         "--gmm-means-bin",
-                        gmm_means_bin,
+                        artifacts.gmm_means_bin,
                         "--gmm-precisions-bin",
                         gmm_precisions_bin,
                         "--metrics-file",
-                        metrics_artifact_path(
+                        artifacts.metrics(
                             "gmm",
                             REFERENCE_VARIANT,
                             "py",
-                            case_id,
                             covariance_type,
-                            datasets_dir=datasets_dir,
                         ),
-                        "--processes",
-                        str(timing_processes),
-                        "--values",
-                        str(timing_values),
-                        "--min-time",
-                        str(timing_min_time),
-                        "--output",
-                        timing_artifact_path(
-                            "gmm",
-                            REFERENCE_VARIANT,
-                            "py",
-                            case_id,
-                            covariance_type,
-                            datasets_dir=datasets_dir,
+                        *python_pyperf_args(
+                            options,
+                            artifacts.timing(
+                                "gmm",
+                                REFERENCE_VARIANT,
+                                "py",
+                                covariance_type,
+                            ),
                         ),
                     ],
                 )

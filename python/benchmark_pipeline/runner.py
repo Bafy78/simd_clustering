@@ -6,6 +6,7 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
+from benchmark_pipeline.config import PipelineOptions
 from benchmark_pipeline.metrics import (
     validate_cpp_timing_process_metrics,
     write_json,
@@ -23,11 +24,10 @@ from benchmark_pipeline.paths import (
     repo_relative_path,
 )
 from benchmark_pipeline.tasks import (
+    BenchmarkArtifacts,
+    BenchmarkCase,
     Task,
     build_pipeline,
-    config_id,
-    configuration_label,
-    dataset_path,
 )
 
 
@@ -205,12 +205,13 @@ def cleanup_config_inputs(
     datasets_dir: str | Path = DATASETS_DIR,
 ) -> None:
     datasets_dir = repo_relative_path(datasets_dir)
+    artifacts = BenchmarkArtifacts(case_id, datasets_dir)
 
     for path in [
-        dataset_path(f"data_{case_id}.bin", datasets_dir),
-        dataset_path(f"init_{case_id}.bin", datasets_dir),
-        dataset_path(f"gmm_weights_{case_id}.bin", datasets_dir),
-        dataset_path(f"gmm_means_{case_id}.bin", datasets_dir),
+        artifacts.dataset_bin,
+        artifacts.init_centroids_bin,
+        artifacts.gmm_weights_bin,
+        artifacts.gmm_means_bin,
     ]:
         delete_if_exists(path, label="temporary input")
 
@@ -219,49 +220,21 @@ def cleanup_config_inputs(
 
 
 def execute_pipeline(
-    D: int,
-    N: int,
-    K: int,
-    timing_processes: int,
-    timing_values: int,
-    timing_min_time: float,
-    gmm_covariance_types: tuple[str, ...],
-    cpp_soa_cases: tuple[str, ...],
-    run_cpp_pp: bool,
-    run_python_pp: bool,
-    cpp_lloyd_cases: tuple[str, ...],
-    run_python_lloyd: bool,
-    cpp_gmm_cases: tuple[str, ...],
-    run_python_gmm: bool,
+    case: BenchmarkCase,
+    options: PipelineOptions,
     datasets_dir: str | Path = DATASETS_DIR,
     keep_inputs: bool = False,
-):
-    print(f"\n--- Running Config: {configuration_label(D, N, K)} ---")
+) -> None:
+    print(f"\n--- Running Config: {case.label} ---")
 
-    pipeline = build_pipeline(
-        D,
-        N,
-        K,
-        timing_processes,
-        timing_values,
-        timing_min_time,
-        gmm_covariance_types=gmm_covariance_types,
-        cpp_soa_cases=cpp_soa_cases,
-        run_cpp_pp=run_cpp_pp,
-        run_python_pp=run_python_pp,
-        cpp_lloyd_cases=cpp_lloyd_cases,
-        run_python_lloyd=run_python_lloyd,
-        cpp_gmm_cases=cpp_gmm_cases,
-        run_python_gmm=run_python_gmm,
-        datasets_dir=datasets_dir,
-    )
+    pipeline = build_pipeline(case, options, datasets_dir=datasets_dir)
 
     for task in pipeline:
         if task.cpp_json_arg is not None:
-            run_cpp_task_with_timing_processes(task, timing_processes)
+            run_cpp_task_with_timing_processes(task, options.timing_processes)
         else:
             print(f"[{task.name}] Running...")
             run_command(task.name, task.command)
 
     if not keep_inputs:
-        cleanup_config_inputs(config_id(D, N, K), datasets_dir)
+        cleanup_config_inputs(case.case_id, datasets_dir)

@@ -69,16 +69,16 @@ def load_timing_process_aware_records(
         ):
             continue
 
-        parsed = parse_benchmark_filename(json_path)
-        if parsed is None:
+        identity = parse_benchmark_filename(json_path)
+        if identity is None:
             print(f"Skipping non-benchmark JSON: {json_path.name}")
             continue
 
-        phase_key = parsed["phase_key"]
-        lang_key = parsed["language_key"]
-        variant_key = parsed["variant_key"]
-        config_id = parsed["config_id"]
-        params_key = parsed["params_key"]
+        phase_key = identity.phase_key
+        lang_key = identity.language_key
+        variant_key = identity.variant_key
+        config_id = identity.config_id
+        params_key = identity.params_key
 
         if completed_metric_keys_by_phase is not None and phase_key in completed_metric_keys_by_phase:
             allowed_metric_keys = completed_metric_keys_by_phase[phase_key]
@@ -117,7 +117,7 @@ def load_timing_process_aware_records(
 
             records.append(
                 {
-                    **parsed,
+                    **identity.as_record_fields(),
                     "source_json": json_path.name,
                     "benchmark_index": timing_value_record["benchmark_index"],
                     "pyperf_run_index": timing_value_record["pyperf_run_index"],

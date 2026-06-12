@@ -498,9 +498,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--gmm-covariance-types",
-        choices=GMM_COVARIANCE_TYPES,
+        choices=SUPPORTED_GMM_COVARIANCE_TYPES,
         nargs="+",
-        default=list(GMM_COVARIANCE_TYPES),
+        default=list(SUPPORTED_GMM_COVARIANCE_TYPES),
         help=(
             "Covariance type(s) to compile separately for GMM cases. Defaults to all supported"
         ),
@@ -537,11 +537,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def scan_variants(cpp_case: str, gmm_covariance_types: list[str]) -> list[str | None]:
-    if cpp_case == "gmm_static":
-        return gmm_covariance_types
-    if cpp_case == "gmm_dynamic":
-        return [cov for cov in gmm_covariance_types if cov in {"spherical", "diag"}]
+    case = CPP_CASES[cpp_case]
+
+    if not case.needs_gmm_init:
     return [None]
+
+    supported = set(case.supported_gmm_covariance_types)
+    return [cov for cov in gmm_covariance_types if cov in supported]
 
 
 def main() -> None:

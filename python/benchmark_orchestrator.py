@@ -1,17 +1,19 @@
-from benchmark_pipeline.config import default_config
+from benchmark_pipeline.config import BenchmarkConfig, default_config
 from benchmark_pipeline.runner import (
     compile_cpp_binaries,
     execute_pipeline,
     prepare_datasets_dir,
 )
+from benchmark_pipeline.tasks import BenchmarkCase
 
 
-def cpp_cases_for_dimension(config, _D: int) -> set[str]:
-    cpp_cases = set(config.cpp_soa_cases)
-    cpp_cases.update(config.cpp_lloyd_cases)
-    cpp_cases.update(config.cpp_gmm_cases)
+def cpp_cases_for_dimension(config: BenchmarkConfig, _D: int) -> set[str]:
+    options = config.pipeline
+    cpp_cases = set(options.cpp_soa_cases)
+    cpp_cases.update(options.cpp_lloyd_cases)
+    cpp_cases.update(options.cpp_gmm_cases)
 
-    if config.run_cpp_pp:
+    if options.run_cpp_pp:
         cpp_cases.add("pp")
 
     return cpp_cases
@@ -27,20 +29,8 @@ def main() -> None:
         for N in config.test_Ns:
             for K in config.test_Ks:
                 execute_pipeline(
-                    D,
-                    N,
-                    K,
-                    config.timing_processes,
-                    config.timing_values,
-                    config.timing_min_time,
-                    gmm_covariance_types=config.gmm_covariance_types,
-                    cpp_soa_cases=config.cpp_soa_cases,
-                    run_cpp_pp=config.run_cpp_pp,
-                    run_python_pp=config.run_python_pp,
-                    cpp_lloyd_cases=config.cpp_lloyd_cases,
-                    run_python_lloyd=config.run_python_lloyd,
-                    cpp_gmm_cases=config.cpp_gmm_cases,
-                    run_python_gmm=config.run_python_gmm,
+                    BenchmarkCase(D, N, K),
+                    config.pipeline,
                     datasets_dir=datasets_dir,
                     keep_inputs=config.keep_inputs,
                 )

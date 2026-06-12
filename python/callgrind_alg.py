@@ -18,7 +18,11 @@ from benchmark_pipeline.paths import (
     repo_relative_path,
 )
 from benchmark_pipeline.runner import run_command
-from benchmark_pipeline.tasks import build_pipeline, config_id, dataset_path
+from benchmark_pipeline.tasks import (
+    BenchmarkArtifacts,
+    BenchmarkCase,
+    build_dataset_setup_task,
+)
 
 PROFILE_EVENTS = "Ir,Dr,D1mr,DLmr,Dw,D1mw,DLmw"
 
@@ -114,7 +118,8 @@ def main() -> None:
             f"type {args.gmm_covariance_type!r}. Supported values: {supported}"
         )
 
-    config_id_value = config_id(args.D, args.N, args.K)
+    case = BenchmarkCase(args.D, args.N, args.K)
+    config_id_value = case.case_id
     datasets_dir = repo_relative_path(args.datasets_dir)
     out_dir = repo_relative_path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -124,34 +129,24 @@ def main() -> None:
     if not args.skip_compile:
         binary = compile_profile_binary(args.D, args.cpp_case)
 
+    setup_gmm_covariance_types = (
+        (args.gmm_covariance_type,) if target.needs_gmm_init else ()
+    )
+
     if not args.skip_generate:
-        dataset_task = build_pipeline(
-            args.D,
-            args.N,
-            args.K,
-            timing_processes=1,
-            timing_values=1,
-            timing_min_time=0.0,
-            gmm_covariance_types=(args.gmm_covariance_type,) if target.needs_gmm_init else (),
-            cpp_soa_cases=(),
-            run_cpp_pp=False,
-            run_python_pp=False,
-            cpp_lloyd_cases=(),
-            run_python_lloyd=False,
-            cpp_gmm_cases=(args.cpp_case,) if target.needs_gmm_init else (),
-            run_python_gmm=False,
-            datasets_dir=datasets_dir,
-        )[0]
+        dataset_task = build_dataset_setup_task(
+            case,
+            setup_gmm_covariance_types,
+            datasets_dir,
+        )
         run_command(dataset_task.name, dataset_task.command)
 
-    dataset_bin = dataset_path(f"data_{config_id_value}.bin", datasets_dir)
-    init_bin = dataset_path(f"init_{config_id_value}.bin", datasets_dir)
-    gmm_weights_bin = dataset_path(f"gmm_weights_{config_id_value}.bin", datasets_dir)
-    gmm_means_bin = dataset_path(f"gmm_means_{config_id_value}.bin", datasets_dir)
-    gmm_precisions_bin = dataset_path(
-        f"gmm_precisions_{args.gmm_covariance_type}_{config_id_value}.bin",
-        datasets_dir,
-    )
+    artifacts = BenchmarkArtifacts.for_case(case, datasets_dir)
+    dataset_bin = artifacts.dataset_bin
+    init_bin = artifacts.init_centroids_bin
+    gmm_weights_bin = artifacts.gmm_weights_bin
+    gmm_means_bin = artifacts.gmm_means_bin
+    gmm_precisions_bin = artifacts.gmm_precisions_bin(args.gmm_covariance_type)
 
     callgrind_out = out_dir / f"callgrind.{args.cpp_case}.{config_id_value}.out"
     metrics_out = out_dir / f"{args.cpp_case}_metrics_cpp.{config_id_value}.json"

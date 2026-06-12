@@ -4,10 +4,7 @@ from benchmark_pipeline.paths import DATASETS_DIR
 
 
 @dataclass(frozen=True)
-class BenchmarkConfig:
-    test_Ds: list[int]
-    test_Ns: list[int]
-    test_Ks: list[int]
+class PipelineOptions:
     timing_processes: int
     timing_values: int
     timing_min_time: float
@@ -19,6 +16,14 @@ class BenchmarkConfig:
     run_python_lloyd: bool
     cpp_gmm_cases: tuple[str, ...]
     run_python_gmm: bool
+
+
+@dataclass(frozen=True)
+class BenchmarkConfig:
+    test_Ds: list[int]
+    test_Ns: list[int]
+    test_Ks: list[int]
+    pipeline: PipelineOptions
     datasets_dir: str = str(DATASETS_DIR)
     keep_inputs: bool = False
 
@@ -37,15 +42,17 @@ def default_config() -> BenchmarkConfig:
             10_000_000,
         ],
         test_Ks=[10, 25, 50],
-        timing_processes=8,
-        timing_values=6,
-        timing_min_time=0.05,
-        gmm_covariance_types=(),
-        cpp_soa_cases=("soa_static", "soa_dynamic"),
-        run_cpp_pp=True,
-        run_python_pp=True,
-        cpp_lloyd_cases=("lloyd_dynamic", "lloyd_static", "lloyd_auto"),
-        run_python_lloyd=True,
-        cpp_gmm_cases=(),
-        run_python_gmm=False,
+        pipeline=PipelineOptions(
+            timing_processes=8,
+            timing_values=6,
+            timing_min_time=0.05,
+            gmm_covariance_types=(),
+            cpp_soa_cases=("soa_static", "soa_dynamic"),
+            run_cpp_pp=False,
+            run_python_pp=False,
+            cpp_lloyd_cases=("lloyd_dynamic", "lloyd_static", "lloyd_auto"),
+            run_python_lloyd=True,
+            cpp_gmm_cases=(),
+            run_python_gmm=False,
+        ),
     )

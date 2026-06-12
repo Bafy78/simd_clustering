@@ -1,7 +1,7 @@
 # Benchmark execution and dataset generation
-numpy
-scipy
-scikit-learn
+numpy==2.4.4
+scipy==1.71.1
+scikit-learn==1.8.0
 pyperf
 threadpoolctl
 

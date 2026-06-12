@@ -63,7 +63,7 @@ struct dynamic_lloyd_case {
     }
 
     std::string title() const {
-        return "EVE Static-D Streamed/Tiled K-Means "
+        return "EVE Streamed-D Tiled K-Means "
             + std::to_string(D)
             + "D K_TILE="
             + std::to_string(KMEANS_K_TILE)
