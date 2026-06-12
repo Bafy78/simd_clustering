@@ -14,7 +14,7 @@
 
 // Computes SIMD squared distance between a block of samples and a centroid.
 constexpr auto compute_simd_dist_sq = [](const auto& sample, const auto& centroid) {
-    auto dist_sq = eve::zero(eve::as<eve::wide<float>>());
+    auto dist_sq = wide_zero_f;
 
     kumi::for_each([&](auto p, auto c) {
         auto diff = p - c;
@@ -32,7 +32,8 @@ void update_min_distances(
 ) {
     auto zipped = eve::views::zip(samples, min_dist_view);
 
-    eve::algo::for_each(zipped, [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
+    eve::algo::for_each[eve::algo::force_cardinal<kmeans_pp::cardinal{}()>]
+    (zipped, [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
         auto [sample_it, dist_it] = it;
         auto sample = eve::load[ignore](sample_it);
         auto current_min_dist = eve::load[ignore](dist_it);
@@ -50,10 +51,11 @@ float evaluate_candidate_cost(
     MinDistView min_dist_view,
     const SampleType& candidate
 ) {
-    auto cost_accumulator = eve::zero(eve::as<eve::wide<float>>());
+    auto cost_accumulator = wide_zero_f;
     auto zipped = eve::views::zip(samples, min_dist_view);
 
-    eve::algo::for_each(zipped, [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
+    eve::algo::for_each[eve::algo::force_cardinal<kmeans_pp::cardinal{}()>]
+    (zipped, [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
         auto [sample_it, dist_it] = it;
         auto sample = eve::load[ignore](sample_it);
         auto current_min_dist = eve::load[ignore](dist_it);
@@ -61,7 +63,7 @@ float evaluate_candidate_cost(
         auto dist_sq = compute_simd_dist_sq(sample, candidate);
         auto trial_min = eve::min(current_min_dist, dist_sq);
 
-        auto mask = ignore.mask(eve::as<eve::wide<float>>());
+        auto mask = ignore.mask(eve::as<wide_f>());
         cost_accumulator += eve::if_else(mask, trial_min, eve::zero);
     });
 

@@ -11,8 +11,11 @@
 #include <vector>
 
 #include <eve/memory/aligned_allocator.hpp>
+#include "../simd.hpp"
 
 namespace kmeans_pp {
+
+using ::cardinal;
 
 using kmeans_pp_min_distance_vector = std::vector<float, eve::aligned_allocator<float>>;
 

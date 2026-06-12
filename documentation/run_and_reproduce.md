@@ -44,7 +44,7 @@ The requirements file covers the Python benchmark runners, dataset generation, p
 
 ## 3. Review or adjust the benchmark configuration
 
-The default sweep is controlled by `default_config()` in [`python/benchmark_pipeline/config.py`](../python/benchmark_pipeline/config.py). The task graph is built in [`python/benchmark_pipeline/tasks.py`](../python/benchmark_pipeline/tasks.py).
+The sweep is controlled by `default_config()` in [`python/benchmark_pipeline/config.py`](../python/benchmark_pipeline/config.py).
 
 The runner executes the phases described in [Main supported algorithmic phases](architecture_and_artifacts.md#main-supported-algorithmic-phases). For the methodology behind the generated inputs, measured regions, repetition model, and speedup intervals, see the [Benchmark methodology](benchmark_methodology.md).
 

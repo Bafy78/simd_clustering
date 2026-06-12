@@ -104,7 +104,7 @@ struct static_gmm_em_state {
 
         auto lower_bound_sum_w = wide_zero_f;
 
-        eve::algo::for_each(
+        eve::algo::for_each[eve::algo::force_cardinal<cardinal{}()>](
             samples,
             [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
                 const auto sample = eve::load[ignore](it);

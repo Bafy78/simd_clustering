@@ -69,7 +69,7 @@ bool assign_samples_to_centroids(
 ) {
     bool any_changed = false;
 
-    eve::algo::for_each(
+    eve::algo::for_each[eve::algo::force_cardinal<kmeans::cardinal{}()>](
         zipped_data,
         [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
 
@@ -312,7 +312,7 @@ struct kumi_kmeans_backend {
 
         wide_f total_squared_centered_norm_w = wide_zero_f;
 
-        eve::algo::for_each(
+        eve::algo::for_each[eve::algo::force_cardinal<kmeans::cardinal{}()>](
             eve::views::zip(original_samples, samples),
             [&](eve::algo::iterator auto it,
                 eve::relative_conditional_expr auto ignore) {
