@@ -16,6 +16,7 @@
 
 #include "../../layout/dynamic_soa.hpp"
 #include "../../simd.hpp"
+#include "../covariance_math.hpp"
 
 // Score form:
 //     constant[k]
@@ -95,13 +96,7 @@ struct dynamic_diagonal_gmm_micro_gemm_covariance {
     }
 
     std::vector<float> materialize_covariances() const {
-        std::vector<float> out(precisions.size());
-
-        for (std::size_t i = 0; i < precisions.size(); ++i) {
-            out[i] = 1.0f / precisions[i];
-        }
-
-        return out;
+        return gmm::materialize_reciprocal_covariances(precisions);
     }
 
     std::vector<float> materialize_precisions() const {
@@ -144,8 +139,7 @@ struct dynamic_diagonal_gmm_micro_gemm_covariance {
             throw std::runtime_error("Diagonal dynamic GMM mean count must be cluster count times dimension count");
         }
 
-        const float log_2_pi = std::log(2.0f * std::numbers::pi_v<float>);
-        constexpr float half_dimensions = 0.5f * static_cast<float>(D);
+        const float log_2_pi = gmm::log_2pi();
 
         for (std::size_t tile = 0; tile < K_tile_count; ++tile) {
             const std::size_t k_base = tile * K_TILE;
@@ -163,20 +157,22 @@ struct dynamic_diagonal_gmm_micro_gemm_covariance {
                 for (std::size_t d = 0; d < D; ++d) {
                     const float precision = precisions[offset(k, d)];
                     const float mean = means_row_major[offset(k, d)];
-                    const float linear = mean * precision;
+                    const float linear = gmm::diagonal_score_linear(mean, precision);
 
                     linear_tile_dimension(tile, d)[t] = linear;
-                    quadratic_tile_dimension(tile, d)[t] = -0.5f * precision;
+                    quadratic_tile_dimension(tile, d)[t] = gmm::diagonal_score_quadratic(precision);
 
                     log_precision_det += std::log(precision);
                     mean_quadratic += mean * linear;
                 }
 
-                score_constants[k] =
-                    std::log(weights[k])
-                    + 0.5f * log_precision_det
-                    - half_dimensions * log_2_pi
-                    - 0.5f * mean_quadratic;
+                score_constants[k] = gmm::weighted_gaussian_score_constant(
+                    weights[k],
+                    log_precision_det,
+                    D,
+                    mean_quadratic,
+                    log_2_pi
+                );
             }
         }
     }
@@ -285,15 +281,24 @@ struct dynamic_diagonal_gmm_micro_gemm_covariance {
             const std::size_t i = offset(k, d);
             const float avg_x2 = eve::reduce(sum_x2_w[i]) / N_k;
             const float mean = means_row_major[i];
-            const float covariance = avg_x2 - mean * mean + reg_covar;
+            const float covariance = gmm::diagonal_covariance_from_raw_second_moment(
+                avg_x2,
+                mean,
+                reg_covar
+            );
 
-            if (!(covariance > 0.0f)) {
-                throw std::runtime_error(
-                    "Diagonal dynamic GMM covariance became non-positive; try increasing reg_covar"
-                );
-            }
-
-            precisions[i] = 1.0f / covariance;
+            precisions[i] = gmm::checked_precision_from_covariance(
+                covariance,
+                "Diagonal dynamic GMM covariance became non-positive; try increasing reg_covar"
+            );
         }
     }
+
+    template <class Samples, class ComponentCounts, class Means, class Scratch>
+    void recompute_unstable_clusters(
+        const Samples&,
+        const ComponentCounts&,
+        const Means&,
+        Scratch&
+    ) {}
 };

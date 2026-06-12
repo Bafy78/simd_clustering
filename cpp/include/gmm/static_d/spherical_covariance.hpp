@@ -15,6 +15,7 @@
 
 #include "../../layout/static_soa.hpp"
 #include "../../simd.hpp"
+#include "../covariance_math.hpp"
 
 template <eve::product_type SampleT>
 float gmm_sample_norm_sq(const SampleT& sample) {
@@ -85,28 +86,23 @@ struct spherical_covariance_model {
     }
 
     std::vector<float> materialize_covariances() const {
-        std::vector<float> out(precisions.size());
-
-        for (std::size_t k = 0; k < precisions.size(); ++k) {
-            out[k] = 1.0f / precisions[k];
-        }
-
-        return out;
+        return gmm::materialize_reciprocal_covariances(precisions);
     }
 
     template <class Weights, class Means>
     void refresh_score_data(const Weights& weights, const Means& means) {
-        const float log_2_pi = std::log(2.0f * std::numbers::pi_v<float>);
-        constexpr float half_dimensions = 0.5f * static_cast<float>(kumi::size_v<SampleT>);
+        const float log_2_pi = gmm::log_2pi();
 
         for (std::size_t k = 0; k < means.size(); ++k) {
             const float mean_norm = gmm_sample_norm_sq(means[k]);
 
-            score_constants[k] =
-                std::log(weights[k])
-                + half_dimensions * std::log(precisions[k])
-                - half_dimensions * log_2_pi
-                - 0.5f * precisions[k] * mean_norm;
+            score_constants[k] = gmm::weighted_gaussian_score_constant(
+                weights[k],
+                static_cast<float>(kumi::size_v<SampleT>) * std::log(precisions[k]),
+                kumi::size_v<SampleT>,
+                precisions[k] * mean_norm,
+                log_2_pi
+            );
         }
     }
 
@@ -152,19 +148,19 @@ struct spherical_covariance_model {
         float N_k,
         const SampleT& mean
     ) {
-        constexpr float inv_dimensions = 1.0f / static_cast<float>(kumi::size_v<SampleT>);
-
         const float mean_norm = gmm_sample_norm_sq(mean);
         const float avg_x2 = eve::reduce(sum_x2_w[k]) / N_k;
-        const float covariance = (avg_x2 - mean_norm) * inv_dimensions + reg_covar;
+        const float covariance = gmm::spherical_covariance_from_raw_norm_moment(
+            avg_x2,
+            mean_norm,
+            kumi::size_v<SampleT>,
+            reg_covar
+        );
 
-        if (!(covariance > 0.0f)) {
-            throw std::runtime_error(
-                "Spherical GMM covariance became non-positive; try increasing reg_covar"
-            );
-        }
-
-        precisions[k] = 1.0f / covariance;
+        precisions[k] = gmm::checked_precision_from_covariance(
+            covariance,
+            "Spherical GMM covariance became non-positive; try increasing reg_covar"
+        );
     }
 
     template <class Samples, class ComponentCounts, class Means, class Scratch>

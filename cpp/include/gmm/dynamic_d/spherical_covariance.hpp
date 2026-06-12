@@ -16,6 +16,7 @@
 
 #include "../../layout/dynamic_soa.hpp"
 #include "../../simd.hpp"
+#include "../covariance_math.hpp"
 
 // Score form:
 //     log w_k
@@ -86,13 +87,7 @@ struct dynamic_spherical_gmm_micro_gemm_covariance {
     }
 
     std::vector<float> materialize_covariances() const {
-        std::vector<float> out(precisions.size());
-
-        for (std::size_t k = 0; k < precisions.size(); ++k) {
-            out[k] = 1.0f / precisions[k];
-        }
-
-        return out;
+        return gmm::materialize_reciprocal_covariances(precisions);
     }
 
     std::vector<float> materialize_precisions() const {
@@ -123,8 +118,7 @@ struct dynamic_spherical_gmm_micro_gemm_covariance {
             throw std::runtime_error("Spherical dynamic GMM mean count must be cluster count times dimension count");
         }
 
-        const float log_2_pi = std::log(2.0f * std::numbers::pi_v<float>);
-        constexpr float half_dimensions = 0.5f * static_cast<float>(D);
+        const float log_2_pi = gmm::log_2pi();
 
         for (std::size_t tile = 0; tile < K_tile_count; ++tile) {
             const std::size_t k_base = tile * K_TILE;
@@ -140,15 +134,17 @@ struct dynamic_spherical_gmm_micro_gemm_covariance {
 
                 for (std::size_t d = 0; d < D; ++d) {
                     const float mean = means_row_major[k * D + d];
-                    tile_dimension(tile, d)[t] = precisions[k] * mean;
+                    tile_dimension(tile, d)[t] = gmm::spherical_score_linear(mean, precisions[k]);
                     mean_norm += mean * mean;
                 }
 
-                score_constants[k] =
-                    std::log(weights[k])
-                    + half_dimensions * std::log(precisions[k])
-                    - half_dimensions * log_2_pi
-                    - 0.5f * precisions[k] * mean_norm;
+                score_constants[k] = gmm::weighted_gaussian_score_constant(
+                    weights[k],
+                    static_cast<float>(D) * std::log(precisions[k]),
+                    D,
+                    precisions[k] * mean_norm,
+                    log_2_pi
+                );
             }
         }
     }
@@ -279,8 +275,6 @@ struct dynamic_spherical_gmm_micro_gemm_covariance {
         float N_k,
         const aligned_float_vector& means_row_major
     ) {
-        constexpr float inv_dimensions = 1.0f / static_cast<float>(D);
-
         const float* mean = means_row_major.data() + k * D;
 
         float mean_norm = 0.0f;
@@ -289,14 +283,24 @@ struct dynamic_spherical_gmm_micro_gemm_covariance {
         }
 
         const float avg_x2 = eve::reduce(sum_x2_w[k]) / N_k;
-        const float covariance = (avg_x2 - mean_norm) * inv_dimensions + reg_covar;
+        const float covariance = gmm::spherical_covariance_from_raw_norm_moment(
+            avg_x2,
+            mean_norm,
+            D,
+            reg_covar
+        );
 
-        if (!(covariance > 0.0f)) {
-            throw std::runtime_error(
-                "Spherical dynamic GMM covariance became non-positive; try increasing reg_covar"
-            );
-        }
-
-        precisions[k] = 1.0f / covariance;
+        precisions[k] = gmm::checked_precision_from_covariance(
+            covariance,
+            "Spherical dynamic GMM covariance became non-positive; try increasing reg_covar"
+        );
     }
+
+    template <class Samples, class ComponentCounts, class Means, class Scratch>
+    void recompute_unstable_clusters(
+        const Samples&,
+        const ComponentCounts&,
+        const Means&,
+        Scratch&
+    ) {}
 };

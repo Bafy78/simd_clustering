@@ -16,6 +16,7 @@
 
 #include "../../layout/static_soa.hpp"
 #include "../../simd.hpp"
+#include "../core.hpp"
 
 template <eve::product_type SampleT>
 struct static_gmm_result {
@@ -162,40 +163,41 @@ struct static_gmm_em_state {
         return eve::reduce(lower_bound_sum_w) / static_cast<float>(samples.size());
     }
 
-    void m_step_from_accumulators() {
-        constexpr float eps10 = 10.0f * std::numeric_limits<float>::epsilon();
+    float reduced_component_count(std::size_t k) const {
+        return eve::reduce(N_k_w[k]);
+    }
 
-        float N_k_sum = 0.0f;
+    float component_weight(std::size_t k) const {
+        return weights[k];
+    }
 
-        for (std::size_t k = 0; k < K(); ++k) {
-            weights[k] = eve::reduce(N_k_w[k]) + eps10;
-            N_k_sum += weights[k];
-        }
+    void set_component_weight(std::size_t k, float value) {
+        weights[k] = value;
+    }
 
-        for (std::size_t k = 0; k < K(); ++k) {
-            const float N_k = weights[k];
-            const float inv_N_k = 1.0f / N_k;
+    void write_mean_from_accumulators(std::size_t k, float inv_N_k) {
+        kumi::for_each_index(
+            [&](auto index, auto& mean_d) {
+                mean_d = eve::reduce(sum_x_w[k][index]) * inv_N_k;
+            },
+            means[k]
+        );
+    }
 
-            kumi::for_each_index(
-                [&](auto index, auto& mean_d) {
-                    mean_d = eve::reduce(sum_x_w[k][index]) * inv_N_k;
-                },
-                means[k]
-            );
+    void update_covariance_from_sufficient_statistics(std::size_t k, float N_k) {
+        covariance.update_cluster_from_sufficient_statistics(k, N_k, means[k]);
+    }
 
-            covariance.update_cluster_from_sufficient_statistics(k, N_k, means[k]);
-        }
-
-        // The covariance model may need to recompute selected sufficient statistics
-        // from the responsibilities of the just-finished E-step. Score data has not
-        // been refreshed yet, so it still represents the old EM parameters.
+    void recompute_unstable_covariances_from_current_responsibilities() {
         covariance.recompute_unstable_clusters(samples, weights, means, score_scratch);
+    }
 
-        for (std::size_t k = 0; k < K(); ++k) {
-            weights[k] /= N_k_sum;
-        }
-
+    void refresh_score_data() {
         covariance.refresh_score_data(weights, means);
+    }
+
+    void m_step_from_accumulators() {
+        gmm::m_step_from_accumulators_common(*this);
     }
 };
 
@@ -219,25 +221,12 @@ static_gmm_result<SampleT> run_static_gmm_em(
         std::move(covariance)
     };
 
+    auto trace = gmm::em_core(state, max_iterations, tol);
+
     static_gmm_result<SampleT> result;
-    result.lower_bounds.reserve(static_cast<std::size_t>(max_iterations));
-
-    float lower_bound = -std::numeric_limits<float>::infinity();
-
-    for (int iter = 1; iter <= max_iterations; ++iter) {
-        const float previous_lower_bound = lower_bound;
-
-        lower_bound = state.e_step_and_accumulate_sufficient_statistics();
-        state.m_step_from_accumulators();
-
-        result.lower_bounds.push_back(lower_bound);
-        result.algorithm_iterations = iter;
-        result.lower_bound = lower_bound;
-
-        if (std::abs(lower_bound - previous_lower_bound) < tol) {
-            break;
-        }
-    }
+    result.lower_bounds = std::move(trace.lower_bounds);
+    result.algorithm_iterations = trace.algorithm_iterations;
+    result.lower_bound = trace.lower_bound;
 
     result.weights = std::move(state.weights);
     result.means = std::move(state.means);

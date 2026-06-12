@@ -16,6 +16,7 @@
 
 #include "../../layout/static_soa.hpp"
 #include "../../simd.hpp"
+#include "../covariance_math.hpp"
 
 template <eve::product_type SampleT>
 struct diagonal_covariance_model {
@@ -74,19 +75,12 @@ struct diagonal_covariance_model {
     }
 
     std::vector<float> materialize_covariances() const {
-        std::vector<float> out(precisions.size());
-
-        for (std::size_t i = 0; i < precisions.size(); ++i) {
-            out[i] = 1.0f / precisions[i];
-        }
-
-        return out;
+        return gmm::materialize_reciprocal_covariances(precisions);
     }
 
     template <class Weights, class Means>
     void refresh_score_data(const Weights& weights, const Means& means) {
-        const float log_2_pi = std::log(2.0f * std::numbers::pi_v<float>);
-        constexpr float half_dimensions = 0.5f * static_cast<float>(D);
+        const float log_2_pi = gmm::log_2pi();
 
         for (std::size_t k = 0; k < means.size(); ++k) {
             float log_precision_det = 0.0f;
@@ -97,10 +91,10 @@ struct diagonal_covariance_model {
                 [&](auto index, auto mu) {
                     const float precision = precisions[offset(k, index)];
                     const float mean = static_cast<float>(mu);
-                    const float linear = mean * precision;
+                    const float linear = gmm::diagonal_score_linear(mean, precision);
 
                     score_row.terms[index] = score_term{
-                        -0.5f * precision,
+                        gmm::diagonal_score_quadratic(precision),
                         linear
                     };
 
@@ -110,11 +104,13 @@ struct diagonal_covariance_model {
                 means[k]
             );
 
-            score_row.constant =
-                std::log(weights[k])
-                + 0.5f * log_precision_det
-                - half_dimensions * log_2_pi
-                - 0.5f * mean_quadratic;
+            score_row.constant = gmm::weighted_gaussian_score_constant(
+                weights[k],
+                log_precision_det,
+                D,
+                mean_quadratic,
+                log_2_pi
+            );
         }
     }
 
@@ -195,15 +191,16 @@ struct diagonal_covariance_model {
             [&](auto index, auto mu) {
                 const float avg_x2 = eve::reduce(sum_x2_w[k][index]) / N_k;
                 const float mean_d = static_cast<float>(mu);
-                const float covariance = avg_x2 - mean_d * mean_d + reg_covar;
+                const float covariance = gmm::diagonal_covariance_from_raw_second_moment(
+                    avg_x2,
+                    mean_d,
+                    reg_covar
+                );
 
-                if (!(covariance > 0.0f)) {
-                    throw std::runtime_error(
-                        "Diagonal GMM covariance became non-positive; try increasing reg_covar"
-                    );
-                }
-
-                precisions[offset(k, index)] = 1.0f / covariance;
+                precisions[offset(k, index)] = gmm::checked_precision_from_covariance(
+                    covariance,
+                    "Diagonal GMM covariance became non-positive; try increasing reg_covar"
+                );
             },
             mean
         );

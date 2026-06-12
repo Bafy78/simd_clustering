@@ -19,6 +19,7 @@
 
 #include "../../layout/static_soa.hpp"
 #include "../../simd.hpp"
+#include "../covariance_math.hpp"
 
 template <eve::product_type SampleT>
 struct full_covariance_model {
@@ -140,8 +141,7 @@ struct full_covariance_model {
 
     template <class Weights, class Means>
     void refresh_score_data(const Weights& weights, const Means& means) {
-        const float log_2_pi = std::log(2.0f * std::numbers::pi_v<float>);
-        constexpr float half_dimensions = 0.5f * static_cast<float>(D);
+        const float log_2_pi = gmm::log_2pi();
 
         for (std::size_t k = 0; k < means.size(); ++k) {
             auto& score_row = score_data[k];
@@ -181,11 +181,13 @@ struct full_covariance_model {
                 }
             }
 
-            score_row.constant =
-                std::log(weights[k])
-                + 0.5f * log_precision_dets[k]
-                - half_dimensions * log_2_pi
-                - 0.5f * mean_quadratic;
+            score_row.constant = gmm::weighted_gaussian_score_constant(
+                weights[k],
+                log_precision_dets[k],
+                D,
+                mean_quadratic,
+                log_2_pi
+            );
         }
     }
 
