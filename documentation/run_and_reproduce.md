@@ -2,7 +2,7 @@
 
 This document is the operational guide for reproducing the benchmark artifacts. All commands below assume they are run from the repository root.
 
-## 1. Install system prerequisites
+## 🧰 1. Install system prerequisites
 
 The C++ compile command is defined in [`python/benchmark_pipeline/cpp_cases.py`](../python/benchmark_pipeline/cpp_cases.py). By default it expects:
 
@@ -31,7 +31,7 @@ Optional dependencies are only needed for the forensic scripts described in [Pro
 - `kcachegrind` if you want to inspect raw Callgrind files interactively;
 - `rg` / ripgrep for spill detection.
 
-## 2. Create the Python environment
+## 🐍 2. Create the Python environment
 
 ```bash
 python -m venv .venv
@@ -42,7 +42,7 @@ python -m pip install -r requirements.txt
 
 The requirements file covers the Python benchmark runners, dataset generation, postprocessing, reporting helpers, and notebook dependencies.
 
-## 3. Review or adjust the benchmark configuration
+## 📝 3. Review or adjust the benchmark configuration
 
 The sweep is controlled by `default_config()` in [`python/benchmark_pipeline/config.py`](../python/benchmark_pipeline/config.py).
 
@@ -50,7 +50,7 @@ Use `exclusion_rules` when a D/N/K point should not be run for one or more phase
 
 The runner executes the phases described in [Main supported algorithmic phases](architecture_and_artifacts.md#main-supported-algorithmic-phases). For the methodology behind the generated inputs, measured regions, repetition model, exclusions, and speedup intervals, see the [Benchmark methodology](benchmark_methodology.md).
 
-## 4. Run the benchmark sweep
+## 🚀 4. Run the benchmark sweep
 
 ```bash
 python python/benchmark_orchestrator.py
@@ -60,7 +60,7 @@ The orchestrator prepares the datasets directory, compiles the required C++ case
 
 Raw timing and metrics files are written under `datasets/`. Temporary binary input files are created during each configuration run and removed by the normal orchestrator. Running the orchestrator deletes the existing datasets directory before starting.
 
-## 5. Postprocess benchmark outputs
+## 🧹 5. Postprocess benchmark outputs
 
 The postprocessor defaults to reading `./datasets` and writing `./datasets/benchmark_summary.json`, so the normal command is:
 
@@ -87,7 +87,20 @@ python python/postprocess_benchmarks.py \
 
 The summary-generation and parity responsibilities are described in [Postprocessing and summary output](scikit_parity_and_validation.md#postprocessing-and-summary-output). The resulting `benchmark_summary.json` is the canonical input for reporting.
 
-## 6. Open the notebook report
+## 🔗 6. Optional: concatenate benchmark summaries
+
+When a benchmark sweep stops partway through, either intentionally or because the pipeline failed, you can still combine a previous summary with the newly postprocessed partial summary. This is useful when you want the notebook and reporting helpers to see one `benchmark_summary.json` and therefore draw the full set of available results in single graphs.
+
+```bash
+python python/concatenate_benchmark_summaries.py \
+  --low-priority datasets/benchmark_summary.previous.json \
+  --high-priority datasets/benchmark_summary.partial.json \
+  --output datasets/benchmark_summary.json
+```
+
+The merge preserves non-overlapping data and only replaces exact duplicate `configuration × phase × variant × parameterization` entries with the high-priority file. Schema-version differences are reported as warnings, but the tool still attempts a best-effort merge because older summaries may simply be missing newer fields.
+
+## 📓 7. Open the notebook report
 
 ```bash
 jupyter notebook benchmark_analysis.ipynb
@@ -95,7 +108,7 @@ jupyter notebook benchmark_analysis.ipynb
 
 The notebook expects to be launched from the repository root and reads `datasets/benchmark_summary.json` through the reporting helpers. To use a different postprocessed artifact, change the benchmark summary JSON path in the first cell.
 
-## 7. Optional forensic tools
+## 🔬 8. Optional forensic tools
 
 These tools are not part of the normal benchmark reproduction path. Their purpose is summarized in [Profiling and forensic tools](architecture_and_artifacts.md#profiling-and-forensic-tools).
 
@@ -135,7 +148,7 @@ python python/explain_gmm_diag_scikit_parity.py --force
 
 Outputs are written to `diagnostics_results/`
 
-## Troubleshooting
+## 🚑 Troubleshooting
 
 ### `g++-14: command not found`
 
