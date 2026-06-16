@@ -208,7 +208,17 @@ from python.benchmark_reporting.constants import (
     COL_DIMENSIONS,
     COL_SAMPLES,
     COL_CLUSTERS,
+    COL_EQUIVALENT_ALGORITHM_ITERS,
+    COL_LANGUAGE,
+    COL_PARAMS,
+    COL_PHASE,
+    COL_TIME_PER_ALGORITHM_ITER,
+    COL_TIME_S,
+    COL_VARIANT,
+    LANG_CPP,
+    PHASE_MAP,
 )
+from python.benchmark_reporting.transforms import filter_bench
 
 
 def make_cluster_pivot(
@@ -283,6 +293,299 @@ def add_initial_letter_annotations(
     ]
 
     return out, handles, label_to_letter
+
+
+def _phase_display_name_from_key(phase_key: str) -> str:
+    try:
+        return PHASE_MAP[phase_key]
+    except KeyError as exc:
+        valid = ", ".join(sorted(PHASE_MAP))
+        raise ValueError(
+            f"Unknown phase key {phase_key!r}; valid phase keys: {valid}"
+        ) from exc
+
+
+def _remove_unused_categories(df, columns):
+    out = df.copy()
+
+    for col in columns:
+        if col in out.columns and hasattr(out[col], "cat"):
+            out[col] = out[col].cat.remove_unused_categories()
+
+    return out
+
+
+def _format_variant_params_title(variant, params):
+    if str(params) == "Default":
+        return f"Variant: {variant}"
+    return f"Variant: {variant}; Params: {params}"
+
+
+def plot_fixed_costs_vs_algorithm_iteration_time(
+    df_bench,
+    *,
+    algorithm_phase_key: str,
+    algorithm_label: str,
+    fixed_phase_keys=("soa", "pp"),
+    max_samples=None,
+    fixed_cost_note: str | None = None,
+):
+    """Plot fixed C++ setup costs against an algorithm iteration baseline.
+
+    Fixed phases such as SoA conversion and K-Means++ do not have the same
+    parameterization space as algorithms. For example, GMM has covariance-type
+    parameterizations while SoA and K-Means++ do not. This helper therefore
+    pairs fixed costs with algorithm rows on D/N/K/variant and deliberately
+    replicates fixed costs across algorithm parameterizations.
+    """
+    algorithm_phase = _phase_display_name_from_key(algorithm_phase_key)
+    fixed_phases = [_phase_display_name_from_key(key) for key in fixed_phase_keys]
+
+    df_cpp = filter_bench(
+        df_bench,
+        language=LANG_CPP,
+    ).copy()
+
+    algorithm_N_values = set(
+        filter_bench(
+            df_cpp,
+            phase=algorithm_phase,
+        )[COL_SAMPLES].dropna().unique()
+    )
+
+    fixed_N_values = set(
+        filter_bench(
+            df_cpp,
+            phase=fixed_phases,
+        )[COL_SAMPLES].dropna().unique()
+    )
+
+    eligible_N_values = sorted(algorithm_N_values & fixed_N_values)
+
+    if not eligible_N_values:
+        print(
+            f"Skipping fixed-cost vs {algorithm_label} algorithm-iteration graph: "
+            f"requires C++ {algorithm_label} plus at least one of "
+            "C++ SoA / C++ K-Means++."
+        )
+        return []
+
+    if max_samples is None:
+        max_N = max(eligible_N_values)
+    elif max_samples in eligible_N_values:
+        max_N = max_samples
+    else:
+        print(
+            f"Skipping fixed-cost vs {algorithm_label} graph: "
+            f"requested N={max_samples} is not present for both algorithm and fixed costs."
+        )
+        return []
+
+    algorithm_cols = [
+        COL_DIMENSIONS,
+        COL_CLUSTERS,
+        COL_VARIANT,
+        COL_PARAMS,
+        COL_TIME_PER_ALGORITHM_ITER,
+    ]
+    fixed_cols = [
+        COL_DIMENSIONS,
+        COL_CLUSTERS,
+        COL_VARIANT,
+        COL_PHASE,
+        COL_TIME_S,
+    ]
+
+    df_algorithm = filter_bench(
+        df_bench,
+        phase=algorithm_phase,
+        language=LANG_CPP,
+        samples=max_N,
+    )[algorithm_cols].copy()
+
+    df_fixed = filter_bench(
+        df_bench,
+        phase=fixed_phases,
+        language=LANG_CPP,
+        samples=max_N,
+    )[fixed_cols].copy()
+
+    if df_algorithm.empty or df_fixed.empty:
+        print(
+            f"Skipping fixed-cost vs {algorithm_label} graph: missing algorithm or fixed-cost rows."
+        )
+        return []
+
+    # Fixed phases are parameterization-independent. Collapse any accidental
+    # duplicate Default-parameter rows before crossing them with algorithm params.
+    df_fixed = (
+        df_fixed
+        .groupby(
+            [COL_DIMENSIONS, COL_CLUSTERS, COL_VARIANT, COL_PHASE],
+            observed=True,
+            as_index=False,
+        )[COL_TIME_S]
+        .median()
+    )
+
+    df_plot = df_fixed.merge(
+        df_algorithm,
+        on=[COL_DIMENSIONS, COL_CLUSTERS, COL_VARIANT],
+        validate="many_to_many",
+    )
+
+    if df_plot.empty:
+        print(
+            f"Skipping fixed-cost vs {algorithm_label} graph: fixed-cost variants "
+            f"did not match any C++ {algorithm_label} variants."
+        )
+        return []
+
+    df_plot[COL_EQUIVALENT_ALGORITHM_ITERS] = (
+        df_plot[COL_TIME_S] / df_plot[COL_TIME_PER_ALGORITHM_ITER]
+    )
+    df_plot = _remove_unused_categories(
+        df_plot,
+        [COL_PHASE, COL_VARIANT, COL_PARAMS],
+    )
+
+    equivalent_iters_index_col = COL_EQUIVALENT_ALGORITHM_ITERS + "_index"
+    time_per_iter_index_col = COL_TIME_PER_ALGORITHM_ITER + "_index"
+    baseline_col = COL_TIME_PER_ALGORITHM_ITER + "_baseline_lowest_dim"
+
+    baseline = (
+        df_algorithm
+        .sort_values([COL_VARIANT, COL_PARAMS, COL_CLUSTERS, COL_DIMENSIONS])
+        .groupby(
+            [COL_CLUSTERS, COL_VARIANT, COL_PARAMS],
+            observed=True,
+            as_index=False,
+        )
+        .first()[[COL_CLUSTERS, COL_VARIANT, COL_PARAMS, COL_TIME_PER_ALGORITHM_ITER]]
+        .rename(columns={COL_TIME_PER_ALGORITHM_ITER: baseline_col})
+    )
+
+    df_plot_norm = df_plot.merge(
+        baseline,
+        on=[COL_CLUSTERS, COL_VARIANT, COL_PARAMS],
+        validate="many_to_one",
+    )
+
+    df_plot_norm[equivalent_iters_index_col] = (
+        df_plot_norm[COL_TIME_S] / df_plot_norm[baseline_col]
+    )
+    df_plot_norm[time_per_iter_index_col] = (
+        df_plot_norm[COL_TIME_PER_ALGORITHM_ITER] / df_plot_norm[baseline_col]
+    )
+    df_plot_norm = df_plot_norm.sort_values(
+        [COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_CLUSTERS, COL_PHASE]
+    )
+    df_plot_norm = _remove_unused_categories(
+        df_plot_norm,
+        [COL_PHASE, COL_VARIANT, COL_PARAMS],
+    )
+
+    figures = []
+
+    for (variant, params), df_variant in df_plot_norm.groupby(
+        [COL_VARIANT, COL_PARAMS],
+        observed=True,
+    ):
+        if df_variant.empty:
+            continue
+
+        plot_keys = (
+            df_variant[[COL_CLUSTERS]]
+            .drop_duplicates()
+            .sort_values([COL_CLUSTERS])
+            .reset_index(drop=True)
+        )
+        fig, axes = create_subplot_grid(
+            len(plot_keys),
+            cols=2,
+            row_height=5,
+            fig_width=12,
+        )
+        axes_flat = axes.flatten()
+
+        for i, row in plot_keys.iterrows():
+            k = row[COL_CLUSTERS]
+            ax = axes_flat[i]
+            data_k = filter_bench(df_variant, clusters=k)
+
+            sns.barplot(
+                data=data_k,
+                x=COL_DIMENSIONS,
+                y=equivalent_iters_index_col,
+                hue=COL_PHASE,
+                ax=ax,
+            )
+
+            data_line = data_k.drop_duplicates(subset=[COL_DIMENSIONS]).copy()
+
+            sns.pointplot(
+                data=data_line,
+                x=COL_DIMENSIONS,
+                y=time_per_iter_index_col,
+                ax=ax,
+                color="black",
+                markersize=6,
+                errorbar=None,
+            )
+
+            ax.set_title(f"K = {k}", bbox=SMALL_MULTIPLE_TITLE_STYLE)
+
+            if i % 2 == 0:
+                ax.set_ylabel(f"Cost in baseline {algorithm_label} iterations")
+            else:
+                ax.set_ylabel("")
+
+            ax.set_xlabel("D")
+            ax.set_yscale("log")
+            ax.yaxis.set_major_locator(mtick.LogLocator(base=10, subs=(1, 5)))
+            ax.yaxis.set_minor_locator(
+                mtick.LogLocator(base=10, subs=(2, 3, 4, 6, 7, 8, 9))
+            )
+            ax.yaxis.set_minor_formatter(mtick.NullFormatter())
+            ax.yaxis.set_major_formatter(mtick.FuncFormatter(lambda y, _: f"{y:g}"))
+
+            ax.grid(axis="y", which="major", linestyle="--", alpha=0.6)
+            ax.grid(axis="y", which="minor", linestyle=":", alpha=0.25)
+
+            if i == 0:
+                handles, labels = ax.get_legend_handles_labels()
+
+                line_handle = Line2D(
+                    [0],
+                    [0],
+                    color="black",
+                    marker="o",
+                    linestyle="-",
+                    label=f"{algorithm_label} time / iter growth",
+                )
+
+                ax.legend(
+                    handles=handles + [line_handle],
+                    labels=labels + [f"{algorithm_label} time / iter growth"],
+                    title=None,
+                )
+            elif ax.get_legend() is not None:
+                ax.get_legend().remove()
+
+        note = f"\n{fixed_cost_note}" if fixed_cost_note else ""
+        fig.suptitle(
+            f"Scaling of Fixed Costs vs {algorithm_label} Iteration Time\n"
+            f"{_format_variant_params_title(variant, params)}; "
+            f"normalized to the lowest D at N = {format_abbrev(max_N)}"
+            f"{note}",
+            fontsize=16,
+            y=1,
+        )
+
+        plt.tight_layout()
+        figures.append(fig)
+
+    return figures
 
 
 def plot_clustered_heatmap_grid(

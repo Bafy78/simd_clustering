@@ -62,9 +62,15 @@ For GMM, `run_once()` runs the EM fit from the preloaded initial weights, means,
 
 For K-Means++, `run_once()` performs the initialization procedure itself. Since this phase is stochastic today, different timing repetitions may use different sampled candidates.
 
-For SoA conversion, the conversion is the thing being measured. The raw AoS data is loaded before timing, and `run_once()` copies it into the native layout.
+For SoA conversion, the conversion is the thing being measured. The raw AoS data is loaded before timing, and `run_once()` copies it into the native layout. This sample-layout conversion is shared by Lloyd and GMM C++ paths, so the same SoA timing artifacts can be interpreted against either algorithm's iteration baseline.
 
 For Python benchmarks, each `bench_*.py` script loads the shared binary inputs before calling `pyperf.Runner.bench_func(...)`. The measured function is the wrapped scikit-learn operation. For Lloyd and GMM, estimator construction and `.fit(...)` are inside the measured function because they are part of the operation being compared.
+
+### Fixed-cost reporting
+
+The notebook reports fixed C++ costs such as SoA conversion and standalone K-Means++ center selection against iterative algorithm baselines. For Lloyd, those costs are expressed in units of baseline Lloyd iterations. For GMM, they are expressed in units of baseline GMM EM iterations and are replicated across covariance-type parameterizations because the fixed-cost artifacts themselves are not covariance-specific.
+
+The GMM fixed-cost plot should not be read as a full GMM-initialization benchmark. It includes K-Means++ center selection when that phase is enabled, but it does not include the extra setup work used to derive GMM weights and precision/covariance initialization artifacts.
 
 
 ## 🧵 Threading boundary

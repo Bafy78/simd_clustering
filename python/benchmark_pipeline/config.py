@@ -32,26 +32,29 @@ class BenchmarkConfig:
 
 def default_config() -> BenchmarkConfig:
     return BenchmarkConfig(
-        test_Ds=[1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 17, 23, 30, 40, 63, 80, 100, 150],
+        test_Ds=[1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 17, 23, 30, 40, 60, 90],
         test_Ns=[
             4_000,
             15_000,
             50_000,
             100_000,
             300_000,
-            800_000,
-            2_000_000,
-            10_000_000,
+            800_000
         ],
         test_Ks=[10, 25, 50],
         pipeline=PipelineOptions(
-            timing_processes=8,
-            timing_values=6,
+            timing_processes=5,
+            timing_values=5,
             timing_min_time=0.05,
-            gmm_covariance_types=(),
+            gmm_covariance_types=("spherical", "diag", "full",),
             cpp_soa_cases=("soa_static", "soa_dynamic"),
-            cpp_pp_cases=(),
+            cpp_pp_cases=("pp_static", "pp_dynamic"),
             run_python_pp=False,
+            cpp_lloyd_cases=(),
+            run_python_lloyd=False,
+            cpp_gmm_cases=("gmm_static", "gmm_dynamic"),
+            run_python_gmm=True,
+        ),
         exclusion_rules=(
             BenchmarkExclusionRule(
                 phase_keys=("lloyd",),
