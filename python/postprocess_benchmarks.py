@@ -11,6 +11,7 @@ from benchmark_postprocess.parity import (
 )
 from benchmark_postprocess.records import load_timing_process_aware_records
 from benchmark_postprocess.summary import build_summary
+from benchmark_pipeline.exclusions import EXCLUSIONS_FILENAME, load_exclusion_manifest
 from benchmark_pipeline.paths import repo_relative_path
 
 
@@ -61,6 +62,10 @@ def main() -> None:
         completed_metric_keys_by_phase=completed_metric_keys_by_phase,
     )
 
+    exclusions = load_exclusion_manifest(args.data_dir / EXCLUSIONS_FILENAME)[
+        "exclusions"
+    ]
+
     print("Step 3/4: Building summary and running bootstrap intervals...")
     summary = build_summary(
         records,
@@ -69,6 +74,7 @@ def main() -> None:
         bootstrap_seed=args.bootstrap_seed,
         lloyd_metrics=lloyd_metrics,
         gmm_metrics=gmm_metrics,
+        exclusions=exclusions,
     )
 
     print(f"Step 4/4: Writing output to {args.output}...")
@@ -85,6 +91,7 @@ def main() -> None:
     print(f"GMM metrics records: {len(gmm_metrics)}")
     print(f"GMM completed configs: {len(gmm_config_ids)}")
     print(f"GMM completed config/params keys: {len(gmm_metric_keys)}")
+    print(f"Configured benchmark phase exclusions: {len(exclusions)}")
 
 
 if __name__ == "__main__":

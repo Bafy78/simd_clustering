@@ -39,6 +39,9 @@ COL_INERTIA = "Inertia"
 COL_COVARIANCE_TYPE = "Covariance_Type"
 COL_LOWER_BOUND = "Lower_Bound"
 
+COL_EXCLUSION_REASON = "Exclusion Reason"
+COL_EXCLUSION_RULES = "Exclusion Rules"
+
 # Derived / analysis columns
 COL_SPEEDUP = "Speedup (x)"
 COL_SPEEDUP_CI_LOW = "Speedup CI Low"

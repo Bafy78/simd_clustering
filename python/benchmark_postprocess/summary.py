@@ -86,20 +86,39 @@ def summarize_language_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _config_entry_for_values(
+    configs: dict[tuple[int, int, int], dict[str, Any]],
+    *,
+    D: int,
+    N: int,
+    K: int,
+) -> dict[str, Any]:
+    config_key = (int(D), int(N), int(K))
+
+    if config_key not in configs:
+        D, N, K = config_key
+        configs[config_key] = {
+            "dimensions": D,
+            "samples": N,
+            "clusters": K,
+            "config_id": f"{D}D_{N}N_{K}K",
+            "phases": {},
+            "excluded_phases": {},
+        }
+
+    return configs[config_key]
+
+
 def _config_entry(
     configs: dict[tuple[int, int, int], dict[str, Any]],
     identity: BenchmarkIdentity,
 ) -> dict[str, Any]:
-    if identity.config_key not in configs:
-        configs[identity.config_key] = {
-            "dimensions": identity.dimensions,
-            "samples": identity.samples,
-            "clusters": identity.clusters,
-            "config_id": identity.config_id,
-            "phases": {},
-        }
-
-    return configs[identity.config_key]
+    return _config_entry_for_values(
+        configs,
+        D=identity.dimensions,
+        N=identity.samples,
+        K=identity.clusters,
+    )
 
 
 def _phase_entry(
@@ -185,6 +204,46 @@ def _append_parity_status(records: list[dict[str, Any]], phase_name: str) -> Non
     )
 
 
+def _append_exclusions(
+    configs: dict[tuple[int, int, int], dict[str, Any]],
+    exclusions: list[dict[str, Any]],
+) -> None:
+    for exclusion in exclusions:
+        config_entry = _config_entry_for_values(
+            configs,
+            D=int(exclusion["dimensions"]),
+            N=int(exclusion["samples"]),
+            K=int(exclusion["clusters"]),
+        )
+
+        phase_key = str(exclusion["phase_key"])
+        phase_name = str(exclusion.get("phase", phase_key))
+        config_entry.setdefault("excluded_phases", {})[phase_name] = {
+            "phase_key": phase_key,
+            "phase": phase_name,
+            "reason": exclusion.get("reason", ""),
+            "matched_rules": exclusion.get("matched_rules", []),
+        }
+
+
+def _sorted_exclusions(exclusions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        exclusions,
+        key=lambda item: (
+            int(item["dimensions"]),
+            int(item["samples"]),
+            int(item["clusters"]),
+            str(item["phase_key"]),
+        ),
+    )
+
+
+def _sorted_config_entries(
+    configs: dict[tuple[int, int, int], dict[str, Any]]
+) -> list[dict[str, Any]]:
+    return [configs[config_key] for config_key in sorted(configs)]
+
+
 def build_summary(
     records: list[dict[str, Any]],
     bootstrap_iterations: int,
@@ -192,8 +251,10 @@ def build_summary(
     bootstrap_seed: int,
     lloyd_metrics: dict[MetricsKey, dict[str, Any]],
     gmm_metrics: dict[MetricsKey, dict[str, Any]] | None = None,
+    exclusions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     grouped = group_records(records)
+    exclusions = _sorted_exclusions(exclusions or [])
 
     configs: dict[tuple[int, int, int], dict[str, Any]] = {}
     lloyd_comparison_records: list[dict[str, Any]] = []
@@ -314,18 +375,21 @@ def build_summary(
                             parameterization_entry["parity"] = parity
                             gmm_parity_records.append(parity)
 
+    _append_exclusions(configs, exclusions)
+
     _append_parity_status(lloyd_comparison_records, "Lloyd")
     _append_parity_status(gmm_parity_records, "GMM")
 
     return {
         "metadata": {
-            "schema_version": 3,
+            "schema_version": 4,
             "description": (
                 "Post-processed benchmark summary. Raw pyperf/nanobench JSON "
                 "values are grouped by timing process/pyperf run before aggregation. "
                 "C++ variants and algorithm parameterizations are represented explicitly; "
                 "Python reference runs are attached to each comparable C++ variant with "
-                "the same parameterization."
+                "the same parameterization. Configured exclusions are preserved as "
+                "reported-but-not-run D/N/K/phase entries."
             ),
             "time_unit": "seconds",
             "time_per_algorithm_iteration_definition": (
@@ -333,6 +397,7 @@ def build_summary(
                 "For non-iterative phases, identical to total time."
             ),
             "speedup_definition": "python_time / cpp_time",
+            "exclusion_count": len(exclusions),
             "bootstrap": {
                 "method": "independent clustered bootstrap by timing process/pyperf run",
                 "bootstrap_iterations": int(bootstrap_iterations),
@@ -358,5 +423,6 @@ def build_summary(
                 ),
             },
         },
-        "configs": list(configs.values()),
+        "exclusions": exclusions,
+        "configs": _sorted_config_entries(configs),
     }

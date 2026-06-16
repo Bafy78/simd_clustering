@@ -46,7 +46,9 @@ The requirements file covers the Python benchmark runners, dataset generation, p
 
 The sweep is controlled by `default_config()` in [`python/benchmark_pipeline/config.py`](../python/benchmark_pipeline/config.py).
 
-The runner executes the phases described in [Main supported algorithmic phases](architecture_and_artifacts.md#main-supported-algorithmic-phases). For the methodology behind the generated inputs, measured regions, repetition model, and speedup intervals, see the [Benchmark methodology](benchmark_methodology.md).
+Use `exclusion_rules` when a D/N/K point should not be run for one or more phases. Each rule is a `BenchmarkExclusionRule` with a user-facing `reason`; the orchestrator writes the resolved skips to `datasets/benchmark_exclusions.json`, and postprocessing carries those messages into `benchmark_summary.json`
+
+The runner executes the phases described in [Main supported algorithmic phases](architecture_and_artifacts.md#main-supported-algorithmic-phases). For the methodology behind the generated inputs, measured regions, repetition model, exclusions, and speedup intervals, see the [Benchmark methodology](benchmark_methodology.md).
 
 ## 4. Run the benchmark sweep
 
@@ -91,7 +93,7 @@ The summary-generation and parity responsibilities are described in [Postprocess
 jupyter notebook benchmark_analysis.ipynb
 ```
 
-The notebook expects to be launched from the repository root and reads `datasets/benchmark_summary.json` through the reporting helpers. You can always change its dataset folder (where the summary should be retrieved from) in the first cell.
+The notebook expects to be launched from the repository root and reads `datasets/benchmark_summary.json` through the reporting helpers. To use a different postprocessed artifact, change the benchmark summary JSON path in the first cell.
 
 ## 7. Optional forensic tools
 

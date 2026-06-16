@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from benchmark_pipeline.exclusions import BenchmarkExclusionRule
 from benchmark_pipeline.paths import DATASETS_DIR
 
 
@@ -24,6 +25,7 @@ class BenchmarkConfig:
     test_Ns: list[int]
     test_Ks: list[int]
     pipeline: PipelineOptions
+    exclusion_rules: tuple[BenchmarkExclusionRule, ...] = ()
     datasets_dir: str = str(DATASETS_DIR)
     keep_inputs: bool = False
 
@@ -50,9 +52,34 @@ def default_config() -> BenchmarkConfig:
             cpp_soa_cases=("soa_static", "soa_dynamic"),
             cpp_pp_cases=(),
             run_python_pp=False,
-            cpp_lloyd_cases=("lloyd_dynamic", "lloyd_static", "lloyd_auto"),
-            run_python_lloyd=True,
-            cpp_gmm_cases=(),
-            run_python_gmm=False,
+        exclusion_rules=(
+            BenchmarkExclusionRule(
+                phase_keys=("lloyd",),
+                dimensions=(100,),
+                samples=(10_000_000,),
+                reason=(
+                    "Excluded because the scikit-learn Lloyd reference no longer "
+                    "fits in RAM, which would produce misleading speedups."
+                ),
+            ),
+            BenchmarkExclusionRule(
+                phase_keys=("gmm",),
+                min_clusters=11,
+                min_samples=300_001,
+                reason="Excluded because GMM doesn't scale well with K and N, so the "
+                       "pipeline would simply take too long to run",
+            ),
+            BenchmarkExclusionRule(
+                phase_keys=("gmm",),
+                dimensions=(90,),
+                samples=(4_000,),
+                clusters=(50,),
+                reason=(
+                    "Excluded because full-covariance estimation is underdetermined: "
+                    "each component has fewer samples than dimensions (`N / K <= D`), "
+                    "producing rank-deficient covariance matrices that are only marginally "
+                    "regularized and can fail positive-definiteness checks."
+                ),
+            ),
         ),
     )

@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from benchmark_pipeline.config import PipelineOptions
+from benchmark_pipeline.exclusions import BenchmarkExclusionRule
 from benchmark_pipeline.metrics import (
     validate_cpp_timing_process_metrics,
     write_json,
@@ -224,10 +225,20 @@ def execute_pipeline(
     options: PipelineOptions,
     datasets_dir: str | Path = DATASETS_DIR,
     keep_inputs: bool = False,
+    exclusion_rules: tuple[BenchmarkExclusionRule, ...] = (),
 ) -> None:
     print(f"\n--- Running Config: {case.label} ---")
 
-    pipeline = build_pipeline(case, options, datasets_dir=datasets_dir)
+    pipeline = build_pipeline(
+        case,
+        options,
+        datasets_dir=datasets_dir,
+        exclusion_rules=exclusion_rules,
+    )
+
+    if not pipeline:
+        print(f"Skipping {case.label}: all enabled phases are excluded.")
+        return
 
     for task in pipeline:
         if task.cpp_json_arg is not None:

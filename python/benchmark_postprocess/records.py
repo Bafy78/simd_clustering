@@ -8,6 +8,7 @@ from benchmark_postprocess.parity import (
     gmm_algorithm_iteration_count,
     lloyd_algorithm_iteration_count,
 )
+from benchmark_pipeline.exclusions import EXCLUSIONS_FILENAME
 
 
 def iter_timing_values(path: Path):
@@ -64,8 +65,9 @@ def load_timing_process_aware_records(
     )
 
     for json_path in sorted(data_dir.glob("*.json")):
-        if json_path.name == "benchmark_summary.json" or json_path.name.startswith(
-            known_artifact_prefixes
+        if (
+            json_path.name in {"benchmark_summary.json", EXCLUSIONS_FILENAME}
+            or json_path.name.startswith(known_artifact_prefixes)
         ):
             continue
 

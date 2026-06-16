@@ -3,6 +3,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from benchmark_pipeline.config import PipelineOptions
+from benchmark_pipeline.exclusions import (
+    BenchmarkExclusionRule,
+    excluded_phase_keys_for_case,
+)
 from benchmark_pipeline.cpp_cases import get_cpp_case, nanobench_binary_path
 from benchmark_pipeline.gmm_covariance import validate_gmm_covariance_types
 from benchmark_pipeline.paths import DATASETS_DIR, repo_path, repo_relative_path
@@ -227,6 +231,20 @@ class BenchmarkArtifacts:
         )
 
 
+def enabled_phase_keys_for_options(options: PipelineOptions) -> set[str]:
+    phase_keys: set[str] = set()
+
+    if options.cpp_soa_cases:
+        phase_keys.add("soa")
+    if options.cpp_pp_cases or options.run_python_pp:
+        phase_keys.add("pp")
+    if options.cpp_lloyd_cases or options.run_python_lloyd:
+        phase_keys.add("lloyd")
+    if options.cpp_gmm_cases or options.run_python_gmm:
+        phase_keys.add("gmm")
+
+    return phase_keys
+
 def cpp_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
     case = get_cpp_case(cpp_case)
     if case.phase_key == "gmm" and params_key != NO_PARAMS:
@@ -349,16 +367,30 @@ def build_pipeline(
     case: BenchmarkCase,
     options: PipelineOptions,
     datasets_dir: str | Path = DATASETS_DIR,
+    exclusion_rules: tuple[BenchmarkExclusionRule, ...] = (),
 ) -> list[Task]:
     """Defines the strict contract of tasks for a single D/N/K configuration."""
     validate_gmm_covariance_types(options.gmm_covariance_types)
     _validate_cpp_gmm_cases(options.cpp_gmm_cases, options.gmm_covariance_types)
 
-    needs_gmm_init = bool(options.cpp_gmm_cases) or options.run_python_gmm
-    if needs_gmm_init and not options.gmm_covariance_types:
+    enabled_phase_keys = enabled_phase_keys_for_options(options)
+    excluded_phase_keys = excluded_phase_keys_for_case(
+        D=case.D,
+        N=case.N,
+        K=case.K,
+        rules=exclusion_rules,
+        phase_keys=enabled_phase_keys,
+    )
+    active_phase_keys = enabled_phase_keys - excluded_phase_keys
+
+    needs_gmm_init = "gmm" in active_phase_keys
+    if ("gmm" in enabled_phase_keys) and not options.gmm_covariance_types:
         raise ValueError(
             "At least one GMM covariance type is required when GMM tasks are enabled."
         )
+
+    if not active_phase_keys:
+        return []
 
     artifacts = BenchmarkArtifacts.for_case(case, datasets_dir)
     setup_gmm_covariance_types = (
@@ -372,109 +404,26 @@ def build_pipeline(
         )
     ]
 
-    for cpp_case in options.cpp_soa_cases:
-        cpp_case_info = get_cpp_case(cpp_case)
-        add_cpp_case_task(
-            tasks,
-            cpp_case,
-            [
-                artifacts.dataset_bin,
-                str(case.N),
-            ],
-            json_out=artifacts.timing(
-                cpp_case_info.phase_key,
-                cpp_case_info.variant_key,
-                "cpp",
-            ),
-            options=options,
-        )
-
-    for cpp_case in options.cpp_pp_cases:
-        cpp_case_info = get_cpp_case(cpp_case)
-        add_cpp_case_task(
-            tasks,
-            cpp_case,
-            [
-                artifacts.dataset_bin,
-                str(case.N),
-                str(case.K),
-            ],
-            json_out=artifacts.timing(
-                cpp_case_info.phase_key,
-                cpp_case_info.variant_key,
-                "cpp",
-            ),
-            options=options,
-        )
-
-    if options.run_python_pp:
-        tasks.append(
-            Task(
-                name="Python: K-Means++ Initialization",
-                command=[
-                    sys.executable,
-                    repo_path("python", "benchmark_pipeline", "benches", "bench_pp.py"),
-                    "--dataset-bin",
+    if "soa" in active_phase_keys:
+        for cpp_case in options.cpp_soa_cases:
+            cpp_case_info = get_cpp_case(cpp_case)
+            add_cpp_case_task(
+                tasks,
+                cpp_case,
+                [
                     artifacts.dataset_bin,
-                    *case.dimension_args(),
-                    *python_pyperf_args(
-                        options,
-                        artifacts.timing("pp", REFERENCE_VARIANT, "py"),
-                    ),
+                    str(case.N),
                 ],
+                json_out=artifacts.timing(
+                    cpp_case_info.phase_key,
+                    cpp_case_info.variant_key,
+                    "cpp",
+                ),
+                options=options,
             )
-        )
 
-    for cpp_case in options.cpp_lloyd_cases:
-        cpp_case_info = get_cpp_case(cpp_case)
-        add_cpp_case_task(
-            tasks,
-            cpp_case,
-            [
-                artifacts.dataset_bin,
-                str(case.N),
-                str(case.K),
-                artifacts.init_centroids_bin,
-            ],
-            metrics_out=artifacts.metrics(
-                cpp_case_info.phase_key,
-                cpp_case_info.variant_key,
-                "cpp",
-            ),
-            json_out=artifacts.timing(
-                cpp_case_info.phase_key,
-                cpp_case_info.variant_key,
-                "cpp",
-            ),
-            options=options,
-        )
-
-    if options.run_python_lloyd:
-        tasks.append(
-            Task(
-                name="Python: Lloyd Algorithm",
-                command=[
-                    sys.executable,
-                    repo_path("python", "benchmark_pipeline", "benches", "bench_lloyd.py"),
-                    "--dataset-bin",
-                    artifacts.dataset_bin,
-                    *case.dimension_args(),
-                    "--init-centroids-bin",
-                    artifacts.init_centroids_bin,
-                    "--metrics-file",
-                    artifacts.metrics("lloyd", REFERENCE_VARIANT, "py"),
-                    *python_pyperf_args(
-                        options,
-                        artifacts.timing("lloyd", REFERENCE_VARIANT, "py"),
-                    ),
-                ],
-            )
-        )
-
-    for covariance_type in options.gmm_covariance_types:
-        gmm_precisions_bin = artifacts.gmm_precisions_bin(covariance_type)
-
-        for cpp_case in options.cpp_gmm_cases:
+    if "pp" in active_phase_keys:
+        for cpp_case in options.cpp_pp_cases:
             cpp_case_info = get_cpp_case(cpp_case)
             add_cpp_case_task(
                 tasks,
@@ -483,63 +432,150 @@ def build_pipeline(
                     artifacts.dataset_bin,
                     str(case.N),
                     str(case.K),
-                    artifacts.gmm_weights_bin,
-                    artifacts.gmm_means_bin,
-                    gmm_precisions_bin,
-                    covariance_type,
+                ],
+                json_out=artifacts.timing(
+                    cpp_case_info.phase_key,
+                    cpp_case_info.variant_key,
+                    "cpp",
+                ),
+                options=options,
+            )
+
+        if options.run_python_pp:
+            tasks.append(
+                Task(
+                    name="Python: K-Means++ Initialization",
+                    command=[
+                        sys.executable,
+                        repo_path("python", "benchmark_pipeline", "benches", "bench_pp.py"),
+                        "--dataset-bin",
+                        artifacts.dataset_bin,
+                        *case.dimension_args(),
+                        *python_pyperf_args(
+                            options,
+                            artifacts.timing("pp", REFERENCE_VARIANT, "py"),
+                        ),
+                    ],
+                )
+            )
+
+    if "lloyd" in active_phase_keys:
+        for cpp_case in options.cpp_lloyd_cases:
+            cpp_case_info = get_cpp_case(cpp_case)
+            add_cpp_case_task(
+                tasks,
+                cpp_case,
+                [
+                    artifacts.dataset_bin,
+                    str(case.N),
+                    str(case.K),
+                    artifacts.init_centroids_bin,
                 ],
                 metrics_out=artifacts.metrics(
                     cpp_case_info.phase_key,
                     cpp_case_info.variant_key,
                     "cpp",
-                    covariance_type,
                 ),
                 json_out=artifacts.timing(
                     cpp_case_info.phase_key,
                     cpp_case_info.variant_key,
                     "cpp",
-                    covariance_type,
                 ),
                 options=options,
-                params_key=covariance_type,
             )
 
-        if options.run_python_gmm:
+        if options.run_python_lloyd:
             tasks.append(
                 Task(
-                    name=f"Python: GaussianMixture EM ({covariance_type} covariance)",
+                    name="Python: Lloyd Algorithm",
                     command=[
                         sys.executable,
-                        repo_path("python", "benchmark_pipeline", "benches", "bench_gmm.py"),
+                        repo_path("python", "benchmark_pipeline", "benches", "bench_lloyd.py"),
                         "--dataset-bin",
                         artifacts.dataset_bin,
                         *case.dimension_args(),
-                        "--covariance-type",
-                        covariance_type,
-                        "--gmm-weights-bin",
-                        artifacts.gmm_weights_bin,
-                        "--gmm-means-bin",
-                        artifacts.gmm_means_bin,
-                        "--gmm-precisions-bin",
-                        gmm_precisions_bin,
+                        "--init-centroids-bin",
+                        artifacts.init_centroids_bin,
                         "--metrics-file",
-                        artifacts.metrics(
-                            "gmm",
-                            REFERENCE_VARIANT,
-                            "py",
-                            covariance_type,
-                        ),
+                        artifacts.metrics("lloyd", REFERENCE_VARIANT, "py"),
                         *python_pyperf_args(
                             options,
-                            artifacts.timing(
+                            artifacts.timing("lloyd", REFERENCE_VARIANT, "py"),
+                        ),
+                    ],
+                )
+            )
+
+    if "gmm" in active_phase_keys:
+        for covariance_type in options.gmm_covariance_types:
+            gmm_precisions_bin = artifacts.gmm_precisions_bin(covariance_type)
+
+            for cpp_case in options.cpp_gmm_cases:
+                cpp_case_info = get_cpp_case(cpp_case)
+                add_cpp_case_task(
+                    tasks,
+                    cpp_case,
+                    [
+                        artifacts.dataset_bin,
+                        str(case.N),
+                        str(case.K),
+                        artifacts.gmm_weights_bin,
+                        artifacts.gmm_means_bin,
+                        gmm_precisions_bin,
+                        covariance_type,
+                    ],
+                    metrics_out=artifacts.metrics(
+                        cpp_case_info.phase_key,
+                        cpp_case_info.variant_key,
+                        "cpp",
+                        covariance_type,
+                    ),
+                    json_out=artifacts.timing(
+                        cpp_case_info.phase_key,
+                        cpp_case_info.variant_key,
+                        "cpp",
+                        covariance_type,
+                    ),
+                    options=options,
+                    params_key=covariance_type,
+                )
+
+            if options.run_python_gmm:
+                tasks.append(
+                    Task(
+                        name=f"Python: GaussianMixture EM ({covariance_type} covariance)",
+                        command=[
+                            sys.executable,
+                            repo_path("python", "benchmark_pipeline", "benches", "bench_gmm.py"),
+                            "--dataset-bin",
+                            artifacts.dataset_bin,
+                            *case.dimension_args(),
+                            "--covariance-type",
+                            covariance_type,
+                            "--gmm-weights-bin",
+                            artifacts.gmm_weights_bin,
+                            "--gmm-means-bin",
+                            artifacts.gmm_means_bin,
+                            "--gmm-precisions-bin",
+                            gmm_precisions_bin,
+                            "--metrics-file",
+                            artifacts.metrics(
                                 "gmm",
                                 REFERENCE_VARIANT,
                                 "py",
                                 covariance_type,
                             ),
-                        ),
-                    ],
+                            *python_pyperf_args(
+                                options,
+                                artifacts.timing(
+                                    "gmm",
+                                    REFERENCE_VARIANT,
+                                    "py",
+                                    covariance_type,
+                                ),
+                            ),
+                        ],
+                    )
                 )
-            )
 
     return tasks

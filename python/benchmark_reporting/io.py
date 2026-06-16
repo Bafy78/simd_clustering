@@ -7,25 +7,26 @@ from python.benchmark_pipeline.paths import repo_relative_path
 
 from .constants import *
 
-SUMMARY_FILENAME = "benchmark_summary.json"
+DEFAULT_BENCHMARK_SUMMARY_JSON = Path("datasets/benchmark_summary.json")
 
 
-def _summary_path(
-    data_dir=Path("datasets"), summary_filename=SUMMARY_FILENAME
+def _resolve_summary_json(
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
 ) -> Path:
-    data_dir = repo_relative_path(data_dir)
+    path = repo_relative_path(summary_json)
 
-    if data_dir.is_file():
-        return data_dir
+    if path.is_dir():
+        raise IsADirectoryError(
+            f"Expected benchmark summary JSON file, got directory: {path}"
+        )
 
-    return data_dir / summary_filename
+    return path
 
 
 def load_benchmark_summary(
-    data_dir=Path("datasets"),
-    summary_filename=SUMMARY_FILENAME,
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
 ) -> dict[str, Any]:
-    path = _summary_path(data_dir, summary_filename)
+    path = _resolve_summary_json(summary_json)
 
     if not path.exists():
         raise FileNotFoundError(
@@ -35,6 +36,47 @@ def load_benchmark_summary(
 
     with path.open("r") as f:
         return json.load(f)
+
+
+def load_exclusion_summary(
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
+) -> pd.DataFrame:
+    """Load configured benchmark exclusions from benchmark_summary.json."""
+    summary = load_benchmark_summary(summary_json)
+    records: list[dict[str, Any]] = []
+
+    for exclusion in summary.get("exclusions", []):
+        phase_key = exclusion.get("phase_key")
+        records.append(
+            {
+                COL_PHASE: _phase_display_name(
+                    phase_key,
+                    exclusion.get("phase", phase_key),
+                ),
+                COL_DIMENSIONS: int(exclusion["dimensions"]),
+                COL_SAMPLES: int(exclusion["samples"]),
+                COL_CLUSTERS: int(exclusion["clusters"]),
+                COL_EXCLUSION_REASON: exclusion.get("reason", ""),
+                COL_EXCLUSION_RULES: ", ".join(
+                    str(rule.get("rule_index"))
+                    for rule in exclusion.get("matched_rules", [])
+                ),
+            }
+        )
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        return df
+
+    df[COL_PHASE] = pd.Categorical(
+        df[COL_PHASE],
+        categories=list(PHASE_MAP.values()),
+        ordered=True,
+    )
+
+    return df.sort_values(
+        [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+    ).reset_index(drop=True)
 
 
 def _language_display_name(summary_language_name: str) -> str:
@@ -119,13 +161,12 @@ def _iter_phase_variant_parameterizations(
 
 
 def load_benchmark_data(
-    data_dir=Path("datasets"),
-    summary_filename=SUMMARY_FILENAME,
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
     time_field: str = "time_s",
     statistic: str = "median",
 ) -> pd.DataFrame:
     """
-    Compatibility loader for the report notebook.
+    Load summarized timing records from benchmark_summary.json.
 
     Returns one row per:
         config × phase × variant × params × language
@@ -133,7 +174,7 @@ def load_benchmark_data(
     Python reference rows are repeated per C++ variant when the summary used a
     shared reference to compute per-variant speedups.
     """
-    summary = load_benchmark_summary(data_dir, summary_filename)
+    summary = load_benchmark_summary(summary_json)
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
@@ -250,8 +291,7 @@ def load_benchmark_data(
 
 
 def load_speedup_summary(
-    data_dir=Path("datasets"),
-    summary_filename=SUMMARY_FILENAME,
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
     time_field: str = "time_per_algorithm_iteration_s",
     ratio_statistic: str = "median_ratio",
 ) -> pd.DataFrame:
@@ -261,7 +301,7 @@ def load_speedup_summary(
 
     Default uses median speedup on time-per-algorithm-iteration.
     """
-    summary = load_benchmark_summary(data_dir, summary_filename)
+    summary = load_benchmark_summary(summary_json)
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
@@ -351,11 +391,10 @@ def load_speedup_summary(
 
 
 def load_lloyd_parity_summary(
-    data_dir=Path("datasets"),
-    summary_filename=SUMMARY_FILENAME,
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
 ) -> pd.DataFrame:
     """Load Lloyd parity/inertia results from benchmark_summary.json."""
-    summary = load_benchmark_summary(data_dir, summary_filename)
+    summary = load_benchmark_summary(summary_json)
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
@@ -431,11 +470,10 @@ def load_lloyd_parity_summary(
 
 
 def load_gmm_parity_summary(
-    data_dir=Path("datasets"),
-    summary_filename=SUMMARY_FILENAME,
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
 ) -> pd.DataFrame:
     """Load GMM C++/Python parity records from benchmark_summary.json."""
-    summary = load_benchmark_summary(data_dir, summary_filename)
+    summary = load_benchmark_summary(summary_json)
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
