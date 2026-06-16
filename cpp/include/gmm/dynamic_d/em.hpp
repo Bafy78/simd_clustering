@@ -221,8 +221,6 @@ struct dynamic_gmm_micro_gemm_em_state {
         const typename CovariancePolicy::template score_cache<ACTIVE_N_VECTORS>& cache,
         const std::array<wide_f, ACTIVE_N_VECTORS>& denom
     ) {
-        constexpr std::size_t card = simd_cardinal();
-
         std::array<wide_f, ACTIVE_N_VECTORS> inv_denom;
         for (std::size_t sample_vector = 0; sample_vector < ACTIVE_N_VECTORS; ++sample_vector) {
             inv_denom[sample_vector] = wide_f(1.0f) / denom[sample_vector];
@@ -259,17 +257,18 @@ struct dynamic_gmm_micro_gemm_em_state {
             }
 
             for (std::size_t d = 0; d < D; ++d) {
-                const float* sample_dimension = samples.dimension(d);
-
                 std::array<wide_f, ACTIVE_N_VECTORS> x;
                 std::array<wide_f, ACTIVE_N_VECTORS> x2;
 
-                for (std::size_t sample_vector = 0; sample_vector < ACTIVE_N_VECTORS; ++sample_vector) {
-                    x[sample_vector] = eve::load[ignore](
-                        eve::as_aligned(sample_dimension + n + sample_vector * card)
-                    );
-                    x2[sample_vector] = x[sample_vector] * x[sample_vector];
-                }
+                covariance.template load_dimension_values<ACTIVE_N_VECTORS>(
+                    samples,
+                    n,
+                    d,
+                    cache,
+                    ignore,
+                    x,
+                    x2
+                );
 
                 for (std::size_t t = 0; t < k_count; ++t) {
                     const std::size_t k = k0 + t;

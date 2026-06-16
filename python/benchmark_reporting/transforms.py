@@ -339,6 +339,10 @@ def _safe_ratio(numerator, denominator):
     )
 
 
+def _algorithm_iteration_pressure(diff_abs):
+    return pd.to_numeric(diff_abs, errors="coerce")
+
+
 def add_gmm_parity_pressure(df):
     out = df.copy()
 
@@ -360,9 +364,8 @@ def add_gmm_parity_pressure(df):
                 out["Covariances Max Rel Diff"],
                 out["Covariances Max Rel Diff Threshold"],
             ),
-            "algorithm_iterations": _safe_ratio(
+            "algorithm_iterations": _algorithm_iteration_pressure(
                 out["Algorithm Iteration Diff Abs"],
-                out["Algorithm Iteration Diff Threshold Abs"],
             ),
         }
     )
@@ -382,9 +385,8 @@ def add_lloyd_parity_pressure(df):
                 out["Diff (%)"],
                 out["Inertia Diff Threshold (%)"],
             ),
-            "algorithm_iterations": _safe_ratio(
+            "algorithm_iterations": _algorithm_iteration_pressure(
                 out["Algorithm Iteration Diff Abs"],
-                out["Algorithm Iteration Diff Threshold Abs"],
             ),
         }
     )

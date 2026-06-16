@@ -65,7 +65,7 @@ struct full_covariance_model {
           reg_covar(reg_covar_) {}
 
     static constexpr std::size_t triangle_offset(std::size_t row, std::size_t col) {
-        return row * (row + 1) / 2 + col;
+        return gmm::full_covariance_triangle_offset(row, col);
     }
 
     static std::span<const float, D * D> matrix_span(
@@ -128,7 +128,7 @@ struct full_covariance_model {
                 const auto covariance = matrix_span(covariances, k);
                 std::copy(covariance.begin(), covariance.end(), out_covariance.begin());
             } else {
-                invert_spd_matrix(
+                gmm::invert_spd_matrix<D>(
                     matrix_span(precisions, k),
                     out_covariance,
                     "Full GMM precision"
@@ -149,7 +149,7 @@ struct full_covariance_model {
             const auto mean = sample_to_array(means[k]);
 
             if (!std::isfinite(log_precision_dets[k])) {
-                log_precision_dets[k] = logdet_spd_matrix(
+                log_precision_dets[k] = gmm::logdet_spd_matrix<D>(
                     precision,
                     "Full GMM precision"
                 );
@@ -173,11 +173,12 @@ struct full_covariance_model {
             // symmetric entries P_ij and P_ji contribute twice to x^T P x.
             for (std::size_t row = 0; row < D; ++row) {
                 for (std::size_t col = 0; col <= row; ++col) {
-                    const float coefficient = (row == col)
-                        ? -0.5f * precision[row * D + col]
-                        : -precision[row * D + col];
-
-                    score_row.quadratic[triangle_offset(row, col)] = coefficient;
+                    score_row.quadratic[triangle_offset(row, col)] =
+                        gmm::full_covariance_score_quadratic_coefficient(
+                            row,
+                            col,
+                            precision[row * D + col]
+                        );
                 }
             }
 
@@ -286,7 +287,7 @@ struct full_covariance_model {
                     cancellation_risk = true;
                 }
 
-                if (row == col && diagonal_variance_is_suspicious(
+                if (row == col && gmm::full_covariance_diagonal_variance_is_suspicious(
                     avg_xx,
                     mean_product,
                     covariance_value
@@ -309,7 +310,7 @@ struct full_covariance_model {
         }
 
         try {
-            const float covariance_logdet = invert_spd_matrix(
+            const float covariance_logdet = gmm::invert_spd_matrix<D>(
                 covariance,
                 precision,
                 "Full GMM covariance"
@@ -343,7 +344,7 @@ struct full_covariance_model {
             }
         }
 
-        eve::algo::for_each[eve::algo::force_cardinal<cardinal{}()>](
+        eve::algo::for_each(
             samples,
             [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
                 const auto sample = eve::load[ignore](it);
@@ -425,7 +426,7 @@ struct full_covariance_model {
                 }
             }
 
-            const float covariance_logdet = invert_spd_matrix(
+            const float covariance_logdet = gmm::invert_spd_matrix<D>(
                 covariance,
                 precision,
                 "Full GMM stable covariance recompute"
@@ -449,39 +450,6 @@ private:
         );
     }
 
-    static bool diagonal_variance_is_suspicious(
-        float avg_xx,
-        float mean_square,
-        float raw_variance
-    ) {
-        if (
-            !std::isfinite(avg_xx)
-            || !std::isfinite(mean_square)
-            || !std::isfinite(raw_variance)
-        ) {
-            return true;
-        }
-
-        if (!(raw_variance > 0.0f)) {
-            return true;
-        }
-
-        const float cancellation_scale = std::max(std::abs(avg_xx), std::abs(mean_square));
-
-        if (!(cancellation_scale > 1.0f)) {
-            return false;
-        }
-
-        constexpr float raw_moment_error_factor = 64.0f;
-        constexpr float tolerated_covariance_relative_error = 1e-2f;
-
-        constexpr float cancellation_threshold =
-            raw_moment_error_factor * std::numeric_limits<float>::epsilon()
-            / tolerated_covariance_relative_error;
-
-        return std::abs(raw_variance) / cancellation_scale < cancellation_threshold;
-    }
-
     template <eve::product_type AnySampleT>
     static scalar_sample sample_to_array(const AnySampleT& sample) {
         scalar_sample out{};
@@ -494,90 +462,5 @@ private:
         );
 
         return out;
-    }
-
-    static float logdet_spd_matrix(std::span<const float, D * D> matrix, const char* label) {
-        scalar_matrix cholesky{};
-        return cholesky_decompose(matrix, cholesky, label);
-    }
-
-    static float invert_spd_matrix(
-        std::span<const float, D * D> matrix,
-        std::span<float, D * D> inverse,
-        const char* label
-    ) {
-        scalar_matrix cholesky{};
-        scalar_matrix inverse_cholesky{};
-
-        const float logdet = cholesky_decompose(matrix, cholesky, label);
-
-        for (std::size_t i = 0; i < D; ++i) {
-            inverse_cholesky[i * D + i] = 1.0f / cholesky[i * D + i];
-
-            for (std::size_t j = 0; j < i; ++j) {
-                float sum = 0.0f;
-
-                for (std::size_t m = j; m < i; ++m) {
-                    sum += cholesky[i * D + m] * inverse_cholesky[m * D + j];
-                }
-
-                inverse_cholesky[i * D + j] = -sum / cholesky[i * D + i];
-            }
-        }
-
-        for (std::size_t row = 0; row < D; ++row) {
-            for (std::size_t col = 0; col <= row; ++col) {
-                float value = 0.0f;
-
-                for (std::size_t m = row; m < D; ++m) {
-                    value += inverse_cholesky[m * D + row] * inverse_cholesky[m * D + col];
-                }
-
-                inverse[row * D + col] = value;
-                inverse[col * D + row] = value;
-            }
-        }
-
-        return logdet;
-    }
-
-    static float cholesky_decompose(
-        std::span<const float, D * D> matrix,
-        scalar_matrix& cholesky,
-        const char* label
-    ) {
-        cholesky.fill(0.0f);
-
-        float logdet = 0.0f;
-
-        for (std::size_t row = 0; row < D; ++row) {
-            for (std::size_t col = 0; col <= row; ++col) {
-                float sum = matrix[row * D + col];
-
-                for (std::size_t m = 0; m < col; ++m) {
-                    sum -= cholesky[row * D + m] * cholesky[col * D + m];
-                }
-
-                if (row == col) {
-                    if (!(sum > 0.0f) || !std::isfinite(sum)) {
-                        throw std::runtime_error(
-                            std::string(label)
-                            + " is not positive definite while computing Cholesky pivot at index "
-                            + std::to_string(row)
-                            + "; pivot value = "
-                            + std::to_string(sum)
-                            + "; try increasing reg_covar"
-                        );
-                    }
-
-                    cholesky[row * D + col] = std::sqrt(sum);
-                    logdet += 2.0f * std::log(cholesky[row * D + col]);
-                } else {
-                    cholesky[row * D + col] = sum / cholesky[col * D + col];
-                }
-            }
-        }
-
-        return logdet;
     }
 };

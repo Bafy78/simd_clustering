@@ -375,3 +375,63 @@ def plot_clustered_heatmap_grid(
 
     plt.tight_layout()
     plt.show()
+
+
+def add_facet_suptitle(
+    g,
+    title,
+    *,
+    top_pad_inches=0.08,
+    title_pad_inches=0.25,
+    fontsize=16,
+):
+    fig = g.figure
+
+    # The notebook has figure.autolayout=True, so disable it for this figure.
+    fig.set_tight_layout(False)
+    try:
+        fig.set_layout_engine(None)
+    except Exception:
+        pass
+
+    suptitle = fig.suptitle(
+        title,
+        x=0.5,
+        y=1 - top_pad_inches / fig.get_figheight(),
+        ha="center",
+        va="top",
+        fontsize=fontsize,
+        fontweight="bold",
+    )
+
+    # Temporarily exclude title so tight_layout does not double-count it.
+    suptitle.set_in_layout(False)
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    title_bbox = suptitle.get_window_extent(renderer).transformed(
+        fig.transFigure.inverted()
+    )
+
+    rect = list(getattr(g, "_tight_layout_rect", (0, 0, 1, 1)))
+
+    rect[3] = min(
+        rect[3],
+        title_bbox.y0 - title_pad_inches / fig.get_figheight(),
+    )
+    rect[3] = max(0.05, rect[3])
+
+    fig.tight_layout(rect=rect)
+
+    # Important: include title again so notebook / bbox_inches='tight' actually renders it.
+    suptitle.set_in_layout(True)
+
+    # Prevent another automatic tight-layout pass from undoing the rect.
+    fig.set_tight_layout(False)
+    try:
+        fig.set_layout_engine(None)
+    except Exception:
+        pass
+
+    return suptitle

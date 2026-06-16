@@ -11,6 +11,7 @@
 #include "../../include/gmm/covariance_type.hpp"
 #include "../../include/gmm/dynamic_d/diagonal_covariance.hpp"
 #include "../../include/gmm/dynamic_d/em.hpp"
+#include "../../include/gmm/dynamic_d/full_covariance.hpp"
 #include "../../include/gmm/dynamic_d/input.hpp"
 #include "../../include/gmm/dynamic_d/spherical_covariance.hpp"
 #include "../../include/gmm/metrics.hpp"
@@ -159,9 +160,16 @@ struct dynamic_gmm_case {
     }
 
     void run_once_full() {
-        throw std::runtime_error(
-            "Dynamic-D micro-GEMM GMM currently supports spherical and diag covariance only"
+        auto result = run_dynamic_gmm_micro_gemm_em<D, GMM_N_GROUP, GMM_K_TILE>(
+            samples_storage_.view(),
+            initial_weights_,
+            initial_means_row_major_,
+            dynamic_full_gmm_micro_gemm_covariance<D, GMM_K_TILE>{
+                initial_precisions_,
+                static_cast<std::size_t>(K_)
+            }
         );
+        store_result(std::move(result));
     }
 
     void run_once() {
@@ -254,12 +262,6 @@ private:
           metrics_json_out_(metrics_json_out) {
         if (K_ <= 0) {
             throw std::runtime_error("Invalid number of GMM clusters");
-        }
-
-        if (covariance_type_ == gmm_covariance_type::full) {
-            throw std::runtime_error(
-                "Dynamic-D micro-GEMM GMM currently supports spherical and diag covariance only"
-            );
         }
 
         samples_storage_ = read_dynamic_gmm_samples_binary<D>(dataset_bin, N_);

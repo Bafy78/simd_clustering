@@ -81,7 +81,7 @@ CPP_CASES: dict[str, CppCase] = {
         display_name="GMM dynamic C++",
         needs_gmm_init=True,
         needs_covariance_type_arg=True,
-        supported_gmm_covariance_types=("spherical", "diag"),
+        supported_gmm_covariance_types=SUPPORTED_GMM_COVARIANCE_TYPES,
     ),
     "pp_static": CppCase(
         name="pp_static",

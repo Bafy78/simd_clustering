@@ -243,6 +243,27 @@ struct dynamic_diagonal_gmm_micro_gemm_covariance {
     }
 
     template<std::size_t ACTIVE_N_VECTORS, class Ignore>
+    void load_dimension_values(
+        samples_soa_view<D> samples,
+        std::size_t n,
+        std::size_t d,
+        const score_cache<ACTIVE_N_VECTORS>&,
+        Ignore ignore,
+        std::array<wide_f, ACTIVE_N_VECTORS>& x,
+        std::array<wide_f, ACTIVE_N_VECTORS>& x2
+    ) const {
+        constexpr std::size_t card = simd_cardinal();
+        const float* sample_dimension = samples.dimension(d);
+
+        for (std::size_t sample_vector = 0; sample_vector < ACTIVE_N_VECTORS; ++sample_vector) {
+            x[sample_vector] = eve::load[ignore](
+                eve::as_aligned(sample_dimension + n + sample_vector * card)
+            );
+            x2[sample_vector] = x[sample_vector] * x[sample_vector];
+        }
+    }
+
+    template<std::size_t ACTIVE_N_VECTORS, class Ignore>
     void accumulate_cluster_sample_cache(
         std::size_t,
         const std::array<wide_f, ACTIVE_N_VECTORS>&,
