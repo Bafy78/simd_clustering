@@ -98,7 +98,9 @@ struct static_gmm_em_state {
         covariance.reset_simd_accumulators();
     }
 
-    // TODO: Investigate why this is not inlined by the compiler
+    // Big perf diff: sometimes the compiler (g++-14) is not inlining this.
+    // Benchmark shows that it makes a very significant difference to always inline it.
+    // No drawback noticed.
     __attribute__((always_inline)) float e_step_and_accumulate_sufficient_statistics() {
         reset_simd_accumulators();
 

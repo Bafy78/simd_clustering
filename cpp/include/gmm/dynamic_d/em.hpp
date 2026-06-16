@@ -332,7 +332,8 @@ struct dynamic_gmm_micro_gemm_em_state {
         );
     }
 
-    float e_step_and_accumulate_sufficient_statistics() {
+    // Only makes a difference (a positive one) in lower dimensions. No drawback noticed.
+    __attribute__((always_inline)) float e_step_and_accumulate_sufficient_statistics() {
         constexpr std::size_t card = simd_cardinal();
         constexpr std::size_t group_samples = N_VECTORS * card;
 
