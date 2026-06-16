@@ -12,7 +12,68 @@ from benchmark_postprocess.parity import (
 from benchmark_postprocess.records import load_timing_process_aware_records
 from benchmark_postprocess.summary import build_summary
 from benchmark_pipeline.exclusions import EXCLUSIONS_FILENAME, load_exclusion_manifest
-from benchmark_pipeline.paths import repo_relative_path
+from benchmark_pipeline.paths import repo_path, repo_relative_path
+from spill_detector import (
+    SPILL_DETECTOR_PATTERN,
+    SpillDetectorError,
+    benchmark_record_scan_targets,
+    scan_targets,
+    spill_detection_status,
+    summary_payload as spill_summary_payload,
+)
+
+
+def build_spill_detection_summary(
+    records: list[dict[str, object]],
+    *,
+    out_dir: Path,
+    skip_compile: bool,
+    rg: str,
+    pattern: str,
+) -> dict[str, object]:
+    targets = benchmark_record_scan_targets(records)
+    base_payload: dict[str, object] = {
+        "enabled": True,
+        "scan_target_count": len(targets),
+        "scan_targets": [
+            {
+                "cpp_case": target.cpp_case,
+                "D": target.D,
+                "gmm_covariance_type": target.gmm_covariance_type,
+            }
+            for target in targets
+        ],
+        "out_dir": str(out_dir),
+        "skip_compile": bool(skip_compile),
+    }
+
+    try:
+        results = scan_targets(
+            targets,
+            out_dir=out_dir,
+            skip_compile=skip_compile,
+            rg=rg,
+            pattern=pattern,
+        )
+    except Exception as exc:
+        error: dict[str, object] = {
+            **base_payload,
+            "status": "ERROR",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "results": [],
+            "total_candidate_reload_pairs": None,
+        }
+        if isinstance(exc, SpillDetectorError):
+            error["exit_code"] = exc.exit_code
+        return error
+
+    payload = spill_summary_payload(results)
+    return {
+        **base_payload,
+        **payload,
+        "status": spill_detection_status(payload),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,6 +83,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bootstrap-iterations", type=int, default=1_000)
     parser.add_argument("--ci-level", type=float, default=0.95)
     parser.add_argument("--bootstrap-seed", type=int, default=12345)
+    parser.add_argument(
+        "--spill-detection",
+        action="store_true",
+        help=(
+            "Run the spill detector for C++ cases present in the benchmark records "
+            "and append its results to the benchmark summary."
+        ),
+    )
+    parser.add_argument(
+        "--spill-detection-out-dir",
+        type=Path,
+        default=repo_path("spill_detector_results"),
+        help="Directory for spill detector assembly and rg outputs.",
+    )
+    parser.add_argument(
+        "--spill-detection-skip-compile",
+        action="store_true",
+        help="Reuse existing spill detector assembly files instead of compiling them.",
+    )
+    parser.add_argument(
+        "--spill-detection-rg",
+        default="rg",
+        help="ripgrep executable for spill detection. Defaults to rg.",
+    )
+    parser.add_argument(
+        "--spill-detection-pattern",
+        default=SPILL_DETECTOR_PATTERN,
+        help="Override the default spill detector PCRE pattern.",
+    )
 
     return parser.parse_args()
 
@@ -34,6 +124,7 @@ def main() -> None:
         if args.output is not None
         else args.data_dir / "benchmark_summary.json"
     )
+    args.spill_detection_out_dir = repo_relative_path(args.spill_detection_out_dir)
 
     print("Step 1/4: Loading Lloyd and GMM metrics artifacts...")
     lloyd_metrics = load_lloyd_metrics_map(args.data_dir)
@@ -76,6 +167,25 @@ def main() -> None:
         gmm_metrics=gmm_metrics,
         exclusions=exclusions,
     )
+
+    if args.spill_detection:
+        print("Running spill detector for benchmarked C++ cases...")
+        summary["spill_detection"] = build_spill_detection_summary(
+            records,
+            out_dir=args.spill_detection_out_dir,
+            skip_compile=args.spill_detection_skip_compile,
+            rg=args.spill_detection_rg,
+            pattern=args.spill_detection_pattern,
+        )
+        summary.setdefault("metadata", {})["schema_version"] = max(
+            int(summary.get("metadata", {}).get("schema_version", 0)),
+            5,
+        )
+        print(
+            "Spill detection status: "
+            f"{summary['spill_detection'].get('status')} "
+            f"({summary['spill_detection'].get('scan_target_count')} target(s))"
+        )
 
     print(f"Step 4/4: Writing output to {args.output}...")
     write_json(args.output, summary)

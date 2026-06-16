@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 from typing import Any, Iterator
 import pandas as pd
+from html import escape
 
 from python.benchmark_pipeline.paths import repo_relative_path
 
@@ -76,6 +77,51 @@ def load_exclusion_summary(
 
     return df.sort_values(
         [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+    ).reset_index(drop=True)
+
+
+def _file_link(path_value: str | None) -> str:
+    if not path_value:
+        return "-"
+
+    path = Path(path_value)
+    label = escape(path.name)
+
+    try:
+        href = path.resolve().relative_to(repo_relative_path("./")).as_posix()
+    except ValueError:
+        href = path.resolve().as_uri()
+
+    return f'<a href="{escape(href, quote=True)}">{label}</a>'
+
+
+def load_spill_detection_summary(
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
+) -> pd.DataFrame:
+    """Load postprocess-attached spill detector results from benchmark_summary.json."""
+    summary = load_benchmark_summary(summary_json)
+    spill = summary.get("spill_detection", {})
+    rows: list[dict[str, Any]] = []
+
+    for result in spill.get("results", []):
+        rows.append(
+            {
+                "C++ Case": result.get("cpp_case"),
+                "GMM Covariance Type": result.get("gmm_covariance_type") or "-",
+                COL_DIMENSIONS: result.get("D"),
+                "Candidate Reload Pairs": result.get("candidate_reload_pairs"),
+                "Assembly": _file_link(result.get("assembly_file")),
+                "rg Output": _file_link(result.get("rg_output_file")),
+                "rg Return Code": result.get("rg_returncode"),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    return df.sort_values(
+        ["C++ Case", "GMM Covariance Type", COL_DIMENSIONS]
     ).reset_index(drop=True)
 
 
