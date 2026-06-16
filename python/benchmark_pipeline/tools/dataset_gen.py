@@ -135,9 +135,11 @@ def _estimate_full_precisions(
             covariances[cluster] += diff.T @ diff
 
     covariances /= counts.astype(np.float64)[:, np.newaxis, np.newaxis]
+    covariances = 0.5 * (covariances + np.swapaxes(covariances, 1, 2))
     diag = np.arange(D)
     covariances[:, diag, diag] += reg_covar
-    return np.linalg.inv(covariances)
+    precisions = np.linalg.inv(covariances)
+    return 0.5 * (precisions + np.swapaxes(precisions, 1, 2))
 
 
 def estimate_gmm_shared_initial_parameters(

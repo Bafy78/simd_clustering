@@ -1,9 +1,14 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <numbers>
+#include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace gmm {
@@ -103,6 +108,56 @@ inline float full_covariance_score_quadratic_coefficient(
     float precision_value
 ) {
     return (row == col) ? -0.5f * precision_value : -precision_value;
+}
+
+inline bool full_covariance_entries_are_close(float lhs, float rhs) {
+    if (!std::isfinite(lhs) || !std::isfinite(rhs)) {
+        return false;
+    }
+
+    constexpr float symmetry_rtol = 1e-5f;
+    constexpr float symmetry_atol = 1e-8f;
+
+    // sklearn checks all(isclose(P, P.T)). Because both (i, j) and (j, i)
+    // are present in that full-matrix comparison, an off-diagonal pair must be
+    // close in both directions. This is equivalent to using the smaller
+    // magnitude as the relative-tolerance scale for the unordered pair.
+    const float scale = std::min(std::abs(lhs), std::abs(rhs));
+    return std::abs(lhs - rhs) <= symmetry_atol + symmetry_rtol * scale;
+}
+
+template<std::size_t D>
+void validate_symmetric_full_precision_matrix(
+    std::span<const float, D * D> precision,
+    std::size_t cluster,
+    const char* label
+) {
+    for (std::size_t row = 0; row < D; ++row) {
+        for (std::size_t col = 0; col < row; ++col) {
+            const float lower = precision[row * D + col];
+            const float upper = precision[col * D + row];
+
+            if (!full_covariance_entries_are_close(lower, upper)) {
+                throw std::runtime_error(
+                    std::string(label)
+                    + " must be symmetric; cluster "
+                    + std::to_string(cluster)
+                    + ", entries ("
+                    + std::to_string(row)
+                    + ", "
+                    + std::to_string(col)
+                    + ") and ("
+                    + std::to_string(col)
+                    + ", "
+                    + std::to_string(row)
+                    + ") differ: "
+                    + std::to_string(lower)
+                    + " vs "
+                    + std::to_string(upper)
+                );
+            }
+        }
+    }
 }
 
 inline bool full_covariance_diagonal_variance_is_suspicious(

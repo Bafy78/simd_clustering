@@ -116,6 +116,14 @@ struct full_covariance_model {
                 "Full GMM stable-recompute state count must match cluster count"
             );
         }
+
+        for (std::size_t k = 0; k < K; ++k) {
+            gmm::validate_symmetric_full_precision_matrix<D>(
+                matrix_span(precisions, k),
+                k,
+                "Full GMM precision"
+            );
+        }
     }
 
     std::vector<float> materialize_covariances() const {
