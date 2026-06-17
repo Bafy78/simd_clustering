@@ -327,7 +327,7 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
     algorithm_phase_key: str,
     algorithm_label: str,
     fixed_phase_keys=("soa", "pp"),
-    max_samples=None,
+    requested_N=None,
     fixed_cost_note: str | None = None,
 ):
     """Plot fixed C++ setup costs against an algorithm iteration baseline.
@@ -370,14 +370,14 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
         )
         return []
 
-    if max_samples is None:
-        max_N = max(eligible_N_values)
-    elif max_samples in eligible_N_values:
-        max_N = max_samples
+    if requested_N is None:
+        selected_N = max(eligible_N_values)
+    elif requested_N in eligible_N_values:
+        selected_N = requested_N
     else:
         print(
             f"Skipping fixed-cost vs {algorithm_label} graph: "
-            f"requested N={max_samples} is not present for both algorithm and fixed costs."
+            f"requested N={requested_N} is not present for both algorithm and fixed costs."
         )
         return []
 
@@ -400,14 +400,14 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
         df_bench,
         phase=algorithm_phase,
         language=LANG_CPP,
-        samples=max_N,
+        samples=selected_N,
     )[algorithm_cols].copy()
 
     df_fixed = filter_bench(
         df_bench,
         phase=fixed_phases,
         language=LANG_CPP,
-        samples=max_N,
+        samples=selected_N,
     )[fixed_cols].copy()
 
     if df_algorithm.empty or df_fixed.empty:
@@ -485,6 +485,32 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
         [COL_PHASE, COL_VARIANT, COL_PARAMS],
     )
 
+    shared_y_values = np.concatenate(
+        [
+            df_plot_norm[equivalent_iters_index_col].to_numpy(dtype=float),
+            df_plot_norm[time_per_iter_index_col].to_numpy(dtype=float),
+        ]
+    )
+    shared_y_values = shared_y_values[
+        np.isfinite(shared_y_values) & (shared_y_values > 0)
+    ]
+    shared_y_limits = None
+
+    if shared_y_values.size:
+        y_min = shared_y_values.min()
+        y_max = shared_y_values.max()
+
+        if np.isclose(y_min, y_max):
+            shared_y_limits = (y_min / 10, y_max * 10)
+        else:
+            log_min = np.log10(y_min)
+            log_max = np.log10(y_max)
+            log_padding = 0.05 * (log_max - log_min)
+            shared_y_limits = (
+                10 ** (log_min - log_padding),
+                10 ** (log_max + log_padding),
+            )
+
     figures = []
 
     for (variant, params), df_variant in df_plot_norm.groupby(
@@ -542,6 +568,8 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
 
             ax.set_xlabel("D")
             ax.set_yscale("log")
+            if shared_y_limits is not None:
+                ax.set_ylim(shared_y_limits)
             ax.yaxis.set_major_locator(mtick.LogLocator(base=10, subs=(1, 5)))
             ax.yaxis.set_minor_locator(
                 mtick.LogLocator(base=10, subs=(2, 3, 4, 6, 7, 8, 9))
@@ -576,7 +604,7 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
         fig.suptitle(
             f"Scaling of Fixed Costs vs {algorithm_label} Iteration Time\n"
             f"{_format_variant_params_title(variant, params)}; "
-            f"normalized to the lowest D at N = {format_abbrev(max_N)}"
+            f"normalized to the lowest D; at N = {format_abbrev(selected_N)}"
             f"{note}",
             fontsize=16,
             y=1,
@@ -691,11 +719,10 @@ def add_facet_suptitle(
     fig = g.figure
 
     # The notebook has figure.autolayout=True, so disable it for this figure.
-    fig.set_tight_layout(False)
     try:
-        fig.set_layout_engine(None)
+        fig.set_layout_engine("none")
     except Exception:
-        pass
+        fig.set_tight_layout(False)
 
     suptitle = fig.suptitle(
         title,
@@ -731,10 +758,9 @@ def add_facet_suptitle(
     suptitle.set_in_layout(True)
 
     # Prevent another automatic tight-layout pass from undoing the rect.
-    fig.set_tight_layout(False)
     try:
-        fig.set_layout_engine(None)
+        fig.set_layout_engine("none")
     except Exception:
-        pass
+        fig.set_tight_layout(False)
 
     return suptitle

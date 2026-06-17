@@ -95,6 +95,18 @@ def _file_link(path_value: str | None) -> str:
     return f'<a href="{escape(href, quote=True)}">{label}</a>'
 
 
+def _cpp_case_phase_variant(cpp_case: str | None) -> tuple[str | None, str | None]:
+    if not cpp_case:
+        return None, None
+
+    for variant_key in ("static", "dynamic", "auto"):
+        suffix = f"_{variant_key}"
+        if cpp_case.endswith(suffix):
+            return cpp_case[: -len(suffix)], variant_key
+
+    return None, None
+
+
 def load_spill_detection_summary(
     summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
 ) -> pd.DataFrame:
@@ -104,15 +116,20 @@ def load_spill_detection_summary(
     rows: list[dict[str, Any]] = []
 
     for result in spill.get("results", []):
+        cpp_case_name = result.get("cpp_case")
+        phase_key, variant_key = _cpp_case_phase_variant(cpp_case_name)
+        gmm_covariance_type = result.get("gmm_covariance_type")
+
         rows.append(
             {
-                "C++ Case": result.get("cpp_case"),
-                "GMM Covariance Type": result.get("gmm_covariance_type") or "-",
-                COL_DIMENSIONS: result.get("D"),
-                "Candidate Reload Pairs": result.get("candidate_reload_pairs"),
-                "Assembly": _file_link(result.get("assembly_file")),
-                "rg Output": _file_link(result.get("rg_output_file")),
-                "rg Return Code": result.get("rg_returncode"),
+                COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
+                COL_VARIANT: _variant_display_name(variant_key),
+                COL_PARAMS: _params_display_name(gmm_covariance_type),
+                "C++ Case": cpp_case_name,
+                COL_DIMENSIONS: int(result.get("D")),
+                "Candidate Reload Pairs": int(
+                    result.get("candidate_reload_pairs", 0)
+                ),
             }
         )
 
@@ -120,8 +137,14 @@ def load_spill_detection_summary(
     if df.empty:
         return df
 
+    df[COL_PHASE] = pd.Categorical(
+        df[COL_PHASE],
+        categories=list(PHASE_MAP.values()),
+        ordered=True,
+    )
+
     return df.sort_values(
-        ["C++ Case", "GMM Covariance Type", COL_DIMENSIONS]
+        [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS]
     ).reset_index(drop=True)
 
 
