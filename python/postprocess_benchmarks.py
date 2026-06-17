@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 
+from benchmark_postprocess.compile_artifacts import build_compile_artifact_summary
 from benchmark_postprocess.io import write_json
 from benchmark_postprocess.parity import (
     completed_metric_keys,
@@ -158,12 +159,17 @@ def main() -> None:
     ]
 
     print("Step 3/4: Building summary and running bootstrap intervals...")
+    compile_artifacts = build_compile_artifact_summary(
+        records,
+        data_dir=args.data_dir,
+    )
     summary = build_summary(
         records,
         bootstrap_iterations=args.bootstrap_iterations,
         ci_level=args.ci_level,
         bootstrap_seed=args.bootstrap_seed,
         lloyd_metrics=lloyd_metrics,
+        compile_artifacts=compile_artifacts,
         gmm_metrics=gmm_metrics,
         exclusions=exclusions,
     )
@@ -176,10 +182,6 @@ def main() -> None:
             skip_compile=args.spill_detection_skip_compile,
             rg=args.spill_detection_rg,
             pattern=args.spill_detection_pattern,
-        )
-        summary.setdefault("metadata", {})["schema_version"] = max(
-            int(summary.get("metadata", {}).get("schema_version", 0)),
-            5,
         )
         print(
             "Spill detection status: "
@@ -202,6 +204,10 @@ def main() -> None:
     print(f"GMM completed configs: {len(gmm_config_ids)}")
     print(f"GMM completed config/params keys: {len(gmm_metric_keys)}")
     print(f"Configured benchmark phase exclusions: {len(exclusions)}")
+    print(
+        "C++ compile artifact records: "
+        f"{summary['compile_artifacts'].get('record_count', 0)}"
+    )
 
 
 if __name__ == "__main__":

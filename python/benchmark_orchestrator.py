@@ -62,7 +62,11 @@ def main() -> None:
         )
 
     for D in config.test_Ds:
-        compile_cpp_binaries(D, cpp_cases_for_dimension(config, D))
+        compile_cpp_binaries(
+            D,
+            cpp_cases_for_dimension(config, D),
+            datasets_dir=datasets_dir,
+        )
 
         for N in config.test_Ns:
             for K in config.test_Ks:

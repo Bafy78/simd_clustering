@@ -37,6 +37,7 @@ class MergeStats:
     parameterizations_replaced: int = 0
     exclusions_kept: int = 0
     exclusions_dropped_due_to_data: int = 0
+    compile_artifact_records: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -381,7 +382,12 @@ def collect_exclusions(summary: JsonDict) -> list[JsonDict]:
     return [collected[key] for key in sorted(collected)]
 
 
-def merge_exclusions(low: JsonDict, high: JsonDict, configs: dict[tuple[int, int, int], JsonDict], stats: MergeStats) -> list[JsonDict]:
+def merge_exclusions(
+    low: JsonDict,
+    high: JsonDict,
+    configs: dict[tuple[int, int, int], JsonDict],
+    stats: MergeStats,
+) -> list[JsonDict]:
     merged_by_key: dict[tuple[int, int, int, str], JsonDict] = {}
 
     for exclusion in collect_exclusions(low):
@@ -399,6 +405,55 @@ def merge_exclusions(low: JsonDict, high: JsonDict, configs: dict[tuple[int, int
 
     stats.exclusions_kept = len(active)
     return active
+
+
+def compile_artifact_key(record: JsonDict) -> tuple[int, str, str, str]:
+    return (
+        _required_int(record, "D", "compile artifact"),
+        str(record.get("phase_key", "")),
+        str(record.get("variant_key", "")),
+        str(record.get("cpp_case", "")),
+    )
+
+
+def merge_compile_artifacts(
+    low: JsonDict,
+    high: JsonDict,
+    stats: MergeStats,
+) -> JsonDict:
+    low_artifacts = low.get("compile_artifacts", {}) or {}
+    high_artifacts = high.get("compile_artifacts", {}) or {}
+
+    if not isinstance(low_artifacts, dict):
+        raise ValueError("Expected low-priority compile_artifacts to be a JSON object")
+    if not isinstance(high_artifacts, dict):
+        raise ValueError("Expected high-priority compile_artifacts to be a JSON object")
+
+    merged = copy.deepcopy(low_artifacts)
+    merged.update(
+        {
+            key: copy.deepcopy(value)
+            for key, value in high_artifacts.items()
+            if key != "records"
+        }
+    )
+    merged.setdefault("schema_version", 1)
+
+    records_by_key: dict[tuple[int, str, str, str], JsonDict] = {}
+    for record in low_artifacts.get("records", []) or []:
+        records_by_key[compile_artifact_key(record)] = copy.deepcopy(record)
+    for record in high_artifacts.get("records", []) or []:
+        records_by_key[compile_artifact_key(record)] = copy.deepcopy(record)
+
+    records = [records_by_key[key] for key in sorted(records_by_key)]
+    merged["records"] = records
+    merged["record_count"] = len(records)
+    merged["architectures"] = sorted(
+        {str(record["architecture"]) for record in records}
+    )
+    merged["enabled"] = bool(records)
+    stats.compile_artifact_records = len(records)
+    return merged
 
 
 def ensure_config_for_exclusion(
@@ -502,6 +557,7 @@ def merge_metadata(
             "parameterizations_replaced": stats.parameterizations_replaced,
             "exclusions_kept": stats.exclusions_kept,
             "exclusions_dropped_due_to_data": stats.exclusions_dropped_due_to_data,
+            "compile_artifact_records": stats.compile_artifact_records,
         },
         "low_priority_metadata": low_metadata,
         "high_priority_metadata": high_metadata,
@@ -537,11 +593,18 @@ def merge_benchmark_summaries(
     # Preserve unknown high-priority top-level fields with normal high-priority
     # override semantics, but rebuild the known summary containers explicitly.
     for key, value in high.items():
-        if key not in {"metadata", "configs", "exclusions"}:
+        if key not in {"metadata", "configs", "exclusions", "compile_artifacts"}:
             merged[key] = copy.deepcopy(value)
 
-    merged["metadata"] = merge_metadata(low, high, stats, low_path=low_path, high_path=high_path)
     merged["exclusions"] = exclusions
+    merged["compile_artifacts"] = merge_compile_artifacts(low, high, stats)
+    merged["metadata"] = merge_metadata(
+        low,
+        high,
+        stats,
+        low_path=low_path,
+        high_path=high_path,
+    )
     merged["configs"] = sorted_configs(configs)
     return merged, stats
 
@@ -570,6 +633,7 @@ def main() -> None:
     print(f"Parameterizations added: {stats.parameterizations_added}")
     print(f"Parameterizations replaced: {stats.parameterizations_replaced}")
     print(f"Exclusions dropped because concrete phase data exists: {stats.exclusions_dropped_due_to_data}")
+    print(f"Compile artifact records: {stats.compile_artifact_records}")
 
 
 if __name__ == "__main__":

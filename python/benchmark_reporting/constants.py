@@ -42,6 +42,12 @@ COL_LOWER_BOUND = "Lower_Bound"
 COL_EXCLUSION_REASON = "Exclusion Reason"
 COL_EXCLUSION_RULES = "Exclusion Rules"
 
+COL_CPP_CASE = "C++ Case"
+COL_ARCHITECTURE = "Architecture"
+COL_ARCHITECTURE_FLAG = "Architecture Flag"
+COL_EXECUTABLE_SIZE_BYTES = "Executable Size Bytes"
+COL_EXECUTABLE_SIZE_MIB = "Executable Size MiB"
+
 # Derived / analysis columns
 COL_SPEEDUP = "Speedup (x)"
 COL_SPEEDUP_CI_LOW = "Speedup CI Low"

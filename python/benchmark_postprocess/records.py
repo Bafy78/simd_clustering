@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_postprocess.io import load_json
+from benchmark_pipeline.compile_artifacts import COMPILE_ARTIFACTS_FILENAME
 from benchmark_postprocess.naming import parse_benchmark_filename
 from benchmark_postprocess.parity import (
     MetricsKey,
@@ -66,7 +67,12 @@ def load_timing_process_aware_records(
 
     for json_path in sorted(data_dir.glob("*.json")):
         if (
-            json_path.name in {"benchmark_summary.json", EXCLUSIONS_FILENAME}
+            json_path.name
+            in {
+                "benchmark_summary.json",
+                EXCLUSIONS_FILENAME,
+                COMPILE_ARTIFACTS_FILENAME,
+            }
             or json_path.name.startswith(known_artifact_prefixes)
         ):
             continue

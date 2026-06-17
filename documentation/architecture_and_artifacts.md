@@ -82,6 +82,7 @@ Lifecycle:
 
 3. **C++ compilation**
    * Compile the required benchmark binaries for the selected cases and dimensions. As the pipeline is running the dimensions as the main loop, compilation is done once per dimension.
+   * Immediately after each successful compile, record the resolved target architecture and executable size in `datasets/compile_artifacts.json`. This is done at compile time because the nanobench binary path is per C++ case and is overwritten by the next dimension.
 
 4. **Benchmark execution**
    * run C++ nanobench binaries;

@@ -250,6 +250,7 @@ def build_summary(
     ci_level: float,
     bootstrap_seed: int,
     lloyd_metrics: dict[MetricsKey, dict[str, Any]],
+    compile_artifacts: dict[str, Any],
     gmm_metrics: dict[MetricsKey, dict[str, Any]] | None = None,
     exclusions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -382,7 +383,7 @@ def build_summary(
 
     return {
         "metadata": {
-            "schema_version": 4,
+            "schema_version": 5,
             "description": (
                 "Post-processed benchmark summary. Raw pyperf/nanobench JSON "
                 "values are grouped by timing process/pyperf run before aggregation. "
@@ -397,6 +398,18 @@ def build_summary(
                 "For non-iterative phases, identical to total time."
             ),
             "speedup_definition": "python_time / cpp_time",
+            "compile_artifacts": {
+                "source": "compile_artifacts.json",
+                "architecture_definition": (
+                    "Resolved value of the architecture selection flag used by the C++ "
+                    "compile command, so -march=native is reported as the compiler's "
+                    "concrete native target rather than as 'native'."
+                ),
+                "executable_size_definition": (
+                    "Size in bytes of the generated nanobench executable captured "
+                    "immediately after compiling that D/phase/variant."
+                ),
+            },
             "exclusion_count": len(exclusions),
             "bootstrap": {
                 "method": "independent clustered bootstrap by timing process/pyperf run",
@@ -424,5 +437,6 @@ def build_summary(
             },
         },
         "exclusions": exclusions,
+        "compile_artifacts": compile_artifacts,
         "configs": _sorted_config_entries(configs),
     }

@@ -107,6 +107,48 @@ def _cpp_case_phase_variant(cpp_case: str | None) -> tuple[str | None, str | Non
     return None, None
 
 
+
+def load_compile_artifact_summary(
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
+) -> pd.DataFrame:
+    """Load postprocess-attached C++ compile artifact records."""
+    summary = load_benchmark_summary(summary_json)
+    compile_artifacts = summary.get("compile_artifacts", {})
+    rows: list[dict[str, Any]] = []
+
+    for result in compile_artifacts.get("records", []):
+        phase_key = result.get("phase_key")
+        variant_key = result.get("variant_key")
+        executable_size_bytes = int(result["executable_size_bytes"])
+
+        rows.append(
+            {
+                COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
+                COL_VARIANT: _variant_display_name(variant_key),
+                COL_DIMENSIONS: int(result["D"]),
+                COL_CPP_CASE: result.get("cpp_case"),
+                COL_ARCHITECTURE: result.get("architecture"),
+                COL_ARCHITECTURE_FLAG: result.get("architecture_flag"),
+                COL_EXECUTABLE_SIZE_BYTES: executable_size_bytes,
+                COL_EXECUTABLE_SIZE_MIB: executable_size_bytes / (1024 ** 2),
+                "Binary": _file_link(result.get("binary_path")),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    df[COL_PHASE] = pd.Categorical(
+        df[COL_PHASE],
+        categories=list(PHASE_MAP.values()),
+        ordered=True,
+    )
+
+    return df.sort_values(
+        [COL_PHASE, COL_VARIANT, COL_DIMENSIONS]
+    ).reset_index(drop=True)
+
 def load_spill_detection_summary(
     summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
 ) -> pd.DataFrame:

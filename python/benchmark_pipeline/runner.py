@@ -6,6 +6,11 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
+from benchmark_pipeline.compile_artifacts import (
+    compile_artifact_record,
+    compile_artifacts_path,
+    write_compile_artifact_record,
+)
 from benchmark_pipeline.config import PipelineOptions
 from benchmark_pipeline.exclusions import BenchmarkExclusionRule
 from benchmark_pipeline.metrics import (
@@ -166,7 +171,12 @@ def run_cpp_task_with_timing_processes(task: Task, timing_processes: int) -> Non
         delete_if_exists(path, label=None)
 
 
-def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]) -> None:
+def compile_cpp_binaries(
+    D: int,
+    cpp_cases: Iterable[str],
+    *,
+    datasets_dir: str | Path = DATASETS_DIR,
+) -> None:
     """Compiles the C++ nanobench cases for a specific dimension D."""
     cases = sorted(set(cpp_cases))
 
@@ -179,6 +189,8 @@ def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]) -> None:
 
     os.makedirs(os.path.dirname(nanobench_binary_path(cases[0])), exist_ok=True)
 
+    artifact_json = compile_artifacts_path(datasets_dir)
+
     for cpp_case in cases:
         cmd = cpp_compile_command(D=D, cpp_case=cpp_case, mode="nanobench")
 
@@ -190,6 +202,16 @@ def compile_cpp_binaries(D: int, cpp_cases: Iterable[str]) -> None:
                 f"Compilation failed for C++ nanobench case '{cpp_case}':\n{result.stderr}"
             )
             sys.exit(1)
+
+        write_compile_artifact_record(
+            artifact_json,
+            compile_artifact_record(
+                D=D,
+                cpp_case=cpp_case,
+                command=cmd,
+                binary_path=nanobench_binary_path(cpp_case),
+            ),
+        )
 
 
 def delete_if_exists(path: str, label: str | None = "intermediate artifact") -> None:
