@@ -14,6 +14,7 @@ EXCLUSIONS_FILENAME = "benchmark_exclusions.json"
 
 IntSelector = int | tuple[int, ...] | list[int] | set[int] | None
 PhaseSelector = str | tuple[str, ...] | list[str] | set[str] | None
+StringSelector = str | tuple[str, ...] | list[str] | set[str] | None
 
 
 @dataclass(frozen=True)
@@ -63,12 +64,91 @@ class BenchmarkExclusionRule:
         )
 
 
+@dataclass(frozen=True)
+class CachegrindExclusionRule:
+    """
+    Exclude Cachegrind work for selected D/N/K/C++ case targets.
+
+    These rules are intentionally separate from BenchmarkExclusionRule: they skip
+    only the Valgrind/Callgrind-based Cachegrind pass and leave the normal timing suite
+    unchanged. Leave cpp_cases, phase_keys, or params_keys as None to match all.
+    """
+
+    reason: str
+    cpp_cases: StringSelector = None
+    phase_keys: PhaseSelector = None
+    params_keys: StringSelector = None
+    dimensions: IntSelector = None
+    samples: IntSelector = None
+    clusters: IntSelector = None
+    min_dimensions: int | None = None
+    max_dimensions: int | None = None
+    min_samples: int | None = None
+    max_samples: int | None = None
+    min_clusters: int | None = None
+    max_clusters: int | None = None
+
+    def resolved_phase_keys(self) -> tuple[str, ...]:
+        phase_keys = _normalize_phase_selector(self.phase_keys)
+        unknown = sorted(set(phase_keys) - set(VALID_PHASE_KEYS))
+        if unknown:
+            raise ValueError(
+                f"Unknown Cachegrind exclusion phase key(s) {unknown}. "
+                f"Expected one or more of: {', '.join(VALID_PHASE_KEYS)}"
+            )
+        return phase_keys
+
+    def resolved_cpp_cases(self) -> tuple[str, ...] | None:
+        return _normalize_string_selector(self.cpp_cases)
+
+    def resolved_params_keys(self) -> tuple[str, ...] | None:
+        return _normalize_string_selector(self.params_keys)
+
+    def matches(
+        self,
+        *,
+        D: int,
+        N: int,
+        K: int,
+        phase_key: str,
+        cpp_case: str,
+        params_key: str = "default",
+    ) -> bool:
+        if not self.reason.strip():
+            raise ValueError("Cachegrind exclusion rules require a non-empty reason.")
+
+        if phase_key not in self.resolved_phase_keys():
+            return False
+
+        cpp_cases = self.resolved_cpp_cases()
+        if cpp_cases is not None and cpp_case not in cpp_cases:
+            return False
+
+        params_keys = self.resolved_params_keys()
+        if params_keys is not None and params_key not in params_keys:
+            return False
+
+        return (
+            _value_matches(D, self.dimensions, self.min_dimensions, self.max_dimensions)
+            and _value_matches(N, self.samples, self.min_samples, self.max_samples)
+            and _value_matches(K, self.clusters, self.min_clusters, self.max_clusters)
+        )
+
+
 def _normalize_phase_selector(value: PhaseSelector) -> tuple[str, ...]:
     if value is None:
         return VALID_PHASE_KEYS
     if isinstance(value, str):
         return (value,)
     return tuple(value)
+
+
+def _normalize_string_selector(value: StringSelector) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(item) for item in value)
 
 
 def _normalize_int_selector(value: IntSelector) -> tuple[int, ...] | None:
@@ -179,6 +259,30 @@ def is_phase_excluded(
         )
     )
 
+
+
+
+def is_cachegrind_excluded(
+    *,
+    D: int,
+    N: int,
+    K: int,
+    phase_key: str,
+    cpp_case: str,
+    params_key: str = "default",
+    rules: Iterable[CachegrindExclusionRule],
+) -> bool:
+    return any(
+        rule.matches(
+            D=D,
+            N=N,
+            K=K,
+            phase_key=phase_key,
+            cpp_case=cpp_case,
+            params_key=params_key,
+        )
+        for rule in rules
+    )
 
 def build_exclusion_manifest(
     *,

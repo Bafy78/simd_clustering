@@ -217,6 +217,17 @@ from python.benchmark_reporting.constants import (
     COL_VARIANT,
     LANG_CPP,
     PHASE_MAP,
+    PHASE_ORDER,
+    COL_EXECUTABLE_SIZE_MIB,
+    COL_CACHEGRIND_D1MR,
+    COL_CACHEGRIND_DLMR,
+    COL_CACHEGRIND_D1MW,
+    COL_CACHEGRIND_DLMW,
+    COL_CACHEGRIND_D1_DATA_MISS_RATE,
+    COL_CACHEGRIND_LL_DATA_MISS_RATE,
+    COL_CACHEGRIND_D1_DATA_MISSES,
+    COL_CACHEGRIND_LL_DATA_MISSES,
+    COL_CACHEGRIND_DATA_REFS,
 )
 from python.benchmark_reporting.transforms import filter_bench
 
@@ -293,6 +304,405 @@ def add_initial_letter_annotations(
     ]
 
     return out, handles, label_to_letter
+
+
+
+def _format_dimension_tick(x, _pos=None):
+    return f"{int(x)}" if float(x).is_integer() else f"{x:g}"
+
+
+def _set_log_dimension_axis(ax, x_values) -> None:
+    """Use the compiled dimensions as readable major ticks on a log-D axis."""
+    x_values = sorted(float(value) for value in x_values if np.isfinite(float(value)))
+    if not x_values:
+        return
+
+    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(mtick.FixedLocator(x_values))
+    ax.xaxis.set_major_formatter(mtick.FuncFormatter(_format_dimension_tick))
+    ax.xaxis.set_minor_locator(mtick.LogLocator(base=10.0, subs=range(2, 10)))
+    ax.xaxis.set_minor_formatter(mtick.NullFormatter())
+
+
+def _line_label(variant, params=None) -> str:
+    variant_text = str(variant)
+    if params is None or str(params) == "Default":
+        return variant_text
+    return f"{variant_text} / {params}"
+
+
+def _ordered_present_phases(df) -> list[str]:
+    present = set(df[COL_PHASE].dropna().astype(str))
+    ordered = [phase for phase in PHASE_ORDER if phase in present]
+    extras = [
+        phase
+        for phase in df[COL_PHASE].dropna().astype(str).unique()
+        if phase not in set(ordered)
+    ]
+    return ordered + extras
+
+
+def plot_executable_sizes(df):
+    """Plot generated nanobench executable size by compiled dimension."""
+    if df.empty:
+        return None
+
+    plot_df = df.sort_values([COL_PHASE, COL_VARIANT, COL_DIMENSIONS]).copy()
+
+    phases = list(plot_df[COL_PHASE].dropna().astype(str).unique())
+    variants = list(plot_df[COL_VARIANT].dropna().astype(str).unique())
+
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    phase_colors = {
+        phase: color_cycle[i % len(color_cycle)]
+        for i, phase in enumerate(phases)
+    }
+
+    line_styles = ["-", "--", ":", "-."]
+    variant_line_styles = {
+        variant: line_styles[i % len(line_styles)]
+        for i, variant in enumerate(variants)
+    }
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    for (phase, variant), line_df in plot_df.groupby(
+        [COL_PHASE, COL_VARIANT], sort=False, observed=True
+    ):
+        phase = str(phase)
+        variant = str(variant)
+        line_df = line_df.sort_values(COL_DIMENSIONS)
+
+        ax.plot(
+            line_df[COL_DIMENSIONS],
+            line_df[COL_EXECUTABLE_SIZE_MIB],
+            color=phase_colors[phase],
+            linestyle=variant_line_styles[variant],
+            marker="o",
+            markersize=4,
+            label=f"{phase} / {variant}",
+        )
+
+    _set_log_dimension_axis(ax, plot_df[COL_DIMENSIONS].unique())
+
+    ax.set_title("Nanobench executable size by compiled dimension")
+    ax.set_xlabel(COL_DIMENSIONS)
+    ax.set_ylabel("Executable size (MiB)")
+    ax.grid(True, which="major", alpha=0.4)
+    ax.grid(True, which="minor", alpha=0.2)
+
+    phase_handles = [
+        Line2D([0], [0], color=color, marker="o", linestyle="-", label=phase)
+        for phase, color in phase_colors.items()
+    ]
+    variant_handles = [
+        Line2D([0], [0], color="black", linestyle=style, label=variant)
+        for variant, style in variant_line_styles.items()
+    ]
+
+    header_handle = Line2D([], [], linestyle="none", marker=None, alpha=0)
+
+    legend_handles = (
+        [header_handle]
+        + phase_handles
+        + [header_handle]
+        + variant_handles
+    )
+    legend_labels = (
+        ["Phase"]
+        + list(phase_colors.keys())
+        + ["Variant"]
+        + list(variant_line_styles.keys())
+    )
+
+    legend = ax.legend(
+        handles=legend_handles,
+        labels=legend_labels,
+        bbox_to_anchor=(1.02, 0.5),
+        loc="center left",
+        borderaxespad=0.0,
+        frameon=True,
+        handlelength=2.4,
+    )
+
+    for text in legend.get_texts():
+        if text.get_text() in {"Phase", "Variant"}:
+            text.set_weight("bold")
+
+    return fig
+
+
+def plot_spill_detection_by_phase(df):
+    """Plot potential spill/reload candidates by phase and compiled dimension."""
+    if df.empty:
+        return []
+
+    linestyle_cycle = ["-", "--", "-.", ":"]
+    params_order = list(dict.fromkeys(df[COL_PARAMS].astype(str)))
+    linestyle_map = {
+        params: linestyle_cycle[i % len(linestyle_cycle)]
+        for i, params in enumerate(params_order)
+    }
+
+    figures = []
+
+    for phase in _ordered_present_phases(df):
+        phase_df = df[df[COL_PHASE].astype(str) == phase].copy()
+        if phase_df.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+
+        variant_order = list(dict.fromkeys(phase_df[COL_VARIANT].astype(str)))
+        color_map = {
+            variant: f"C{i % 10}"
+            for i, variant in enumerate(variant_order)
+        }
+
+        for (variant, params), line_df in phase_df.groupby(
+            [COL_VARIANT, COL_PARAMS], sort=False, observed=True
+        ):
+            variant = str(variant)
+            params = str(params)
+            line_df = line_df.sort_values(COL_DIMENSIONS)
+
+            ax.plot(
+                line_df[COL_DIMENSIONS],
+                line_df["Candidate Reload Pairs"],
+                marker="o",
+                markersize=4,
+                linestyle=linestyle_map[params],
+                color=color_map[variant],
+                label=_line_label(variant, params),
+            )
+
+        _set_log_dimension_axis(ax, phase_df[COL_DIMENSIONS].unique())
+
+        ax.set_title(f"Spill detection — {phase}")
+        ax.set_xlabel(COL_DIMENSIONS)
+        ax.set_ylabel("Potential spills")
+        ax.grid(True, which="major", alpha=0.4)
+        ax.grid(True, which="minor", alpha=0.2)
+        ax.legend(title="Variant / Params")
+
+        figures.append(fig)
+
+    return figures
+
+
+def _cachegrind_metric_by_dimension(
+    df,
+    metric_col: str,
+    *,
+    scale_to_percent: bool = False,
+):
+    value_cols = [
+        COL_PHASE,
+        COL_VARIANT,
+        COL_PARAMS,
+        COL_DIMENSIONS,
+        metric_col,
+    ]
+    metric_df = df[value_cols].dropna(subset=[metric_col]).copy()
+
+    if metric_df.empty:
+        return metric_df
+
+    if scale_to_percent:
+        metric_df[metric_col] = 100.0 * metric_df[metric_col].astype(float)
+
+    return (
+        metric_df
+        .groupby(
+            [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS],
+            observed=True,
+            as_index=False,
+        )[metric_col]
+        .median()
+        .sort_values([COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS])
+    )
+
+
+def plot_cachegrind_metric_by_phase(
+    df,
+    metric_col: str,
+    *,
+    title: str,
+    ylabel: str,
+    scale_to_percent: bool = False,
+    yscale: str | None = None,
+):
+    """Plot one Cachegrind metric as phase-separated D-scaling figures."""
+    if df.empty:
+        return []
+
+    plot_df = _cachegrind_metric_by_dimension(
+        df,
+        metric_col,
+        scale_to_percent=scale_to_percent,
+    )
+    if plot_df.empty:
+        return []
+
+    linestyle_cycle = ["-", "--", "-.", ":"]
+    params_order = list(dict.fromkeys(plot_df[COL_PARAMS].astype(str)))
+    linestyle_map = {
+        params: linestyle_cycle[i % len(linestyle_cycle)]
+        for i, params in enumerate(params_order)
+    }
+
+    figures = []
+
+    for phase in _ordered_present_phases(plot_df):
+        phase_df = plot_df[plot_df[COL_PHASE].astype(str) == phase].copy()
+        if phase_df.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+
+        variant_order = list(dict.fromkeys(phase_df[COL_VARIANT].astype(str)))
+        color_map = {
+            variant: f"C{i % 10}"
+            for i, variant in enumerate(variant_order)
+        }
+
+        for (variant, params), line_df in phase_df.groupby(
+            [COL_VARIANT, COL_PARAMS], sort=False, observed=True
+        ):
+            variant = str(variant)
+            params = str(params)
+            line_df = line_df.sort_values(COL_DIMENSIONS)
+
+            ax.plot(
+                line_df[COL_DIMENSIONS],
+                line_df[metric_col],
+                marker="o",
+                markersize=4,
+                linestyle=linestyle_map[params],
+                color=color_map[variant],
+                label=_line_label(variant, params),
+            )
+
+        _set_log_dimension_axis(ax, phase_df[COL_DIMENSIONS].unique())
+
+        if yscale == "log":
+            values = phase_df[metric_col].dropna().astype(float)
+            if not values.empty and (values > 0).all():
+                ax.set_yscale("log")
+            else:
+                ax.set_yscale("symlog", linthresh=1)
+        elif yscale is not None:
+            ax.set_yscale(yscale)
+
+        ax.set_title(f"{title} — {phase}")
+        ax.set_xlabel(COL_DIMENSIONS)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, which="major", alpha=0.4)
+        ax.grid(True, which="minor", alpha=0.2)
+        ax.legend(title="Variant / Params")
+
+        figures.append(fig)
+
+    return figures
+
+
+CACHEGRIND_REPORT_PLOTS = (
+    {
+        "metric_col": COL_CACHEGRIND_D1MR,
+        "title": "D1 read misses",
+        "ylabel": "D1mr",
+        "yscale": "log",
+    },
+    {
+        "metric_col": COL_CACHEGRIND_DLMR,
+        "title": "Last-level read misses",
+        "ylabel": "DLmr",
+        "yscale": "log",
+    },
+)
+
+
+CACHEGRIND_EXTENDED_REPORT_PLOTS = CACHEGRIND_REPORT_PLOTS + (
+    {
+        "metric_col": COL_CACHEGRIND_D1MW,
+        "title": "D1 write misses",
+        "ylabel": "D1mw",
+        "yscale": "log",
+    },
+    {
+        "metric_col": COL_CACHEGRIND_DLMW,
+        "title": "Last-level write misses",
+        "ylabel": "DLmw",
+        "yscale": "log",
+    },
+    {
+        "metric_col": COL_CACHEGRIND_D1_DATA_MISS_RATE,
+        "title": "D1 data miss rate",
+        "ylabel": "D1 data miss rate (%)",
+        "scale_to_percent": True,
+    },
+    {
+        "metric_col": COL_CACHEGRIND_LL_DATA_MISS_RATE,
+        "title": "Last-level data miss rate",
+        "ylabel": "LL data miss rate (%)",
+        "scale_to_percent": True,
+    },
+    {
+        "metric_col": COL_CACHEGRIND_D1_DATA_MISSES,
+        "title": "D1 total data misses",
+        "ylabel": "D1mr + D1mw",
+        "yscale": "log",
+    },
+    {
+        "metric_col": COL_CACHEGRIND_LL_DATA_MISSES,
+        "title": "Last-level total data misses",
+        "ylabel": "DLmr + DLmw",
+        "yscale": "log",
+    },
+    {
+        "metric_col": COL_CACHEGRIND_DATA_REFS,
+        "title": "Data references",
+        "ylabel": "Dr + Dw",
+        "yscale": "log",
+    },
+)
+
+
+def plot_cachegrind_report(df, plot_specs=CACHEGRIND_REPORT_PLOTS):
+    """Build Cachegrind report figures.
+
+    By default this plots only the two most useful cache counters: D1 read
+    misses (D1mr) and last-level data read misses (DLmr). Pass
+    CACHEGRIND_EXTENDED_REPORT_PLOTS to include write misses, total data misses,
+    data references, and miss-rate plots.
+
+    Each metric is summarized by median over the recorded N/K configurations for
+    the same phase, variant, params, and compiled dimension. This mirrors the
+    report's executable-size and spill-detector D-scaling views while avoiding a
+    giant per-config counter table.
+    """
+    if df.empty:
+        return []
+
+    figures = []
+
+    for spec in plot_specs:
+        metric_col = spec["metric_col"]
+        if metric_col not in df.columns:
+            continue
+
+        figures.extend(
+            plot_cachegrind_metric_by_phase(
+                df,
+                metric_col,
+                title=spec["title"],
+                ylabel=spec["ylabel"],
+                scale_to_percent=spec.get("scale_to_percent", False),
+                yscale=spec.get("yscale"),
+            )
+        )
+
+    return figures
 
 
 def _phase_display_name_from_key(phase_key: str) -> str:

@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 from benchmark_postprocess.compile_artifacts import build_compile_artifact_summary
+from benchmark_postprocess.cachegrind import build_cachegrind_summary
 from benchmark_postprocess.io import write_json
 from benchmark_postprocess.parity import (
     completed_metric_keys,
@@ -113,6 +114,12 @@ def parse_args() -> argparse.Namespace:
         default=SPILL_DETECTOR_PATTERN,
         help="Override the default spill detector PCRE pattern.",
     )
+    parser.add_argument(
+        "--cachegrind-results-dir",
+        type=Path,
+        default=repo_path("callgrind_results"),
+        help="Directory containing Cachegrind JSON records.",
+    )
 
     return parser.parse_args()
 
@@ -126,6 +133,7 @@ def main() -> None:
         else args.data_dir / "benchmark_summary.json"
     )
     args.spill_detection_out_dir = repo_relative_path(args.spill_detection_out_dir)
+    args.cachegrind_results_dir = repo_relative_path(args.cachegrind_results_dir)
 
     print("Step 1/4: Loading Lloyd and GMM metrics artifacts...")
     lloyd_metrics = load_lloyd_metrics_map(args.data_dir)
@@ -163,6 +171,7 @@ def main() -> None:
         records,
         data_dir=args.data_dir,
     )
+    cachegrind = build_cachegrind_summary(args.cachegrind_results_dir)
     summary = build_summary(
         records,
         bootstrap_iterations=args.bootstrap_iterations,
@@ -170,6 +179,7 @@ def main() -> None:
         bootstrap_seed=args.bootstrap_seed,
         lloyd_metrics=lloyd_metrics,
         compile_artifacts=compile_artifacts,
+        cachegrind=cachegrind,
         gmm_metrics=gmm_metrics,
         exclusions=exclusions,
     )
@@ -207,6 +217,10 @@ def main() -> None:
     print(
         "C++ compile artifact records: "
         f"{summary['compile_artifacts'].get('record_count', 0)}"
+    )
+    print(
+        "Cachegrind records: "
+        f"{summary['cachegrind'].get('record_count', 0)}"
     )
 
 

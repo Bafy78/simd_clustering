@@ -6,8 +6,16 @@ from benchmark_pipeline.config import PipelineOptions
 from benchmark_pipeline.exclusions import (
     BenchmarkExclusionRule,
     excluded_phase_keys_for_case,
+    is_cachegrind_excluded,
 )
 from benchmark_pipeline.cpp_cases import get_cpp_case, nanobench_binary_path
+from benchmark_pipeline.cpp_cases import callgrind_binary_path
+from benchmark_pipeline.cachegrind import (
+    add_cache_options,
+    cache_model_record,
+    cachegrind_summary_path,
+    cachegrind_file_stem,
+)
 from benchmark_pipeline.gmm_covariance import validate_gmm_covariance_types
 from benchmark_pipeline.paths import DATASETS_DIR, repo_path, repo_relative_path
 
@@ -41,9 +49,28 @@ def benchmark_case(D: int, N: int, K: int) -> BenchmarkCase:
 class Task:
     name: str
     command: list[str]
+    kind: str = "subprocess"
     cpp_case: str | None = None
     cpp_json_arg: int | None = None
     cpp_metrics_arg: int | None = None
+    cachegrind: "CachegrindTaskInfo | None" = None
+
+
+@dataclass(frozen=True)
+class CachegrindTaskInfo:
+    cpp_case: str
+    D: int
+    N: int
+    K: int
+    params_key: str
+    cache_model: dict[str, str | None]
+    raw_output: str
+    annotated_output: str
+    stdout_path: str
+    stderr_path: str
+    annotate_stderr_path: str
+    summary_path: str
+    metrics_path: str | None = None
 
 
 def config_id(D: int, N: int, K: int) -> str:
@@ -245,6 +272,131 @@ def enabled_phase_keys_for_options(options: PipelineOptions) -> set[str]:
 
     return phase_keys
 
+
+@dataclass(frozen=True, order=True)
+class CppTarget:
+    cpp_case: str
+    params_key: str = NO_PARAMS
+
+    @property
+    def phase_key(self) -> str:
+        return get_cpp_case(self.cpp_case).phase_key
+
+    @property
+    def variant_key(self) -> str:
+        return get_cpp_case(self.cpp_case).variant_key
+
+
+def active_cpp_targets_for_case(
+    case: BenchmarkCase,
+    options: PipelineOptions,
+    exclusion_rules: tuple[BenchmarkExclusionRule, ...] = (),
+) -> list[CppTarget]:
+    """Return concrete C++ targets that normal timing would run for one D/N/K."""
+    enabled_phase_keys = enabled_phase_keys_for_options(options)
+    excluded_phase_keys = excluded_phase_keys_for_case(
+        D=case.D,
+        N=case.N,
+        K=case.K,
+        rules=exclusion_rules,
+        phase_keys=enabled_phase_keys,
+    )
+    active_phase_keys = enabled_phase_keys - excluded_phase_keys
+
+    targets: list[CppTarget] = []
+
+    if "soa" in active_phase_keys:
+        targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_soa_cases)
+    if "pp" in active_phase_keys:
+        targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_pp_cases)
+    if "lloyd" in active_phase_keys:
+        targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_lloyd_cases)
+    if "gmm" in active_phase_keys:
+        for covariance_type in options.gmm_covariance_types:
+            targets.extend(
+                CppTarget(cpp_case, covariance_type)
+                for cpp_case in options.cpp_gmm_cases
+            )
+
+    return sorted(targets)
+
+
+def active_cachegrind_targets_for_case(
+    case: BenchmarkCase,
+    options: PipelineOptions,
+    exclusion_rules: tuple[BenchmarkExclusionRule, ...] = (),
+) -> list[CppTarget]:
+    if not options.run_cachegrind:
+        return []
+
+    return [
+        target
+        for target in active_cpp_targets_for_case(case, options, exclusion_rules)
+        if not is_cachegrind_excluded(
+            D=case.D,
+            N=case.N,
+            K=case.K,
+            phase_key=target.phase_key,
+            cpp_case=target.cpp_case,
+            params_key=target.params_key,
+            rules=options.cachegrind_exclusion_rules,
+        )
+    ]
+
+
+def cachegrind_model_for_options(
+    options: PipelineOptions,
+) -> dict[str, str | None]:
+    return cache_model_record(
+        I1=options.cachegrind_I1,
+        D1=options.cachegrind_D1,
+        LL=options.cachegrind_LL,
+    )
+
+
+def cpp_case_runtime_args(
+    *,
+    cpp_case: str,
+    case: BenchmarkCase,
+    artifacts: BenchmarkArtifacts,
+    params_key: str = NO_PARAMS,
+    metrics_out: str | None = None,
+) -> list[str]:
+    case_info = get_cpp_case(cpp_case)
+    command_args = [
+        artifacts.dataset_bin,
+        str(case.N),
+    ]
+
+    if case_info.needs_clusters_arg:
+        command_args.append(str(case.K))
+
+    if case_info.needs_init:
+        command_args.append(artifacts.init_centroids_bin)
+
+    if case_info.needs_gmm_init:
+        if params_key == NO_PARAMS:
+            raise ValueError(
+                f"C++ case {cpp_case!r} needs a GMM covariance params_key."
+            )
+        command_args.extend(
+            [
+                artifacts.gmm_weights_bin,
+                artifacts.gmm_means_bin,
+                artifacts.gmm_precisions_bin(params_key),
+            ]
+        )
+
+    if case_info.needs_covariance_type_arg:
+        command_args.append(params_key)
+
+    if case_info.needs_metrics:
+        if metrics_out is None:
+            raise ValueError(f"C++ case {cpp_case!r} needs a metrics output path.")
+        command_args.append(metrics_out)
+
+    return command_args
+
 def cpp_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
     case = get_cpp_case(cpp_case)
     if case.phase_key == "gmm" and params_key != NO_PARAMS:
@@ -294,10 +446,96 @@ def add_cpp_case_task(
         Task(
             name=cpp_task_name(cpp_case, params_key),
             command=command,
+            kind="cpp_timing",
             cpp_case=cpp_case,
             cpp_json_arg=cpp_json_arg,
             cpp_metrics_arg=cpp_metrics_arg,
         )
+    )
+
+
+def cachegrind_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
+    case = get_cpp_case(cpp_case)
+    suffix = ""
+    if params_key != NO_PARAMS:
+        suffix = f" ({params_key} covariance)"
+    return f"Cachegrind: {case.display_name}{suffix}"
+
+
+def build_cachegrind_task(
+    *,
+    case: BenchmarkCase,
+    cpp_case: str,
+    artifacts: BenchmarkArtifacts,
+    options: PipelineOptions,
+    params_key: str = NO_PARAMS,
+) -> Task:
+    case_info = get_cpp_case(cpp_case)
+    out_dir = repo_relative_path(options.cachegrind_results_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    stem = cachegrind_file_stem(cpp_case, params_key, case.case_id)
+    raw_output = out_dir / f"{stem}.out"
+    annotated_output = out_dir / f"{stem}.annotate.txt"
+    stdout_path = out_dir / f"valgrind.{stem}.stdout.txt"
+    stderr_path = out_dir / f"valgrind.{stem}.stderr.txt"
+    annotate_stderr_path = out_dir / f"{stem}.annotate.stderr.txt"
+    summary_path = cachegrind_summary_path(
+        out_dir,
+        cpp_case,
+        params_key,
+        case.case_id,
+    )
+
+    metrics_path: Path | None = None
+    if case_info.needs_metrics:
+        metrics_path = out_dir / f"{cpp_case}_metrics_cpp.{params_key}.{case.case_id}.json"
+
+    command = [
+        "valgrind",
+        "--tool=callgrind",
+        "--cache-sim=yes",
+        "--branch-sim=no",
+        "--instr-atstart=no",
+        f"--callgrind-out-file={raw_output}",
+    ]
+    add_cache_options(
+        command,
+        I1=options.cachegrind_I1,
+        D1=options.cachegrind_D1,
+        LL=options.cachegrind_LL,
+    )
+    command.append(str(callgrind_binary_path(cpp_case, case.D)))
+    command.extend(
+        cpp_case_runtime_args(
+            cpp_case=cpp_case,
+            case=case,
+            artifacts=artifacts,
+            params_key=params_key,
+            metrics_out=str(metrics_path) if metrics_path is not None else None,
+        )
+    )
+
+    return Task(
+        name=cachegrind_task_name(cpp_case, params_key),
+        command=command,
+        kind="cachegrind",
+        cpp_case=cpp_case,
+        cachegrind=CachegrindTaskInfo(
+            cpp_case=cpp_case,
+            D=case.D,
+            N=case.N,
+            K=case.K,
+            params_key=params_key,
+            cache_model=cachegrind_model_for_options(options),
+            raw_output=str(raw_output),
+            annotated_output=str(annotated_output),
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            annotate_stderr_path=str(annotate_stderr_path),
+            summary_path=str(summary_path),
+            metrics_path=str(metrics_path) if metrics_path is not None else None,
+        ),
     )
 
 
@@ -577,5 +815,20 @@ def build_pipeline(
                         ],
                     )
                 )
+
+    for target in active_cachegrind_targets_for_case(
+        case,
+        options,
+        exclusion_rules,
+    ):
+        tasks.append(
+            build_cachegrind_task(
+                case=case,
+                cpp_case=target.cpp_case,
+                artifacts=artifacts,
+                options=options,
+                params_key=target.params_key,
+            )
+        )
 
     return tasks

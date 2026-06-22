@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 
-from benchmark_pipeline.exclusions import BenchmarkExclusionRule
+from benchmark_pipeline.cachegrind import CACHEGRIND_RESULTS_DIR
+from benchmark_pipeline.exclusions import (
+    BenchmarkExclusionRule,
+    CachegrindExclusionRule,
+)
 from benchmark_pipeline.paths import DATASETS_DIR
 
 
@@ -17,6 +21,12 @@ class PipelineOptions:
     run_python_lloyd: bool
     cpp_gmm_cases: tuple[str, ...]
     run_python_gmm: bool
+    run_cachegrind: bool
+    cachegrind_I1: str | None
+    cachegrind_D1: str | None
+    cachegrind_LL: str | None
+    cachegrind_exclusion_rules: tuple[CachegrindExclusionRule, ...]
+    cachegrind_results_dir: str = str(CACHEGRIND_RESULTS_DIR)
 
 
 @dataclass(frozen=True)
@@ -52,13 +62,25 @@ def default_config() -> BenchmarkConfig:
             run_python_pp=False,
             cpp_lloyd_cases=(),
             run_python_lloyd=False,
-            cpp_gmm_cases=("gmm_static", "gmm_dynamic"),
-            run_python_gmm=True,
+            cpp_gmm_cases=(),
+            run_python_gmm=False,
+            run_cachegrind=True,
+            cachegrind_I1="32768,8,64",
+            cachegrind_D1="49152,12,64",
+            cachegrind_LL="100663296,24,64",
+            cachegrind_exclusion_rules=(
+                CachegrindExclusionRule(
+                    phase_keys=("soa", "pp"),
+                    reason=(
+                        "Excluded cuz we don't care about them."
+                    ),
+                ),
+            ),
         ),
         exclusion_rules=(
             BenchmarkExclusionRule(
                 phase_keys=("lloyd",),
-                dimensions=(100,),
+                dimensions=(90,),
                 samples=(10_000_000,),
                 reason=(
                     "Excluded because the scikit-learn Lloyd reference no longer "
@@ -69,8 +91,10 @@ def default_config() -> BenchmarkConfig:
                 phase_keys=("gmm",),
                 min_clusters=11,
                 min_samples=300_001,
-                reason="Excluded because GMM doesn't scale well with K and N, so the "
-                       "pipeline would simply take too long to run",
+                reason=(
+                    "Excluded because GMM doesn't scale well with K and N, so the "
+                    "pipeline would simply take too long to run"
+                ),
             ),
             BenchmarkExclusionRule(
                 phase_keys=("gmm",),

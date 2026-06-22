@@ -244,6 +244,39 @@ def _sorted_config_entries(
     return [configs[config_key] for config_key in sorted(configs)]
 
 
+def _attach_cachegrind_records(
+    configs: dict[tuple[int, int, int], dict[str, Any]],
+    cachegrind: dict[str, Any] | None,
+) -> None:
+    if not cachegrind:
+        return
+
+    for record in cachegrind.get("records", []):
+        identity = BenchmarkIdentity(
+            dimensions=int(record["D"]),
+            samples=int(record["N"]),
+            clusters=int(record["K"]),
+            phase_key=str(record["phase_key"]),
+            variant_key=str(record["variant_key"]),
+            language_key="cpp",
+            params_key=str(record.get("params_key", "default")),
+        )
+
+        config_entry = _config_entry(configs, identity)
+        phase_entry = _phase_entry(config_entry, identity)
+        variant_entry = _variant_entry(phase_entry, identity)
+        parameterization_entry = _parameterization_entry(variant_entry, identity)
+        parameterization_entry["cachegrind"] = {
+            "cpp_case": record.get("cpp_case"),
+            "tool": record.get("tool", "callgrind"),
+            "cache_sim": record.get("cache_sim", True),
+            "cache_model": record.get("cache_model", {}),
+            "events": record.get("events", {}),
+            "derived": record.get("derived", {}),
+            "files": record.get("files", {}),
+        }
+
+
 def build_summary(
     records: list[dict[str, Any]],
     bootstrap_iterations: int,
@@ -251,6 +284,7 @@ def build_summary(
     bootstrap_seed: int,
     lloyd_metrics: dict[MetricsKey, dict[str, Any]],
     compile_artifacts: dict[str, Any],
+    cachegrind: dict[str, Any] | None = None,
     gmm_metrics: dict[MetricsKey, dict[str, Any]] | None = None,
     exclusions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -377,13 +411,14 @@ def build_summary(
                             gmm_parity_records.append(parity)
 
     _append_exclusions(configs, exclusions)
+    _attach_cachegrind_records(configs, cachegrind)
 
     _append_parity_status(lloyd_comparison_records, "Lloyd")
     _append_parity_status(gmm_parity_records, "GMM")
 
     return {
         "metadata": {
-            "schema_version": 5,
+            "schema_version": 6,
             "description": (
                 "Post-processed benchmark summary. Raw pyperf/nanobench JSON "
                 "values are grouped by timing process/pyperf run before aggregation. "
@@ -408,6 +443,15 @@ def build_summary(
                 "executable_size_definition": (
                     "Size in bytes of the generated nanobench executable captured "
                     "immediately after compiling that D/phase/variant."
+                ),
+            },
+            "cachegrind": {
+                "source": "callgrind_results/cachegrind.*.json",
+                "cache_sim_source": "Callgrind --cache-sim=yes counters, parsed from each raw callgrind output summary line.",
+                "measurement_region": (
+                    "The C++ Callgrind runner starts instrumentation immediately before "
+                    "one bench_case.run_once() and stops it immediately afterwards. "
+                    "Input loading and setup are intentionally outside the measured region."
                 ),
             },
             "exclusion_count": len(exclusions),
@@ -438,5 +482,15 @@ def build_summary(
         },
         "exclusions": exclusions,
         "compile_artifacts": compile_artifacts,
+        "cachegrind": cachegrind
+        or {
+            "enabled": False,
+            "record_count": 0,
+            "planned_record_count": 0,
+            "missing_record_count": 0,
+            "exclusion_count": 0,
+            "records": [],
+            "exclusions": [],
+        },
         "configs": _sorted_config_entries(configs),
     }

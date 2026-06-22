@@ -38,6 +38,9 @@ class MergeStats:
     exclusions_kept: int = 0
     exclusions_dropped_due_to_data: int = 0
     compile_artifact_records: int = 0
+    cachegrind_records: int = 0
+    cachegrind_planned_records: int = 0
+    cachegrind_exclusions: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -456,6 +459,116 @@ def merge_compile_artifacts(
     return merged
 
 
+
+def cachegrind_record_key(record: JsonDict) -> tuple[int, int, int, str, str]:
+    return (
+        _required_int(record, "D", "Cachegrind record"),
+        _required_int(record, "N", "Cachegrind record"),
+        _required_int(record, "K", "Cachegrind record"),
+        str(record.get("cpp_case", "")),
+        str(record.get("params_key", "default")),
+    )
+
+
+def cachegrind_target_key(record: JsonDict) -> tuple[int, int, int, str, str]:
+    return (
+        _required_int(record, "D", "Cachegrind planned record"),
+        _required_int(record, "N", "Cachegrind planned record"),
+        _required_int(record, "K", "Cachegrind planned record"),
+        str(record.get("cpp_case", "")),
+        str(record.get("params_key", "default")),
+    )
+
+
+def cachegrind_exclusion_key(exclusion: JsonDict) -> tuple[int, int, int, str, str]:
+    return (
+        _required_int(exclusion, "dimensions", "Cachegrind exclusion"),
+        _required_int(exclusion, "samples", "Cachegrind exclusion"),
+        _required_int(exclusion, "clusters", "Cachegrind exclusion"),
+        str(exclusion.get("cpp_case", "")),
+        str(exclusion.get("params_key", "default")),
+    )
+
+
+def merge_cachegrind_summaries(
+    low: JsonDict,
+    high: JsonDict,
+    stats: MergeStats,
+) -> JsonDict:
+    low_cachegrind = low.get("cachegrind", {}) or {}
+    high_cachegrind = high.get("cachegrind", {}) or {}
+
+    if not isinstance(low_cachegrind, dict):
+        raise ValueError("Expected low-priority cachegrind to be a JSON object")
+    if not isinstance(high_cachegrind, dict):
+        raise ValueError("Expected high-priority cachegrind to be a JSON object")
+
+    if not low_cachegrind and not high_cachegrind:
+        return {
+            "enabled": False,
+            "record_count": 0,
+            "planned_record_count": 0,
+            "missing_record_count": 0,
+            "exclusion_count": 0,
+            "records": [],
+            "planned_records": [],
+            "exclusions": [],
+        }
+
+    # High-priority metadata wins, but list-like record containers are merged by
+    # stable config/case/params identity so concatenating partial benchmark
+    # summaries keeps Cachegrind data from both inputs.
+    merged = copy.deepcopy(low_cachegrind)
+    merged.update(
+        {
+            key: copy.deepcopy(value)
+            for key, value in high_cachegrind.items()
+            if key not in {"records", "planned_records", "exclusions"}
+        }
+    )
+
+    records_by_key: dict[tuple[int, int, int, str, str], JsonDict] = {}
+    for record in low_cachegrind.get("records", []) or []:
+        records_by_key[cachegrind_record_key(record)] = copy.deepcopy(record)
+    for record in high_cachegrind.get("records", []) or []:
+        records_by_key[cachegrind_record_key(record)] = copy.deepcopy(record)
+
+    planned_by_key: dict[tuple[int, int, int, str, str], JsonDict] = {}
+    for record in low_cachegrind.get("planned_records", []) or []:
+        planned_by_key[cachegrind_target_key(record)] = copy.deepcopy(record)
+    for record in high_cachegrind.get("planned_records", []) or []:
+        planned_by_key[cachegrind_target_key(record)] = copy.deepcopy(record)
+
+    exclusions_by_key: dict[tuple[int, int, int, str, str], JsonDict] = {}
+    for exclusion in low_cachegrind.get("exclusions", []) or []:
+        exclusions_by_key[cachegrind_exclusion_key(exclusion)] = copy.deepcopy(exclusion)
+    for exclusion in high_cachegrind.get("exclusions", []) or []:
+        exclusions_by_key[cachegrind_exclusion_key(exclusion)] = copy.deepcopy(exclusion)
+
+    records = [records_by_key[key] for key in sorted(records_by_key)]
+    planned_records = [planned_by_key[key] for key in sorted(planned_by_key)]
+    exclusions = [exclusions_by_key[key] for key in sorted(exclusions_by_key)]
+
+    merged["records"] = records
+    merged["planned_records"] = planned_records
+    merged["exclusions"] = exclusions
+    merged["record_count"] = len(records)
+    merged["planned_record_count"] = len(planned_records)
+    merged["missing_record_count"] = max(0, len(planned_records) - len(records))
+    merged["exclusion_count"] = len(exclusions)
+    merged["enabled"] = bool(
+        merged.get("enabled", False)
+        or records
+        or planned_records
+        or low_cachegrind.get("enabled", False)
+        or high_cachegrind.get("enabled", False)
+    )
+
+    stats.cachegrind_records = len(records)
+    stats.cachegrind_planned_records = len(planned_records)
+    stats.cachegrind_exclusions = len(exclusions)
+    return merged
+
 def ensure_config_for_exclusion(
     configs: dict[tuple[int, int, int], JsonDict], exclusion: JsonDict
 ) -> JsonDict:
@@ -558,6 +671,9 @@ def merge_metadata(
             "exclusions_kept": stats.exclusions_kept,
             "exclusions_dropped_due_to_data": stats.exclusions_dropped_due_to_data,
             "compile_artifact_records": stats.compile_artifact_records,
+            "cachegrind_records": stats.cachegrind_records,
+            "cachegrind_planned_records": stats.cachegrind_planned_records,
+            "cachegrind_exclusions": stats.cachegrind_exclusions,
         },
         "low_priority_metadata": low_metadata,
         "high_priority_metadata": high_metadata,
@@ -593,11 +709,12 @@ def merge_benchmark_summaries(
     # Preserve unknown high-priority top-level fields with normal high-priority
     # override semantics, but rebuild the known summary containers explicitly.
     for key, value in high.items():
-        if key not in {"metadata", "configs", "exclusions", "compile_artifacts"}:
+        if key not in {"metadata", "configs", "exclusions", "compile_artifacts", "cachegrind"}:
             merged[key] = copy.deepcopy(value)
 
     merged["exclusions"] = exclusions
     merged["compile_artifacts"] = merge_compile_artifacts(low, high, stats)
+    merged["cachegrind"] = merge_cachegrind_summaries(low, high, stats)
     merged["metadata"] = merge_metadata(
         low,
         high,
@@ -634,6 +751,9 @@ def main() -> None:
     print(f"Parameterizations replaced: {stats.parameterizations_replaced}")
     print(f"Exclusions dropped because concrete phase data exists: {stats.exclusions_dropped_due_to_data}")
     print(f"Compile artifact records: {stats.compile_artifact_records}")
+    print(f"Cachegrind records: {stats.cachegrind_records}")
+    print(f"Cachegrind planned records: {stats.cachegrind_planned_records}")
+    print(f"Cachegrind exclusions: {stats.cachegrind_exclusions}")
 
 
 if __name__ == "__main__":

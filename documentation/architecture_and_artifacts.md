@@ -88,12 +88,15 @@ Lifecycle:
    * run C++ nanobench binaries;
    * run Python/scikit-learn benchmarks;
    * collect timing JSONs;
+   * when enabled, run one Cachegrind pass for each non-excluded C++ config/case/parameterization target.
 
 5. **Metrics collection**
-   * collect algorithm outputs and raw validation metrics
+   * collect algorithm outputs and raw validation metrics;
+   * collect Cachegrind summary counters and annotation files when profiling is enabled.
 
 6. **Postprocessing**
    * merge benchmark records;
+   * merge Cachegrind records from `callgrind_results/`;
    * compare C++ and Python metrics, including parity computation from current thresholds;
    * compute speedups;
    * build summary artifacts;
@@ -109,15 +112,17 @@ The main orchestrator builds a task graph from the selected configuration. This 
 
 When running the [benchmark_pipeline](../python/benchmark_orchestrator.py), many artifacts get produced in the destination folder. Some are intermediate and are automatically cleaned up, the rest should persist until we run the [postprocessing step](../python/postprocess_benchmarks.py).
 
-When this step is finished, it produces a summary artifact that is the canonical input for the [reporting step](../benchmark_analysis.ipynb). The postprocessing and reporting steps can both be run as many times as needed, as long as they still have access to their necessary artifacts
+When this step is finished, it produces a summary artifact that is the canonical input for the [reporting step](../benchmark_analysis.ipynb). The postprocessing and reporting steps can both be run as many times as needed, as long as they still have access to their necessary artifacts.
+
+Cachegrind artifacts live outside `datasets/` by default, under `callgrind_results/`, so the timing-artifact scanner does not confuse profiling JSON files with pyperf/nanobench timing files. The directory contains the raw Callgrind output, `callgrind_annotate` text output, per-run `cachegrind.*.json` summaries, and `cachegrind_manifest.json`.
 
 ## 🔬 Profiling and forensic tools
 
 The project includes tools beyond normal benchmark execution.
 
-### Callgrind profiling
+### Cachegrind profiling
 
-The [callgrind tool](../python/callgrind_alg.py) compiles a selected C++ benchmark case in profiling mode, generates or reuses the required inputs, and runs the selected algorithm under Callgrind with Cache simulation enabled.
+The [standalone callgrind tool](../python/callgrind_alg.py) compiles a selected C++ benchmark case in profiling mode, generates or reuses the required inputs, and runs the selected algorithm under Callgrind with cache simulation enabled. The pipeline and notebook report those counters as Cachegrind results.
 
 ### Spill detection
 

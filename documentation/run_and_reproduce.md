@@ -46,7 +46,9 @@ The requirements file covers the Python benchmark runners, dataset generation, p
 
 The sweep is controlled by `default_config()` in [`python/benchmark_pipeline/config.py`](../python/benchmark_pipeline/config.py).
 
-Use `exclusion_rules` when a D/N/K point should not be run for one or more phases. Each rule is a `BenchmarkExclusionRule` with a user-facing `reason`; the orchestrator writes the resolved skips to `datasets/benchmark_exclusions.json`, and postprocessing carries those messages into `benchmark_summary.json`
+Use `exclusion_rules` when a D/N/K point should not be run for one or more phases. Each rule is a `BenchmarkExclusionRule` with a user-facing `reason`; the orchestrator writes the resolved skips to `datasets/benchmark_exclusions.json`, and postprocessing carries those messages into `benchmark_summary.json`.
+
+Cachegrind is controlled by `run_cachegrind`, `cachegrind_I1`, `cachegrind_D1`, `cachegrind_LL`, and `cachegrind_exclusion_rules`. Cachegrind-specific exclusions skip only profiling runs; they do not remove the normal timing tasks.
 
 The runner executes the phases described in [Main supported algorithmic phases](architecture_and_artifacts.md#main-supported-algorithmic-phases). For the methodology behind the generated inputs, measured regions, repetition model, exclusions, and speedup intervals, see the [Benchmark methodology](benchmark_methodology.md).
 
@@ -56,7 +58,7 @@ The runner executes the phases described in [Main supported algorithmic phases](
 python python/benchmark_orchestrator.py
 ```
 
-The orchestrator prepares the datasets directory, compiles the required C++ cases for each configured dimension, then executes the configured task graph for each `(D, N, K)` combination.
+The orchestrator prepares the datasets directory, compiles the required C++ cases for each configured dimension, then executes the configured task graph for each `(D, N, K)` combination. When `run_cachegrind` is enabled, it also compiles the Callgrind entry points for each needed C++ case/dimension and runs one Cachegrind pass for each non-excluded `D/N/K × C++ case × parameterization` target.
 
 Raw timing and metrics files are written under `datasets/`. Temporary binary input files are created during each configuration run and removed by the normal orchestrator. Running the orchestrator deletes the existing datasets directory before starting.
 
@@ -110,7 +112,9 @@ The notebook expects to be launched from the repository root and reads `datasets
 
 ## 🔬 8. Optional forensic tools
 
-These tools are not part of the normal benchmark reproduction path. Their purpose is summarized in [Profiling and forensic tools](architecture_and_artifacts.md#profiling-and-forensic-tools).
+These tools are useful for ad-hoc runs outside the full configured sweep. Their purpose is summarized in [Profiling and forensic tools](architecture_and_artifacts.md#profiling-and-forensic-tools).
+
+### Cachegrind
 
 ### Callgrind
 
@@ -124,13 +128,15 @@ python python/callgrind_alg.py \
 
 Outputs are written to `callgrind_results/`.
 
-Cachegrind can easily mistake your cache configuration if run from a VM or WSL. So you should probably find out your real specs and pass them as arguments:
+The cache model can be misleading if Valgrind guesses it incorrectly, especially from a VM or WSL. Prefer passing the real cache model explicitly:
 
 ```bash
   --I1 32768,8,64 \
   --D1 32768,8,64 \
   --LL 16777216,16,64
 ```
+
+Callgrind defaults to `-march=x86-64-v3` (AVX-2), instead of using `-march=native` by default like the rest, as valgrind in general doesn't support AVX512. You can change that in [`python/benchmark_pipeline/cpp_cases.py`](../python/benchmark_pipeline/cpp_cases.py).
 
 ### Spill detector
 

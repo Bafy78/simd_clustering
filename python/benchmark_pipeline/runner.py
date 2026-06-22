@@ -11,6 +11,12 @@ from benchmark_pipeline.compile_artifacts import (
     compile_artifacts_path,
     write_compile_artifact_record,
 )
+from benchmark_pipeline.cachegrind import (
+    build_cachegrind_record,
+    parse_cachegrind_summary_events,
+    profile_events_string,
+    write_json as write_cachegrind_json,
+)
 from benchmark_pipeline.config import PipelineOptions
 from benchmark_pipeline.exclusions import BenchmarkExclusionRule
 from benchmark_pipeline.metrics import (
@@ -18,6 +24,7 @@ from benchmark_pipeline.metrics import (
     write_json,
 )
 from benchmark_pipeline.cpp_cases import (
+    callgrind_binary_path,
     cpp_compile_command,
     nanobench_binary_path,
 )
@@ -100,6 +107,38 @@ def run_command(task_name: str, command: list[str]) -> None:
         sys.exit(1)
 
 
+def run_and_capture(
+    task_name: str,
+    command: list[str],
+    *,
+    stdout_path: str | Path,
+    stderr_path: str | Path,
+) -> None:
+    stdout_path = Path(stdout_path)
+    stderr_path = Path(stderr_path)
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+
+    stdout_path.write_text(result.stdout)
+    stderr_path.write_text(result.stderr)
+
+    if result.returncode != 0:
+        print(f"\nTask '{task_name}' FAILED!")
+        print(f"Command: {' '.join(command)}")
+        print(f"Return Code: {result.returncode}")
+        print(f"Stdout file: {stdout_path}")
+        print(f"Stderr file: {stderr_path}")
+        print(f"Stderr:\n{result.stderr}")
+        sys.exit(result.returncode)
+
+
 def run_cpp_task_with_timing_processes(task: Task, timing_processes: int) -> None:
     assert task.cpp_json_arg is not None
 
@@ -171,6 +210,58 @@ def run_cpp_task_with_timing_processes(task: Task, timing_processes: int) -> Non
         delete_if_exists(path, label=None)
 
 
+def run_cachegrind_task(task: Task) -> None:
+    info = task.cachegrind
+    if info is None:
+        raise ValueError("Cachegrind task is missing metadata.")
+
+    print(f"[{task.name}] Running one Cachegrind pass...")
+    run_and_capture(
+        task.name,
+        task.command,
+        stdout_path=info.stdout_path,
+        stderr_path=info.stderr_path,
+    )
+
+    events = parse_cachegrind_summary_events(info.raw_output)
+
+    annotate_command = [
+        "callgrind_annotate",
+        f"--show={profile_events_string()}",
+        "--sort=D1mr,D1mw,DLmr,DLmw,Ir",
+        "--inclusive=yes",
+        "--tree=both",
+        "--threshold=0.0",
+        "--context=8",
+        info.raw_output,
+    ]
+
+    print(f"[{task.name}] Annotating Cachegrind output...")
+    run_and_capture(
+        f"{task.name}: callgrind_annotate",
+        annotate_command,
+        stdout_path=info.annotated_output,
+        stderr_path=info.annotate_stderr_path,
+    )
+
+    record = build_cachegrind_record(
+        cpp_case=info.cpp_case,
+        D=info.D,
+        N=info.N,
+        K=info.K,
+        params_key=info.params_key,
+        cache_model=info.cache_model,
+        events=events,
+        raw_output=info.raw_output,
+        annotated_output=info.annotated_output,
+        stdout_path=info.stdout_path,
+        stderr_path=info.stderr_path,
+        annotate_stderr_path=info.annotate_stderr_path,
+        metrics_path=info.metrics_path,
+    )
+    write_cachegrind_json(info.summary_path, record)
+
+
 def compile_cpp_binaries(
     D: int,
     cpp_cases: Iterable[str],
@@ -212,6 +303,33 @@ def compile_cpp_binaries(
                 binary_path=nanobench_binary_path(cpp_case),
             ),
         )
+
+
+def compile_callgrind_binaries(
+    D: int,
+    cpp_cases: Iterable[str],
+) -> None:
+    """Compile the C++ Callgrind entry points for a specific dimension D."""
+    cases = sorted(set(cpp_cases))
+
+    if not cases:
+        return
+
+    print(f"\n{'=' * 50}")
+    print(f"--- Compiling C++ Callgrind Binaries for {D}D ---")
+    print(f"{'=' * 50}")
+
+    os.makedirs(os.path.dirname(callgrind_binary_path(cases[0], D)), exist_ok=True)
+
+    for cpp_case in cases:
+        cmd = cpp_compile_command(D=D, cpp_case=cpp_case, mode="callgrind")
+
+        print(f"Compiling C++ Callgrind case '{cpp_case}'...")
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
+
+        if result.returncode != 0:
+            print(f"Compilation failed for C++ Callgrind case '{cpp_case}':\n{result.stderr}")
+            sys.exit(1)
 
 
 def delete_if_exists(path: str, label: str | None = "intermediate artifact") -> None:
@@ -263,8 +381,10 @@ def execute_pipeline(
         return
 
     for task in pipeline:
-        if task.cpp_json_arg is not None:
+        if task.kind == "cpp_timing":
             run_cpp_task_with_timing_processes(task, options.timing_processes)
+        elif task.kind == "cachegrind":
+            run_cachegrind_task(task)
         else:
             print(f"[{task.name}] Running...")
             run_command(task.name, task.command)

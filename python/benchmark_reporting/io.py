@@ -190,6 +190,73 @@ def load_spill_detection_summary(
     ).reset_index(drop=True)
 
 
+def load_cachegrind_summary(
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
+) -> pd.DataFrame:
+    """Load Cachegrind records from benchmark_summary.json."""
+    summary = load_benchmark_summary(summary_json)
+    cachegrind = summary.get("cachegrind", {})
+    rows: list[dict[str, Any]] = []
+
+    for result in cachegrind.get("records", []):
+        phase_key = result.get("phase_key")
+        variant_key = result.get("variant_key")
+        params_key = result.get("params_key", "default")
+        events = result.get("events", {})
+        derived = result.get("derived", {})
+        cache_model = result.get("cache_model", {})
+        files = result.get("files", {})
+
+        rows.append(
+            {
+                COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
+                COL_VARIANT: _variant_display_name(variant_key),
+                COL_PARAMS: _params_display_name(params_key),
+                COL_CPP_CASE: result.get("cpp_case"),
+                COL_DIMENSIONS: int(result["D"]),
+                COL_SAMPLES: int(result["N"]),
+                COL_CLUSTERS: int(result["K"]),
+                COL_CACHEGRIND_I1: cache_model.get("I1"),
+                COL_CACHEGRIND_D1: cache_model.get("D1"),
+                COL_CACHEGRIND_LL: cache_model.get("LL"),
+                COL_CACHEGRIND_IR: int(events.get("Ir", 0)),
+                COL_CACHEGRIND_I1MR: int(events.get("I1mr", 0)),
+                COL_CACHEGRIND_ILMR: int(events.get("ILmr", 0)),
+                COL_CACHEGRIND_DR: int(events.get("Dr", 0)),
+                COL_CACHEGRIND_D1MR: int(events.get("D1mr", 0)),
+                COL_CACHEGRIND_DLMR: int(events.get("DLmr", 0)),
+                COL_CACHEGRIND_DW: int(events.get("Dw", 0)),
+                COL_CACHEGRIND_D1MW: int(events.get("D1mw", 0)),
+                COL_CACHEGRIND_DLMW: int(events.get("DLmw", 0)),
+                COL_CACHEGRIND_DATA_REFS: derived.get("data_refs"),
+                COL_CACHEGRIND_D1_DATA_MISSES: derived.get("d1_data_misses"),
+                COL_CACHEGRIND_LL_DATA_MISSES: derived.get("ll_data_misses"),
+                COL_CACHEGRIND_D1_DATA_MISS_RATE: derived.get("d1_data_miss_rate"),
+                COL_CACHEGRIND_LL_DATA_MISS_RATE: derived.get("ll_data_miss_rate"),
+                COL_CACHEGRIND_I1_MISS_RATE: derived.get("instruction_l1_miss_rate"),
+                COL_CACHEGRIND_ILL_MISS_RATE: derived.get("instruction_ll_miss_rate"),
+                "Raw Cachegrind": _file_link(files.get("raw")),
+                "Annotated Cachegrind": _file_link(files.get("annotated")),
+                "Valgrind stderr": _file_link(files.get("stderr")),
+                "Metrics": _file_link(files.get("metrics")),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    df[COL_PHASE] = pd.Categorical(
+        df[COL_PHASE],
+        categories=list(PHASE_MAP.values()),
+        ordered=True,
+    )
+
+    return df.sort_values(
+        [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+    ).reset_index(drop=True)
+
+
 def _language_display_name(summary_language_name: str) -> str:
     if summary_language_name == "C++":
         return LANG_CPP

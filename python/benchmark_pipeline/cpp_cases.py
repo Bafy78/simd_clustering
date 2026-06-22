@@ -203,7 +203,7 @@ def cpp_compile_command(
         "-O3",
         *(["-g"] if mode == "callgrind" else []),
         *(["-S", "-masm=intel"] if mode == "assembly" else []),
-        "-march=native",
+        ("-march=x86-64-v3" if mode == "callgrind" else "-march=native"),
         "-std=c++20",
         "-I../eve/include",
         "-I../nanobench/src/include",
