@@ -400,6 +400,7 @@ def cpp_case_runtime_args(
 
     return command_args
 
+
 def cpp_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
     case = get_cpp_case(cpp_case)
     if case.phase_key == "gmm" and params_key != NO_PARAMS:
@@ -424,35 +425,99 @@ def python_pyperf_args(options: PipelineOptions, output: str) -> list[str]:
     ]
 
 
-def add_cpp_case_task(
-    tasks: list[Task],
-    cpp_case: str,
-    command_args: list[str],
+def cpp_case_timing_artifact(
     *,
-    json_out: str,
-    options: PipelineOptions,
-    metrics_out: str | None = None,
+    cpp_case: str,
+    artifacts: BenchmarkArtifacts,
     params_key: str = NO_PARAMS,
-) -> None:
-    command = [nanobench_binary_path(cpp_case), *command_args]
-    cpp_metrics_arg = None
+) -> str:
+    case_info = get_cpp_case(cpp_case)
+    return artifacts.timing(
+        case_info.phase_key,
+        case_info.variant_key,
+        LANGUAGE_CPP_KEY,
+        params_key,
+    )
 
-    if metrics_out is not None:
-        cpp_metrics_arg = len(command)
-        command.append(metrics_out)
+
+def cpp_case_metrics_artifact(
+    *,
+    cpp_case: str,
+    artifacts: BenchmarkArtifacts,
+    params_key: str = NO_PARAMS,
+) -> str | None:
+    case_info = get_cpp_case(cpp_case)
+    if not case_info.needs_metrics:
+        return None
+
+    return artifacts.metrics(
+        case_info.phase_key,
+        case_info.variant_key,
+        LANGUAGE_CPP_KEY,
+        params_key,
+    )
+
+
+def build_cpp_case_task(
+    *,
+    cpp_case: str,
+    case: BenchmarkCase,
+    artifacts: BenchmarkArtifacts,
+    options: PipelineOptions,
+    params_key: str = NO_PARAMS,
+) -> Task:
+    metrics_out = cpp_case_metrics_artifact(
+        cpp_case=cpp_case,
+        artifacts=artifacts,
+        params_key=params_key,
+    )
+    runtime_args = cpp_case_runtime_args(
+        cpp_case=cpp_case,
+        case=case,
+        artifacts=artifacts,
+        params_key=params_key,
+        metrics_out=metrics_out,
+    )
+
+    command = [nanobench_binary_path(cpp_case), *runtime_args]
+    cpp_metrics_arg = len(command) - 1 if metrics_out is not None else None
 
     cpp_json_arg = len(command)
-    command.append(json_out)
+    command.append(
+        cpp_case_timing_artifact(
+            cpp_case=cpp_case,
+            artifacts=artifacts,
+            params_key=params_key,
+        )
+    )
     command.extend(cpp_timing_args(options))
 
+    return Task(
+        name=cpp_task_name(cpp_case, params_key),
+        command=command,
+        kind="cpp_timing",
+        cpp_case=cpp_case,
+        cpp_json_arg=cpp_json_arg,
+        cpp_metrics_arg=cpp_metrics_arg,
+    )
+
+
+def add_cpp_case_task(
+    tasks: list[Task],
+    *,
+    cpp_case: str,
+    case: BenchmarkCase,
+    artifacts: BenchmarkArtifacts,
+    options: PipelineOptions,
+    params_key: str = NO_PARAMS,
+) -> None:
     tasks.append(
-        Task(
-            name=cpp_task_name(cpp_case, params_key),
-            command=command,
-            kind="cpp_timing",
+        build_cpp_case_task(
             cpp_case=cpp_case,
-            cpp_json_arg=cpp_json_arg,
-            cpp_metrics_arg=cpp_metrics_arg,
+            case=case,
+            artifacts=artifacts,
+            options=options,
+            params_key=params_key,
         )
     )
 
@@ -647,38 +712,21 @@ def build_pipeline(
 
     if "soa" in active_phase_keys:
         for cpp_case in options.cpp_soa_cases:
-            cpp_case_info = get_cpp_case(cpp_case)
             add_cpp_case_task(
                 tasks,
-                cpp_case,
-                [
-                    artifacts.dataset_bin,
-                    str(case.N),
-                ],
-                json_out=artifacts.timing(
-                    cpp_case_info.phase_key,
-                    cpp_case_info.variant_key,
-                    LANGUAGE_CPP_KEY,
-                ),
+                cpp_case=cpp_case,
+                case=case,
+                artifacts=artifacts,
                 options=options,
             )
 
     if "pp" in active_phase_keys:
         for cpp_case in options.cpp_pp_cases:
-            cpp_case_info = get_cpp_case(cpp_case)
             add_cpp_case_task(
                 tasks,
-                cpp_case,
-                [
-                    artifacts.dataset_bin,
-                    str(case.N),
-                    str(case.K),
-                ],
-                json_out=artifacts.timing(
-                    cpp_case_info.phase_key,
-                    cpp_case_info.variant_key,
-                    LANGUAGE_CPP_KEY,
-                ),
+                cpp_case=cpp_case,
+                case=case,
+                artifacts=artifacts,
                 options=options,
             )
 
@@ -702,26 +750,11 @@ def build_pipeline(
 
     if "lloyd" in active_phase_keys:
         for cpp_case in options.cpp_lloyd_cases:
-            cpp_case_info = get_cpp_case(cpp_case)
             add_cpp_case_task(
                 tasks,
-                cpp_case,
-                [
-                    artifacts.dataset_bin,
-                    str(case.N),
-                    str(case.K),
-                    artifacts.init_centroids_bin,
-                ],
-                metrics_out=artifacts.metrics(
-                    cpp_case_info.phase_key,
-                    cpp_case_info.variant_key,
-                    LANGUAGE_CPP_KEY,
-                ),
-                json_out=artifacts.timing(
-                    cpp_case_info.phase_key,
-                    cpp_case_info.variant_key,
-                    LANGUAGE_CPP_KEY,
-                ),
+                cpp_case=cpp_case,
+                case=case,
+                artifacts=artifacts,
                 options=options,
             )
 
@@ -752,31 +785,11 @@ def build_pipeline(
             gmm_precisions_bin = artifacts.gmm_precisions_bin(covariance_type)
 
             for cpp_case in options.cpp_gmm_cases:
-                cpp_case_info = get_cpp_case(cpp_case)
                 add_cpp_case_task(
                     tasks,
-                    cpp_case,
-                    [
-                        artifacts.dataset_bin,
-                        str(case.N),
-                        str(case.K),
-                        artifacts.gmm_weights_bin,
-                        artifacts.gmm_means_bin,
-                        gmm_precisions_bin,
-                        covariance_type,
-                    ],
-                    metrics_out=artifacts.metrics(
-                        cpp_case_info.phase_key,
-                        cpp_case_info.variant_key,
-                        LANGUAGE_CPP_KEY,
-                        covariance_type,
-                    ),
-                    json_out=artifacts.timing(
-                        cpp_case_info.phase_key,
-                        cpp_case_info.variant_key,
-                        LANGUAGE_CPP_KEY,
-                        covariance_type,
-                    ),
+                    cpp_case=cpp_case,
+                    case=case,
+                    artifacts=artifacts,
                     options=options,
                     params_key=covariance_type,
                 )
