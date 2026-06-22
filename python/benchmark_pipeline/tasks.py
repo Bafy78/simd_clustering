@@ -18,9 +18,12 @@ from benchmark_pipeline.cachegrind import (
 )
 from benchmark_pipeline.gmm_covariance import validate_gmm_covariance_types
 from benchmark_pipeline.paths import DATASETS_DIR, repo_path, repo_relative_path
-
-NO_PARAMS = "default"
-REFERENCE_VARIANT = "reference"
+from benchmark_metadata import (
+    LANGUAGE_CPP_KEY,
+    LANGUAGE_PY_KEY,
+    NO_PARAMS,
+    REFERENCE_VARIANT,
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -655,7 +658,7 @@ def build_pipeline(
                 json_out=artifacts.timing(
                     cpp_case_info.phase_key,
                     cpp_case_info.variant_key,
-                    "cpp",
+                    LANGUAGE_CPP_KEY,
                 ),
                 options=options,
             )
@@ -674,7 +677,7 @@ def build_pipeline(
                 json_out=artifacts.timing(
                     cpp_case_info.phase_key,
                     cpp_case_info.variant_key,
-                    "cpp",
+                    LANGUAGE_CPP_KEY,
                 ),
                 options=options,
             )
@@ -691,7 +694,7 @@ def build_pipeline(
                         *case.dimension_args(),
                         *python_pyperf_args(
                             options,
-                            artifacts.timing("pp", REFERENCE_VARIANT, "py"),
+                            artifacts.timing("pp", REFERENCE_VARIANT, LANGUAGE_PY_KEY),
                         ),
                     ],
                 )
@@ -712,12 +715,12 @@ def build_pipeline(
                 metrics_out=artifacts.metrics(
                     cpp_case_info.phase_key,
                     cpp_case_info.variant_key,
-                    "cpp",
+                    LANGUAGE_CPP_KEY,
                 ),
                 json_out=artifacts.timing(
                     cpp_case_info.phase_key,
                     cpp_case_info.variant_key,
-                    "cpp",
+                    LANGUAGE_CPP_KEY,
                 ),
                 options=options,
             )
@@ -735,10 +738,10 @@ def build_pipeline(
                         "--init-centroids-bin",
                         artifacts.init_centroids_bin,
                         "--metrics-file",
-                        artifacts.metrics("lloyd", REFERENCE_VARIANT, "py"),
+                        artifacts.metrics("lloyd", REFERENCE_VARIANT, LANGUAGE_PY_KEY),
                         *python_pyperf_args(
                             options,
-                            artifacts.timing("lloyd", REFERENCE_VARIANT, "py"),
+                            artifacts.timing("lloyd", REFERENCE_VARIANT, LANGUAGE_PY_KEY),
                         ),
                     ],
                 )
@@ -765,13 +768,13 @@ def build_pipeline(
                     metrics_out=artifacts.metrics(
                         cpp_case_info.phase_key,
                         cpp_case_info.variant_key,
-                        "cpp",
+                        LANGUAGE_CPP_KEY,
                         covariance_type,
                     ),
                     json_out=artifacts.timing(
                         cpp_case_info.phase_key,
                         cpp_case_info.variant_key,
-                        "cpp",
+                        LANGUAGE_CPP_KEY,
                         covariance_type,
                     ),
                     options=options,
@@ -800,7 +803,7 @@ def build_pipeline(
                             artifacts.metrics(
                                 "gmm",
                                 REFERENCE_VARIANT,
-                                "py",
+                                LANGUAGE_PY_KEY,
                                 covariance_type,
                             ),
                             *python_pyperf_args(
@@ -808,7 +811,7 @@ def build_pipeline(
                                 artifacts.timing(
                                     "gmm",
                                     REFERENCE_VARIANT,
-                                    "py",
+                                    LANGUAGE_PY_KEY,
                                     covariance_type,
                                 ),
                             ),

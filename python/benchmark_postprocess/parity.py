@@ -6,14 +6,20 @@ from typing import Any
 import numpy as np
 
 from benchmark_postprocess.io import load_json
+from benchmark_metadata import (
+    LANGUAGE_CPP_KEY,
+    LANGUAGE_PY_KEY,
+    NO_PARAMS,
+    REFERENCE_VARIANT,
+)
 from benchmark_postprocess.naming import (
-    LANGUAGE_REFERENCE_VARIANT,
     BenchmarkIdentity,
     MetricsKey,
     parse_metrics_filename,
     variant_display_name,
 )
-REQUIRED_LANGUAGE_KEYS = ("cpp", "py")
+
+REQUIRED_LANGUAGE_KEYS = (LANGUAGE_CPP_KEY, LANGUAGE_PY_KEY)
 
 LLOYD_PARITY_THRESHOLDS = {
     "inertia_diff_pct": 1e-6,
@@ -33,7 +39,7 @@ def metrics_key(
     config_id: str,
     variant_key: str,
     lang_key: str,
-    params_key: str = "default",
+    params_key: str = NO_PARAMS,
 ) -> MetricsKey:
     return (config_id, variant_key, lang_key, params_key)
 
@@ -44,7 +50,7 @@ def _language_metrics(
     variant_key: str,
     lang_key: str,
     phase_name: str,
-    params_key: str = "default",
+    params_key: str = NO_PARAMS,
 ) -> dict[str, Any]:
     record = metrics.get(
         metrics_key(config_id, variant_key, lang_key, params_key)
@@ -65,7 +71,7 @@ def lloyd_algorithm_iteration_count(
     config_id: str,
     variant_key: str,
     lang_key: str,
-    params_key: str = "default",
+    params_key: str = NO_PARAMS,
 ) -> int:
     return int(
         _language_metrics(
@@ -333,14 +339,14 @@ def compute_lloyd_comparison(
     lloyd_metrics: dict[MetricsKey, dict[str, Any]],
     config_id: str,
     cpp_variant_key: str,
-    py_variant_key: str = LANGUAGE_REFERENCE_VARIANT,
-    params_key: str = "default",
+    py_variant_key: str = REFERENCE_VARIANT,
+    params_key: str = NO_PARAMS,
 ) -> dict[str, Any]:
     cpp = _language_metrics(
         lloyd_metrics,
         config_id=config_id,
         variant_key=cpp_variant_key,
-        lang_key="cpp",
+        lang_key=LANGUAGE_CPP_KEY,
         phase_name="Lloyd",
         params_key=params_key,
     )
@@ -348,7 +354,7 @@ def compute_lloyd_comparison(
         lloyd_metrics,
         config_id=config_id,
         variant_key=py_variant_key,
-        lang_key="py",
+        lang_key=LANGUAGE_PY_KEY,
         phase_name="Lloyd",
         params_key=params_key,
     )
@@ -406,14 +412,14 @@ def compute_gmm_comparison(
     config_id: str,
     cpp_variant_key: str,
     params_key: str,
-    py_variant_key: str = LANGUAGE_REFERENCE_VARIANT,
+    py_variant_key: str = REFERENCE_VARIANT,
 ) -> dict[str, Any]:
     """Build GMM parity info from one C++ variant and the shared sklearn reference."""
     cpp = _language_metrics(
         gmm_metrics,
         config_id=config_id,
         variant_key=cpp_variant_key,
-        lang_key="cpp",
+        lang_key=LANGUAGE_CPP_KEY,
         phase_name="GMM",
         params_key=params_key,
     )
@@ -421,7 +427,7 @@ def compute_gmm_comparison(
         gmm_metrics,
         config_id=config_id,
         variant_key=py_variant_key,
-        lang_key="py",
+        lang_key=LANGUAGE_PY_KEY,
         phase_name="GMM",
         params_key=params_key,
     )

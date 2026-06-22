@@ -11,8 +11,8 @@ import pandas as pd
 from scipy.optimize import least_squares
 from sklearn.metrics import r2_score
 
-from .constants import *
-from .transforms import filter_bench
+from benchmark_reporting.constants import *
+from benchmark_reporting.transforms import filter_bench
 
 COL_WORK_SIZE = "Work Size"
 COL_MODEL_NAME = "Model"

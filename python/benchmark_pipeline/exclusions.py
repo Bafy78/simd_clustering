@@ -3,13 +3,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-VALID_PHASE_KEYS = ("soa", "pp", "lloyd", "gmm")
-PHASE_DISPLAY_NAMES = {
-    "soa": "AoS to SoA Tax",
-    "pp": "K-Means++ Initialization",
-    "lloyd": "Lloyd Algorithm",
-    "gmm": "GaussianMixture EM",
-}
+from benchmark_metadata import (
+    NO_PARAMS,
+    PHASE_KEYS,
+    fallback_phase_display_name,
+)
+
+VALID_PHASE_KEYS = PHASE_KEYS
 EXCLUSIONS_FILENAME = "benchmark_exclusions.json"
 
 IntSelector = int | tuple[int, ...] | list[int] | set[int] | None
@@ -112,7 +112,7 @@ class CachegrindExclusionRule:
         K: int,
         phase_key: str,
         cpp_case: str,
-        params_key: str = "default",
+        params_key: str = NO_PARAMS,
     ) -> bool:
         if not self.reason.strip():
             raise ValueError("Cachegrind exclusion rules require a non-empty reason.")
@@ -176,7 +176,7 @@ def _value_matches(
 
 
 def phase_display_name(phase_key: str) -> str:
-    return PHASE_DISPLAY_NAMES.get(phase_key, phase_key)
+    return fallback_phase_display_name(phase_key)
 
 
 def exclusion_records_for_case(
@@ -269,7 +269,7 @@ def is_cachegrind_excluded(
     K: int,
     phase_key: str,
     cpp_case: str,
-    params_key: str = "default",
+    params_key: str = NO_PARAMS,
     rules: Iterable[CachegrindExclusionRule],
 ) -> bool:
     return any(

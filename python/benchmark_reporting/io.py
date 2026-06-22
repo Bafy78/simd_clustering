@@ -4,9 +4,9 @@ from typing import Any, Iterator
 import pandas as pd
 from html import escape
 
-from python.benchmark_pipeline.paths import repo_relative_path
-
-from .constants import *
+from benchmark_pipeline.paths import repo_relative_path
+from benchmark_reporting.constants import *
+from benchmark_metadata import NO_PARAMS, PHASE_DISPLAY_NAMES
 
 DEFAULT_BENCHMARK_SUMMARY_JSON = Path("datasets/benchmark_summary.json")
 
@@ -71,7 +71,7 @@ def load_exclusion_summary(
 
     df[COL_PHASE] = pd.Categorical(
         df[COL_PHASE],
-        categories=list(PHASE_MAP.values()),
+        categories=list(PHASE_DISPLAY_NAMES.values()),
         ordered=True,
     )
 
@@ -141,7 +141,7 @@ def load_compile_artifact_summary(
 
     df[COL_PHASE] = pd.Categorical(
         df[COL_PHASE],
-        categories=list(PHASE_MAP.values()),
+        categories=list(PHASE_DISPLAY_NAMES.values()),
         ordered=True,
     )
 
@@ -181,7 +181,7 @@ def load_spill_detection_summary(
 
     df[COL_PHASE] = pd.Categorical(
         df[COL_PHASE],
-        categories=list(PHASE_MAP.values()),
+        categories=list(PHASE_DISPLAY_NAMES.values()),
         ordered=True,
     )
 
@@ -201,7 +201,7 @@ def load_cachegrind_summary(
     for result in cachegrind.get("records", []):
         phase_key = result.get("phase_key")
         variant_key = result.get("variant_key")
-        params_key = result.get("params_key", "default")
+        params_key = result.get("params_key", NO_PARAMS)
         events = result.get("events", {})
         derived = result.get("derived", {})
         cache_model = result.get("cache_model", {})
@@ -248,7 +248,7 @@ def load_cachegrind_summary(
 
     df[COL_PHASE] = pd.Categorical(
         df[COL_PHASE],
-        categories=list(PHASE_MAP.values()),
+        categories=list(PHASE_DISPLAY_NAMES.values()),
         ordered=True,
     )
 
@@ -266,7 +266,7 @@ def _language_display_name(summary_language_name: str) -> str:
 
 
 def _phase_display_name(phase_key: str, fallback: str) -> str:
-    return PHASE_MAP.get(phase_key, fallback)
+    return PHASE_DISPLAY_NAMES.get(phase_key, fallback)
 
 
 def _variant_display_name(variant_key: str | None, fallback: str | None = None) -> str:
@@ -374,7 +374,7 @@ def load_benchmark_data(
                     variant_key,
                     variant_entry.get("variant", variant_name_from_json),
                 )
-                params_key = parameterization_entry.get("params_key", "default")
+                params_key = parameterization_entry.get("params_key", NO_PARAMS)
                 params_name = _params_display_name(
                     params_key,
                     parameterization_entry.get("params", params_name_from_json),
@@ -435,7 +435,7 @@ def load_benchmark_data(
 
     df[COL_PHASE] = pd.Categorical(
         df[COL_PHASE],
-        categories=list(PHASE_MAP.values()),
+        categories=list(PHASE_DISPLAY_NAMES.values()),
         ordered=True,
     )
 
@@ -501,7 +501,7 @@ def load_speedup_summary(
                     variant_key,
                     variant_entry.get("variant", variant_name_from_json),
                 )
-                params_key = parameterization_entry.get("params_key", "default")
+                params_key = parameterization_entry.get("params_key", NO_PARAMS)
                 params_name = _params_display_name(
                     params_key,
                     parameterization_entry.get("params", params_name_from_json),
@@ -541,7 +541,7 @@ def load_speedup_summary(
 
     df[COL_PHASE] = pd.Categorical(
         df[COL_PHASE],
-        categories=list(PHASE_MAP.values()),
+        categories=list(PHASE_DISPLAY_NAMES.values()),
         ordered=True,
     )
 
@@ -594,7 +594,7 @@ def load_lloyd_parity_summary(
                     variant_key,
                     variant_entry.get("variant", variant_name_from_json),
                 )
-                params_key = parameterization_entry.get("params_key", "default")
+                params_key = parameterization_entry.get("params_key", NO_PARAMS)
                 params_name = _params_display_name(
                     params_key,
                     parameterization_entry.get("params", params_name_from_json),
@@ -673,7 +673,7 @@ def load_gmm_parity_summary(
                     variant_key,
                     variant_entry.get("variant", variant_name_from_json),
                 )
-                params_key = parameterization_entry.get("params_key", "default")
+                params_key = parameterization_entry.get("params_key", NO_PARAMS)
                 params_name = _params_display_name(
                     params_key,
                     parameterization_entry.get("params", params_name_from_json),

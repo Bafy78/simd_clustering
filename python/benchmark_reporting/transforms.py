@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-from .constants import *
+from benchmark_reporting.constants import *
 
 
 def _is_sequence_filter(value):

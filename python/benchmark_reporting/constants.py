@@ -1,21 +1,15 @@
 # Global Constants
-LANG_CPP = "C++ (EVE)"
-LANG_PY = "Python (Scikit-Learn)"
+from benchmark_metadata import (
+    LANGUAGE_CPP_KEY,
+    LANGUAGE_PY_KEY,
+    PHASE_DISPLAY_NAMES,
+    REPORTING_LANGUAGE_DISPLAY_NAMES,
+)
 
-PHASE_MAP = {
-    "soa": "AoS to SoA Tax",
-    "pp": "K-Means++ Initialization",
-    "lloyd": "Lloyd Algorithm",
-    "gmm": "GaussianMixture EM",
-}
+PHASE_ORDER = list(PHASE_DISPLAY_NAMES.values())
 
-PHASE_ORDER = list(PHASE_MAP.values())
-
-LANG_MAP = {
-    "cpp": LANG_CPP,
-    "py": LANG_PY,
-}
-
+LANG_CPP = REPORTING_LANGUAGE_DISPLAY_NAMES[LANGUAGE_CPP_KEY]
+LANG_PY = REPORTING_LANGUAGE_DISPLAY_NAMES[LANGUAGE_PY_KEY]
 LANG_ORDER = [LANG_CPP, LANG_PY]
 
 # Column constants

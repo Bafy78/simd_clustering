@@ -8,6 +8,9 @@ from typing import Any
 import re
 from matplotlib.lines import Line2D
 
+from benchmark_reporting.constants import *
+from benchmark_reporting.transforms import filter_bench
+
 
 def create_subplot_grid(plot_count, cols=2, row_height=5, fig_width=12):
     """Handles the boilerplate for dynamic grid layouts and unused axes."""
@@ -202,34 +205,6 @@ def style_facet_grid(
             ax.xaxis.set_major_locator(mtick.MaxNLocator(integer=True))
 
     return g
-
-
-from python.benchmark_reporting.constants import (
-    COL_DIMENSIONS,
-    COL_SAMPLES,
-    COL_CLUSTERS,
-    COL_EQUIVALENT_ALGORITHM_ITERS,
-    COL_LANGUAGE,
-    COL_PARAMS,
-    COL_PHASE,
-    COL_TIME_PER_ALGORITHM_ITER,
-    COL_TIME_S,
-    COL_VARIANT,
-    LANG_CPP,
-    PHASE_MAP,
-    PHASE_ORDER,
-    COL_EXECUTABLE_SIZE_MIB,
-    COL_CACHEGRIND_D1MR,
-    COL_CACHEGRIND_DLMR,
-    COL_CACHEGRIND_D1MW,
-    COL_CACHEGRIND_DLMW,
-    COL_CACHEGRIND_D1_DATA_MISS_RATE,
-    COL_CACHEGRIND_LL_DATA_MISS_RATE,
-    COL_CACHEGRIND_D1_DATA_MISSES,
-    COL_CACHEGRIND_LL_DATA_MISSES,
-    COL_CACHEGRIND_DATA_REFS,
-)
-from python.benchmark_reporting.transforms import filter_bench
 
 
 def make_cluster_pivot(
@@ -707,9 +682,9 @@ def plot_cachegrind_report(df, plot_specs=CACHEGRIND_REPORT_PLOTS):
 
 def _phase_display_name_from_key(phase_key: str) -> str:
     try:
-        return PHASE_MAP[phase_key]
+        return PHASE_DISPLAY_NAMES[phase_key]
     except KeyError as exc:
-        valid = ", ".join(sorted(PHASE_MAP))
+        valid = ", ".join(sorted(PHASE_DISPLAY_NAMES))
         raise ValueError(
             f"Unknown phase key {phase_key!r}; valid phase keys: {valid}"
         ) from exc

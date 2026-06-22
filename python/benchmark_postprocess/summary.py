@@ -1,8 +1,13 @@
 from collections import defaultdict
 from typing import Any
 
+from benchmark_metadata import (
+    LANGUAGE_CPP_KEY,
+    LANGUAGE_PY_KEY,
+    NO_PARAMS,
+    language_display_name,
+)
 from benchmark_postprocess.naming import (
-    LANG_MAP,
     BenchmarkIdentity,
     MetricsKey,
     params_display_name,
@@ -67,7 +72,7 @@ def summarize_language_records(records: list[dict[str, Any]]) -> dict[str, Any]:
             f"got {algorithm_iterations}"
         )
 
-    params_key = _single_value(records, "params_key", "default")
+    params_key = _single_value(records, "params_key", NO_PARAMS)
 
     return {
         "variant_key": _single_value(records, "variant_key"),
@@ -258,8 +263,8 @@ def _attach_cachegrind_records(
             clusters=int(record["K"]),
             phase_key=str(record["phase_key"]),
             variant_key=str(record["variant_key"]),
-            language_key="cpp",
-            params_key=str(record.get("params_key", "default")),
+            language_key=LANGUAGE_CPP_KEY,
+            params_key=str(record.get("params_key", NO_PARAMS)),
         )
 
         config_entry = _config_entry(configs, identity)
@@ -330,14 +335,14 @@ def build_summary(
                         clusters=K,
                         phase_key=phase_key,
                         variant_key=variant_key,
-                        language_key="cpp",
+                        language_key=LANGUAGE_CPP_KEY,
                         params_key=parameterization_entry["params_key"],
                     )
                     cpp_records = grouped.get(identity)
                     py_records = _py_reference_records(grouped, identity)
 
                     if py_records:
-                        parameterization_entry["languages"][LANG_MAP["py"]] = (
+                        parameterization_entry["languages"][language_display_name(LANGUAGE_PY_KEY)] = (
                             summarize_language_records(py_records)
                         )
 
@@ -366,10 +371,10 @@ def build_summary(
                             params_key=identity.params_key,
                         )
 
-                        parameterization_entry["languages"].setdefault(LANG_MAP["cpp"], {})[
+                        parameterization_entry["languages"].setdefault(language_display_name(LANGUAGE_CPP_KEY), {})[
                             "inertia"
                         ] = parity["cpp_inertia"]
-                        parameterization_entry["languages"].setdefault(LANG_MAP["py"], {})[
+                        parameterization_entry["languages"].setdefault(language_display_name(LANGUAGE_PY_KEY), {})[
                             "inertia"
                         ] = parity["python_inertia"]
 
@@ -382,7 +387,7 @@ def build_summary(
 
                         if cpp_metrics is not None:
                             parameterization_entry["languages"].setdefault(
-                                LANG_MAP["cpp"], {}
+                                language_display_name(LANGUAGE_CPP_KEY), {}
                             ).update(
                                 {
                                     "covariance_type": cpp_metrics["covariance_type"],
@@ -392,7 +397,7 @@ def build_summary(
 
                         if py_metrics is not None:
                             parameterization_entry["languages"].setdefault(
-                                LANG_MAP["py"], {}
+                                language_display_name(LANGUAGE_PY_KEY), {}
                             ).update(
                                 {
                                     "covariance_type": py_metrics["covariance_type"],

@@ -90,12 +90,25 @@ def prepare_datasets_dir(datasets_dir: str | Path) -> Path:
     return datasets_dir
 
 
+def subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    python_path = str(PYTHON_DIR.resolve())
+    existing_python_path = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        python_path
+        if not existing_python_path
+        else os.pathsep.join([python_path, existing_python_path])
+    )
+    return env
+
+
 def run_command(task_name: str, command: list[str]) -> None:
     result = subprocess.run(
         command,
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        env=subprocess_env(),
     )
 
     if result.returncode != 0:
@@ -124,6 +137,7 @@ def run_and_capture(
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        env=subprocess_env(),
     )
 
     stdout_path.write_text(result.stdout)

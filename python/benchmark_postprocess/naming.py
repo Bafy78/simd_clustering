@@ -3,27 +3,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-PHASE_MAP = {
-    "soa": "AoS to SoA Tax",
-    "pp": "K-Means++ Initialization",
-    "lloyd": "Lloyd Algorithm",
-    "gmm": "GaussianMixture EM",
-}
-
-LANG_MAP = {
-    "cpp": "C++",
-    "py": "Python",
-}
-
-VARIANT_MAP = {
-    "static": "Static",
-    "dynamic": "Dynamic",
-    "auto": "Auto",
-    "reference": "Reference",
-}
-
-NO_PARAMS = "default"
-LANGUAGE_REFERENCE_VARIANT = "reference"
+from benchmark_metadata import (
+    LANGUAGE_PY_KEY,
+    NO_PARAMS,
+    REFERENCE_VARIANT,
+    format_config_id,
+    language_display_name,
+    params_display_name,
+    phase_display_name,
+    variant_display_name,
+)
 MetricsKey = tuple[str, str, str, str]
 TOKEN_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_-]*"
 VARIANT_PATTERN = rf"(?P<variant>{TOKEN_PATTERN})"
@@ -92,7 +81,7 @@ class BenchmarkIdentity:
 
     @property
     def phase(self) -> str:
-        return PHASE_MAP[self.phase_key]
+        return phase_display_name(self.phase_key)
 
     @property
     def variant(self) -> str:
@@ -104,13 +93,13 @@ class BenchmarkIdentity:
 
     @property
     def language(self) -> str:
-        return LANG_MAP[self.language_key]
+        return language_display_name(self.language_key)
 
     @property
     def is_python_reference(self) -> bool:
         return (
-            self.language_key == "py"
-            and self.variant_key == LANGUAGE_REFERENCE_VARIANT
+            self.language_key == LANGUAGE_PY_KEY
+            and self.variant_key == REFERENCE_VARIANT
         )
 
     def with_language(
@@ -129,7 +118,7 @@ class BenchmarkIdentity:
         )
 
     def python_reference(self) -> "BenchmarkIdentity":
-        return self.with_language("py", variant_key=LANGUAGE_REFERENCE_VARIANT)
+        return self.with_language(LANGUAGE_PY_KEY, variant_key=REFERENCE_VARIANT)
 
     def as_record_fields(self) -> dict[str, Any]:
         return {
@@ -148,29 +137,11 @@ class BenchmarkIdentity:
         }
 
 
-def format_config_id(D: int, N: int, K: int) -> str:
-    return f"{D}D_{N}N_{K}K"
-
-
 def parse_config_match(match: re.Match[str]) -> tuple[int, int, int]:
     D = int(match.group("D"))
     N = int(match.group("N"))
     K = int(match.group("K"))
     return D, N, K
-
-
-def display_name(key: str) -> str:
-    return key.replace("_", " ").title()
-
-
-def variant_display_name(variant_key: str) -> str:
-    return VARIANT_MAP.get(variant_key, display_name(variant_key))
-
-
-def params_display_name(params_key: str) -> str:
-    if params_key == NO_PARAMS:
-        return "Default"
-    return display_name(params_key)
 
 
 def _parsed_common(
