@@ -25,7 +25,7 @@ CONFIG_ID_PATTERN = r"(?P<D>\d+)D_(?P<N>\d+)N_(?P<K>\d+)K"
 #   {phase}_{stage}_{variant}_{lang}_{D}D_{N}N_{K}K.json
 #   gmm_{stage}_{variant}_{covariance_type}_{lang}_{D}D_{N}N_{K}K.json
 BENCHMARK_JSON_RE = re.compile(
-    rf"^(?P<phase>soa|pp|lloyd)_{STAGE_PATTERN}_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
+    rf"^(?P<phase>soa|pp|lloyd|hdbscan)_{STAGE_PATTERN}_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
 GMM_BENCHMARK_JSON_RE = re.compile(
     rf"^gmm_{STAGE_PATTERN}_{VARIANT_PATTERN}_{PARAMS_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
@@ -33,12 +33,16 @@ GMM_BENCHMARK_JSON_RE = re.compile(
 
 # Current metrics artifacts:
 #   lloyd_{stage}_metrics_{variant}_{lang}_{D}D_{N}N_{K}K.json
+#   hdbscan_{stage}_metrics_{variant}_{lang}_{D}D_{N}N_{K}K.json
 #   gmm_{stage}_metrics_{variant}_{covariance_type}_{lang}_{D}D_{N}N_{K}K.json
 LLOYD_METRICS_JSON_RE = re.compile(
     rf"^lloyd_{STAGE_PATTERN}_metrics_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
 GMM_METRICS_JSON_RE = re.compile(
     rf"^gmm_{STAGE_PATTERN}_metrics_{VARIANT_PATTERN}_{PARAMS_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
+)
+HDBSCAN_METRICS_JSON_RE = re.compile(
+    rf"^hdbscan_{STAGE_PATTERN}_metrics_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
 
 
@@ -198,6 +202,9 @@ def parse_metrics_filename(path: Path, phase_key: str) -> BenchmarkIdentity | No
     elif phase_key == "gmm":
         match = GMM_METRICS_JSON_RE.match(path.name)
         params_key = match.group("params") if match else NO_PARAMS
+    elif phase_key == "hdbscan":
+        match = HDBSCAN_METRICS_JSON_RE.match(path.name)
+        params_key = NO_PARAMS
     else:
         raise ValueError(f"No metrics filename parser for phase {phase_key!r}")
 

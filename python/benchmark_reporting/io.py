@@ -387,6 +387,53 @@ def _iter_phase_variant_parameterizations(
                 )
 
 
+
+
+def _empty_benchmark_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            COL_PHASE,
+            COL_STAGE,
+            COL_LANGUAGE,
+            COL_VARIANT,
+            COL_PARAMS,
+            COL_DIMENSIONS,
+            COL_SAMPLES,
+            COL_CLUSTERS,
+            COL_ALGORITHM_ITERATIONS,
+            COL_TIME_S,
+            COL_TIME_FIELD,
+            COL_TIME_STATISTIC,
+            COL_TIMING_PROCESS_COUNT,
+            COL_TIMING_VALUE_COUNT,
+            COL_INERTIA,
+            COL_COVARIANCE_TYPE,
+            COL_LOWER_BOUND,
+        ]
+    )
+
+
+def _empty_speedup_dataframe() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            COL_PHASE,
+            COL_STAGE,
+            COL_VARIANT,
+            COL_PARAMS,
+            COL_DIMENSIONS,
+            COL_SAMPLES,
+            COL_CLUSTERS,
+            COL_TIME_FIELD,
+            COL_SPEEDUP_STATISTIC,
+            COL_SPEEDUP,
+            COL_SPEEDUP_CI_LOW,
+            COL_SPEEDUP_CI_HIGH,
+            COL_SPEEDUP_CI_LEVEL,
+            COL_CPP_POINT,
+            COL_PY_POINT,
+        ]
+    )
+
 def load_benchmark_data(
     summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
     time_field: str = "time_s",
@@ -483,7 +530,7 @@ def load_benchmark_data(
     df = pd.DataFrame(records)
 
     if df.empty:
-        return df
+        return _empty_benchmark_dataframe()
 
     df = _apply_phase_stage_categories(df)
 
@@ -588,7 +635,7 @@ def load_speedup_summary(
     df = pd.DataFrame(records)
 
     if df.empty:
-        return df
+        return _empty_speedup_dataframe()
 
     df = _apply_phase_stage_categories(df)
 

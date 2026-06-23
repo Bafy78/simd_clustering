@@ -15,6 +15,7 @@ from benchmark_postprocess.naming import (
 )
 from benchmark_postprocess.parity import (
     compute_gmm_comparison,
+    compute_hdbscan_comparison,
     compute_lloyd_comparison,
 )
 from benchmark_postprocess.speedup import build_speedup_block, stable_child_seed
@@ -322,6 +323,7 @@ def build_summary(
     compile_artifacts: dict[str, Any],
     cachegrind: dict[str, Any] | None = None,
     gmm_metrics: dict[MetricsKey, dict[str, Any]] | None = None,
+    hdbscan_metrics: dict[MetricsKey, dict[str, Any]] | None = None,
     exclusions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     grouped = group_records(records)
@@ -330,6 +332,7 @@ def build_summary(
     configs: dict[tuple[int, int, int], dict[str, Any]] = {}
     lloyd_comparison_records: list[dict[str, Any]] = []
     gmm_parity_records: list[dict[str, Any]] = []
+    hdbscan_parity_records: list[dict[str, Any]] = []
 
     # First add all concrete C++ variants. Python reference timing is attached
     # to each C++ variant later, so one Python run can be compared to many C++
@@ -454,15 +457,49 @@ def build_summary(
                                 parameterization_entry["parity"] = parity
                                 gmm_parity_records.append(parity)
 
+                        if identity.phase_key == "hdbscan" and hdbscan_metrics is not None:
+                            cpp_metrics = _metrics_for(hdbscan_metrics, identity)
+                            py_metrics = _metrics_for(hdbscan_metrics, identity.python_reference())
+
+                            if cpp_metrics is not None:
+                                parameterization_entry["languages"].setdefault(
+                                    language_display_name(LANGUAGE_CPP_KEY), {}
+                                )["stage_metrics"] = {
+                                    "stage": cpp_metrics.get("stage"),
+                                    "dtype": cpp_metrics.get("dtype"),
+                                    "shape": cpp_metrics.get("shape"),
+                                }
+
+                            if py_metrics is not None:
+                                parameterization_entry["languages"].setdefault(
+                                    language_display_name(LANGUAGE_PY_KEY), {}
+                                )["stage_metrics"] = {
+                                    "stage": py_metrics.get("stage"),
+                                    "dtype": py_metrics.get("dtype"),
+                                    "shape": py_metrics.get("shape"),
+                                }
+
+                            if cpp_records and py_records:
+                                parity = compute_hdbscan_comparison(
+                                    hdbscan_metrics,
+                                    config_id=identity.config_id,
+                                    cpp_variant_key=identity.variant_key,
+                                    params_key=identity.params_key,
+                                    stage_key=identity.stage_key,
+                                )
+                                parameterization_entry["parity"] = parity
+                                hdbscan_parity_records.append(parity)
+
     _append_exclusions(configs, exclusions)
     _attach_cachegrind_records(configs, cachegrind)
 
     _append_parity_status(lloyd_comparison_records, "Lloyd")
     _append_parity_status(gmm_parity_records, "GMM")
+    _append_parity_status(hdbscan_parity_records, "HDBSCAN")
 
     return {
         "metadata": {
-            "schema_version": 7,
+            "schema_version": 8,
             "description": (
                 "Post-processed benchmark summary. Raw pyperf/nanobench JSON "
                 "values are grouped by timing process/pyperf run before aggregation. "
@@ -521,6 +558,12 @@ def build_summary(
                 "gmm_note": (
                     "GMM uses lower-bound/parameter metrics instead of inertia. "
                     "Timing summaries and speedups use the same clustered aggregation path as Lloyd."
+                ),
+                "hdbscan_source": "precomputed hdbscan_{stage}_metrics_{variant}_{cpp,py}_*.json files",
+                "hdbscan_note": (
+                    "HDBSCAN stage parity is computed from compact stage-output summaries. "
+                    "For the distance stage these summaries are generated after casting the "
+                    "reference output to float32, matching the current C++ implementation scope."
                 ),
             },
         },

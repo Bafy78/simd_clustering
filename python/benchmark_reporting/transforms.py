@@ -120,6 +120,11 @@ def add_speedup_retention(
 
     result = df_speedup.copy()
 
+    if result.empty:
+        result[COL_BASE_SPEEDUP] = pd.Series(dtype=float)
+        result[COL_RETENTION] = pd.Series(dtype=float)
+        return result
+
     if group_cols is None:
         identity_cols = [COL_PHASE]
         if COL_STAGE in result.columns:

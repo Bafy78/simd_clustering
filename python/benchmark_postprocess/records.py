@@ -72,6 +72,8 @@ def load_timing_process_aware_records(
             continue
         if parse_metrics_filename(json_path, "gmm") is not None:
             continue
+        if parse_metrics_filename(json_path, "hdbscan") is not None:
+            continue
 
         identity = parse_benchmark_filename(json_path)
         if identity is None:

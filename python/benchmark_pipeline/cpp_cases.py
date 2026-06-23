@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from benchmark_metadata import FULL_STAGE_KEY
+from benchmark_metadata import FULL_STAGE_KEY, HDBSCAN_DISTANCE_STAGE_KEY
 from benchmark_pipeline.gmm_covariance import SUPPORTED_GMM_COVARIANCE_TYPES
-from benchmark_pipeline.stages import DATASET_ARTIFACT
 from benchmark_pipeline.paths import BIN_DIR, repo_path
 
 
@@ -18,11 +17,13 @@ class CppCase:
     phase_key: str
     variant_key: str
     display_name: str
-    stage_key: str = FULL_STAGE_KEY
-    primary_input_artifact_key: str = DATASET_ARTIFACT
+    stage_keys: tuple[str, ...] = (FULL_STAGE_KEY,)
     needs_gmm_init: bool = False
     needs_covariance_type_arg: bool = False
     supported_gmm_covariance_types: tuple[str, ...] = ()
+
+    def supports_stage(self, stage_key: str) -> bool:
+        return stage_key in self.stage_keys
 
 
 CPP_CASES: dict[str, CppCase] = {
@@ -131,6 +132,18 @@ CPP_CASES: dict[str, CppCase] = {
         variant_key="dynamic",
         display_name="AoS to dynamic SoA C++",
     ),
+    "hdbscan_static": CppCase(
+        name="hdbscan_static",
+        case_struct="static_hdbscan_case",
+        case_header="cases/static_hdbscan_case.hpp",
+        needs_init=False,
+        needs_metrics=True,
+        needs_clusters_arg=False,
+        phase_key="hdbscan",
+        variant_key="static",
+        display_name="HDBSCAN static C++",
+        stage_keys=(HDBSCAN_DISTANCE_STAGE_KEY,),
+    ),
 }
 
 
@@ -147,6 +160,7 @@ def get_cpp_case(cpp_case: str) -> CppCase:
 def nanobench_binary_path(cpp_case: str) -> str:
     cpp_case_def = get_cpp_case(cpp_case)
     return str(BIN_DIR / f"bench_{cpp_case_def.name}.bin")
+
 
 def callgrind_binary_path(cpp_case: str, D: int) -> Path:
     cpp_case_def = get_cpp_case(cpp_case)

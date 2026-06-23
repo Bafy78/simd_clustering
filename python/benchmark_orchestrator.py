@@ -93,6 +93,7 @@ def build_cachegrind_manifest_for_config(config: BenchmarkConfig) -> dict[str, A
                     N=case.N,
                     K=case.K,
                     cpp_case=target.cpp_case,
+                    stage_key=target.stage_key,
                     params_key=target.params_key,
                     rules=rules,
                 )

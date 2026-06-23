@@ -35,6 +35,14 @@ GMM_PARITY_THRESHOLDS = {
     "algorithm_iteration_diff_abs": 0,
 }
 
+HDBSCAN_DISTANCE_PARITY_THRESHOLDS = {
+    "diagonal_max_abs": 0.0,
+    "symmetry_max_abs": 0.0,
+    "summary_scalar_abs_diff": 1e-3,
+    "summary_scalar_rel_diff": 1e-5,
+    "probe_value_max_abs_diff": 1e-4,
+}
+
 
 def metrics_key(
     config_id: str,
@@ -205,6 +213,53 @@ def normalize_gmm_metrics_record(
     }
 
 
+def normalize_hdbscan_metrics_record(
+    record: dict[str, Any],
+    identity: BenchmarkIdentity,
+) -> dict[str, Any]:
+    required_fields = [
+        "phase",
+        "language",
+        "stage",
+        "dtype",
+        "shape",
+        "summary",
+    ]
+
+    for field in required_fields:
+        if field not in record:
+            raise RuntimeError(
+                f"Missing {field!r} in HDBSCAN metrics for {identity.config_id}"
+            )
+
+    if record["phase"] != "hdbscan":
+        raise RuntimeError(
+            f"Unexpected phase in HDBSCAN metrics for {identity.config_id}"
+        )
+
+    if record["language"] != identity.language_key:
+        raise RuntimeError(
+            f"HDBSCAN metrics language mismatch: file is {identity.language_key}, "
+            f"record says {record['language']!r}"
+        )
+
+    if record["stage"] != identity.stage_key:
+        raise RuntimeError(
+            f"HDBSCAN metrics stage mismatch: file is {identity.stage_key}, "
+            f"record says {record['stage']!r}"
+        )
+
+    return {
+        **record,
+        "config_id": identity.config_id,
+        "stage_key": identity.stage_key,
+        "variant_key": identity.variant_key,
+        "variant": identity.variant,
+        "params_key": identity.params_key,
+        "language": identity.language_key,
+    }
+
+
 def load_lloyd_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
     metrics_records: dict[MetricsKey, dict[str, Any]] = {}
 
@@ -247,6 +302,35 @@ def load_gmm_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
     print(f"Loaded {len(metrics_records)} GMM metrics records.")
 
     return metrics_records
+
+
+def load_hdbscan_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
+    metrics_records: dict[MetricsKey, dict[str, Any]] = {}
+
+    for path in sorted(data_dir.glob("hdbscan_*_metrics_*.json")):
+        identity = parse_metrics_filename(path, "hdbscan")
+
+        if identity is None:
+            print(f"Skipping malformed HDBSCAN metrics filename: {path.name}")
+            continue
+
+        metrics = normalize_hdbscan_metrics_record(load_json(path), identity)
+
+        if int(metrics.get("schema_version", 1)) != 1:
+            raise RuntimeError(f"Unsupported HDBSCAN metrics schema in {path}")
+
+        metrics_records[identity.metrics_key] = metrics
+
+    print(f"Loaded {len(metrics_records)} HDBSCAN metrics records.")
+
+    return metrics_records
+
+
+def hdbscan_completed_config_ids(
+    hdbscan_metrics: dict[MetricsKey, dict[str, Any]],
+    required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
+) -> set[str]:
+    return completed_config_ids(hdbscan_metrics, required_languages=required_languages)
 
 
 def completed_metric_keys(
@@ -517,4 +601,142 @@ def compute_gmm_comparison(
         "weights_max_abs_diff": weights_max_abs_diff,
         "means_max_abs_diff": means_max_abs_diff,
         "covariances_max_rel_diff": covariances_max_rel_diff,
+    }
+
+
+
+def _summary_scalar_diff(candidate_summary: dict[str, Any], reference_summary: dict[str, Any], field: str) -> dict[str, float]:
+    candidate = float(candidate_summary[field])
+    reference = float(reference_summary[field])
+    abs_diff = abs(candidate - reference)
+    scale = max(abs(candidate), abs(reference), 1.0)
+    return {
+        "candidate": candidate,
+        "reference": reference,
+        "abs_diff": abs_diff,
+        "rel_diff": abs_diff / scale,
+    }
+
+
+def _probe_value_max_abs_diff(candidate_summary: dict[str, Any], reference_summary: dict[str, Any]) -> float | None:
+    candidate_probes = candidate_summary.get("probes", [])
+    reference_probes = reference_summary.get("probes", [])
+
+    if len(candidate_probes) != len(reference_probes):
+        return None
+
+    max_abs_diff = 0.0
+    for candidate_probe, reference_probe in zip(candidate_probes, reference_probes):
+        if int(candidate_probe.get("index", -1)) != int(reference_probe.get("index", -2)):
+            return None
+        max_abs_diff = max(
+            max_abs_diff,
+            abs(float(candidate_probe["value"]) - float(reference_probe["value"])),
+        )
+    return max_abs_diff
+
+
+def compute_hdbscan_comparison(
+    hdbscan_metrics: dict[MetricsKey, dict[str, Any]],
+    config_id: str,
+    cpp_variant_key: str,
+    py_variant_key: str = REFERENCE_VARIANT,
+    params_key: str = NO_PARAMS,
+    stage_key: str = FULL_STAGE_KEY,
+) -> dict[str, Any]:
+    cpp = _language_metrics(
+        hdbscan_metrics,
+        config_id=config_id,
+        stage_key=stage_key,
+        variant_key=cpp_variant_key,
+        lang_key=LANGUAGE_CPP_KEY,
+        phase_name="HDBSCAN",
+        params_key=params_key,
+    )
+    py = _language_metrics(
+        hdbscan_metrics,
+        config_id=config_id,
+        stage_key=stage_key,
+        variant_key=py_variant_key,
+        lang_key=LANGUAGE_PY_KEY,
+        phase_name="HDBSCAN",
+        params_key=params_key,
+    )
+
+    cpp_summary = cpp.get("summary", {})
+    py_summary = py.get("summary", {})
+    scalar_diffs = {
+        field: _summary_scalar_diff(cpp_summary, py_summary, field)
+        for field in ("sum", "sum_abs", "sum_squares", "weighted_sum", "min", "max")
+    }
+    scalar_abs_diff_max = max(diff["abs_diff"] for diff in scalar_diffs.values())
+    scalar_rel_diff_max = max(diff["rel_diff"] for diff in scalar_diffs.values())
+    probe_value_max_abs_diff = _probe_value_max_abs_diff(cpp_summary, py_summary)
+
+    summary_count_fields = (
+        "value_count",
+        "finite_count",
+        "nan_count",
+        "pos_inf_count",
+        "neg_inf_count",
+    )
+    summary_counts_equal = all(
+        cpp_summary.get(field) == py_summary.get(field)
+        for field in summary_count_fields
+    )
+
+    checks = {
+        "shape": cpp.get("shape") == py.get("shape"),
+        "dtype": cpp.get("dtype") == py.get("dtype"),
+        "summary_counts": summary_counts_equal,
+        "diagonal_max_abs": (
+            float(cpp.get("diagonal_max_abs", 0.0))
+            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["diagonal_max_abs"]
+            and float(py.get("diagonal_max_abs", 0.0))
+            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["diagonal_max_abs"]
+        ),
+        "symmetry_max_abs": (
+            float(cpp.get("symmetry_max_abs", 0.0))
+            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["symmetry_max_abs"]
+            and float(py.get("symmetry_max_abs", 0.0))
+            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["symmetry_max_abs"]
+        ),
+        "summary_scalar_abs_or_rel_diff": (
+            scalar_abs_diff_max
+            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["summary_scalar_abs_diff"]
+            or scalar_rel_diff_max
+            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["summary_scalar_rel_diff"]
+        ),
+        "probe_value_max_abs_diff": _is_finite_and_within(
+            probe_value_max_abs_diff,
+            HDBSCAN_DISTANCE_PARITY_THRESHOLDS["probe_value_max_abs_diff"],
+        ),
+    }
+    status, failure_reasons = _status_from_checks(checks)
+
+    return {
+        "config_id": config_id,
+        "stage_key": stage_key,
+        "stage": cpp.get("stage", stage_key),
+        "variant_key": cpp_variant_key,
+        "variant": variant_display_name(cpp_variant_key),
+        "params_key": params_key,
+        "python_variant_key": py.get("variant_key", py_variant_key),
+        "status": status,
+        "failure_reasons": failure_reasons,
+        "checks": checks,
+        "thresholds": dict(HDBSCAN_DISTANCE_PARITY_THRESHOLDS),
+        "cpp_shape": cpp.get("shape"),
+        "python_shape": py.get("shape"),
+        "cpp_hash": cpp_summary.get("fnv1a64_float32"),
+        "python_hash": py_summary.get("fnv1a64_float32"),
+        "hash_equal": cpp_summary.get("fnv1a64_float32") == py_summary.get("fnv1a64_float32"),
+        "summary_scalar_diffs": scalar_diffs,
+        "summary_scalar_abs_diff_max": scalar_abs_diff_max,
+        "summary_scalar_rel_diff_max": scalar_rel_diff_max,
+        "probe_value_max_abs_diff": probe_value_max_abs_diff,
+        "cpp_diagonal_max_abs": float(cpp.get("diagonal_max_abs", 0.0)),
+        "python_diagonal_max_abs": float(py.get("diagonal_max_abs", 0.0)),
+        "cpp_symmetry_max_abs": float(cpp.get("symmetry_max_abs", 0.0)),
+        "python_symmetry_max_abs": float(py.get("symmetry_max_abs", 0.0)),
     }

@@ -260,6 +260,7 @@ def run_cachegrind_task(task: Task) -> None:
 
     record = build_cachegrind_record(
         cpp_case=info.cpp_case,
+        stage_key=info.stage_key,
         D=info.D,
         N=info.N,
         K=info.K,

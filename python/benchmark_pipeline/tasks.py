@@ -21,6 +21,7 @@ from benchmark_pipeline.gmm_covariance import validate_gmm_covariance_types
 from benchmark_pipeline.paths import DATASETS_DIR, repo_path, repo_relative_path
 from benchmark_metadata import (
     FULL_STAGE_KEY,
+    HDBSCAN_STAGE_KEYS,
     LANGUAGE_CPP_KEY,
     LANGUAGE_PY_KEY,
     NO_PARAMS,
@@ -334,22 +335,42 @@ def enabled_phase_keys_for_options(options: PipelineOptions) -> set[str]:
         phase_keys.add("lloyd")
     if options.cpp_gmm_cases or options.run_python_gmm:
         phase_keys.add("gmm")
+    if options.cpp_hdbscan_cases or options.run_python_hdbscan:
+        phase_keys.add("hdbscan")
 
     return phase_keys
+
+
+def _validate_hdbscan_stage_keys(stage_keys: tuple[str, ...]) -> None:
+    unknown = sorted(set(stage_keys) - set(HDBSCAN_STAGE_KEYS))
+    if unknown:
+        valid = ", ".join(HDBSCAN_STAGE_KEYS)
+        raise ValueError(
+            f"Unknown HDBSCAN stage key(s): {', '.join(unknown)}. "
+            f"Expected one or more of: {valid}"
+        )
 
 
 def enabled_stage_keys_by_phase_for_options(
     options: PipelineOptions,
 ) -> dict[str, tuple[str, ...]]:
-    return {
+    phase_keys = enabled_phase_keys_for_options(options)
+    stage_keys_by_phase = {
         phase_key: stage_keys_for_phase(phase_key)
-        for phase_key in enabled_phase_keys_for_options(options)
+        for phase_key in phase_keys
     }
+
+    if "hdbscan" in phase_keys:
+        _validate_hdbscan_stage_keys(options.hdbscan_stages)
+        stage_keys_by_phase["hdbscan"] = options.hdbscan_stages
+
+    return stage_keys_by_phase
 
 
 @dataclass(frozen=True, order=True)
 class CppTarget:
     cpp_case: str
+    stage_key: str = FULL_STAGE_KEY
     params_key: str = NO_PARAMS
 
     @property
@@ -357,12 +378,23 @@ class CppTarget:
         return get_cpp_case(self.cpp_case).phase_key
 
     @property
-    def stage_key(self) -> str:
-        return get_cpp_case(self.cpp_case).stage_key
-
-    @property
     def variant_key(self) -> str:
         return get_cpp_case(self.cpp_case).variant_key
+
+
+def _cpp_target_for_stage(
+    cpp_case: str,
+    stage_key: str = FULL_STAGE_KEY,
+    params_key: str = NO_PARAMS,
+) -> CppTarget:
+    case = get_cpp_case(cpp_case)
+    if not case.supports_stage(stage_key):
+        supported = ", ".join(case.stage_keys)
+        raise ValueError(
+            f"C++ case {cpp_case!r} does not support stage {stage_key!r}. "
+            f"Supported stages: {supported}"
+        )
+    return CppTarget(cpp_case=cpp_case, stage_key=stage_key, params_key=params_key)
 
 
 def active_cpp_targets_for_case(
@@ -370,7 +402,12 @@ def active_cpp_targets_for_case(
     options: PipelineOptions,
     exclusion_rules: tuple[BenchmarkExclusionRule, ...] = (),
 ) -> list[CppTarget]:
-    """Return concrete C++ targets that normal timing would run for one D/N/K."""
+    """Return concrete C++ phase/stage/variant targets for one D/N/K.
+
+    C++ cases describe implementation variants. Stages are expanded here from
+    the enabled stage dimension, so HDBSCAN does not need one fake C++ case per
+    stage.
+    """
     enabled_phase_keys = enabled_phase_keys_for_options(options)
     stage_keys_by_phase = enabled_stage_keys_by_phase_for_options(options)
     excluded_phase_stage_keys = excluded_phase_stage_keys_for_case(
@@ -385,24 +422,40 @@ def active_cpp_targets_for_case(
     targets: list[CppTarget] = []
 
     if "soa" in enabled_phase_keys:
-        targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_soa_cases)
+        targets.extend(
+            _cpp_target_for_stage(cpp_case)
+            for cpp_case in options.cpp_soa_cases
+        )
     if "pp" in enabled_phase_keys:
-        targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_pp_cases)
+        targets.extend(
+            _cpp_target_for_stage(cpp_case)
+            for cpp_case in options.cpp_pp_cases
+        )
     if "lloyd" in enabled_phase_keys:
-        targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_lloyd_cases)
+        targets.extend(
+            _cpp_target_for_stage(cpp_case)
+            for cpp_case in options.cpp_lloyd_cases
+        )
     if "gmm" in enabled_phase_keys:
         for covariance_type in options.gmm_covariance_types:
             targets.extend(
-                CppTarget(cpp_case, covariance_type)
+                _cpp_target_for_stage(cpp_case, params_key=covariance_type)
                 for cpp_case in options.cpp_gmm_cases
             )
+    if "hdbscan" in enabled_phase_keys:
+        enabled_hdbscan_stages = set(stage_keys_by_phase.get("hdbscan", ()))
+        for cpp_case in options.cpp_hdbscan_cases:
+            case_info = get_cpp_case(cpp_case)
+            for stage_key in case_info.stage_keys:
+                if stage_key in enabled_hdbscan_stages:
+                    targets.append(_cpp_target_for_stage(cpp_case, stage_key))
 
     return sorted(
         target
         for target in targets
-        if (target.phase_key, target.stage_key) not in excluded_phase_stage_keys
+        if target.stage_key in stage_keys_by_phase.get(target.phase_key, ())
+        and (target.phase_key, target.stage_key) not in excluded_phase_stage_keys
     )
-
 
 def active_cachegrind_targets_for_case(
     case: BenchmarkCase,
@@ -441,29 +494,47 @@ def cachegrind_model_for_options(
 def cpp_case_runtime_args(
     *,
     cpp_case: str,
+    stage_key: str,
     case: BenchmarkCase,
     artifacts: BenchmarkArtifacts,
     params_key: str = NO_PARAMS,
     metrics_out: str | None = None,
 ) -> list[str]:
     case_info = get_cpp_case(cpp_case)
-    command_args = [
-        artifacts.artifact(
-            case_info.primary_input_artifact_key,
-            stage_key=case_info.stage_key,
-            params_key=params_key,
-        ),
-        str(case.N),
-    ]
+    if not case_info.supports_stage(stage_key):
+        supported = ", ".join(case_info.stage_keys)
+        raise ValueError(
+            f"C++ case {cpp_case!r} does not support stage {stage_key!r}. "
+            f"Supported stages: {supported}"
+        )
 
-    if case_info.needs_clusters_arg:
+    stage_spec = get_stage_spec(case_info.phase_key, stage_key)
+    command_args: list[str] = []
+
+    if case_info.phase_key == "hdbscan":
+        command_args.append(stage_key)
+
+    command_args.extend(
+        artifacts.artifact(
+            artifact_key,
+            stage_key=stage_key,
+            params_key=params_key,
+        )
+        for artifact_key in stage_spec.input_artifact_keys
+    )
+    command_args.append(str(case.N))
+
+    if case_info.phase_key == "hdbscan":
+        # HDBSCAN uses K from the global config as min_samples/min_cluster_size.
+        command_args.append(str(case.K))
+    elif case_info.needs_clusters_arg:
         command_args.append(str(case.K))
 
     if case_info.needs_init:
         command_args.append(
             artifacts.artifact(
                 INIT_CENTROIDS_ARTIFACT,
-                stage_key=case_info.stage_key,
+                stage_key=stage_key,
                 params_key=params_key,
             )
         )
@@ -492,11 +563,15 @@ def cpp_case_runtime_args(
     return command_args
 
 
-def cpp_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
+def cpp_task_name(
+    cpp_case: str,
+    stage_key: str = FULL_STAGE_KEY,
+    params_key: str = NO_PARAMS,
+) -> str:
     case = get_cpp_case(cpp_case)
     stage_suffix = ""
-    if case.stage_key != FULL_STAGE_KEY:
-        stage_suffix = f" [{stage_display_name(case.stage_key)}]"
+    if stage_key != FULL_STAGE_KEY:
+        stage_suffix = f" [{stage_display_name(stage_key)}]"
     if case.phase_key == "gmm" and params_key != NO_PARAMS:
         return f"C++: {case.display_name}{stage_suffix} ({params_key} covariance)"
     return f"C++: {case.display_name}{stage_suffix}"
@@ -522,13 +597,14 @@ def python_pyperf_args(options: PipelineOptions, output: str) -> list[str]:
 def cpp_case_timing_artifact(
     *,
     cpp_case: str,
+    stage_key: str,
     artifacts: BenchmarkArtifacts,
     params_key: str = NO_PARAMS,
 ) -> str:
     case_info = get_cpp_case(cpp_case)
     return artifacts.timing(
         case_info.phase_key,
-        case_info.stage_key,
+        stage_key,
         case_info.variant_key,
         LANGUAGE_CPP_KEY,
         params_key,
@@ -538,6 +614,7 @@ def cpp_case_timing_artifact(
 def cpp_case_metrics_artifact(
     *,
     cpp_case: str,
+    stage_key: str,
     artifacts: BenchmarkArtifacts,
     params_key: str = NO_PARAMS,
 ) -> str | None:
@@ -547,7 +624,7 @@ def cpp_case_metrics_artifact(
 
     return artifacts.metrics(
         case_info.phase_key,
-        case_info.stage_key,
+        stage_key,
         case_info.variant_key,
         LANGUAGE_CPP_KEY,
         params_key,
@@ -557,6 +634,7 @@ def cpp_case_metrics_artifact(
 def build_cpp_case_task(
     *,
     cpp_case: str,
+    stage_key: str,
     case: BenchmarkCase,
     artifacts: BenchmarkArtifacts,
     options: PipelineOptions,
@@ -564,11 +642,13 @@ def build_cpp_case_task(
 ) -> Task:
     metrics_out = cpp_case_metrics_artifact(
         cpp_case=cpp_case,
+        stage_key=stage_key,
         artifacts=artifacts,
         params_key=params_key,
     )
     runtime_args = cpp_case_runtime_args(
         cpp_case=cpp_case,
+        stage_key=stage_key,
         case=case,
         artifacts=artifacts,
         params_key=params_key,
@@ -582,6 +662,7 @@ def build_cpp_case_task(
     command.append(
         cpp_case_timing_artifact(
             cpp_case=cpp_case,
+            stage_key=stage_key,
             artifacts=artifacts,
             params_key=params_key,
         )
@@ -589,9 +670,13 @@ def build_cpp_case_task(
     command.extend(cpp_timing_args(options))
 
     case_info = get_cpp_case(cpp_case)
-    stage_spec = get_stage_spec(case_info.phase_key, case_info.stage_key)
+    stage_spec = get_stage_spec(case_info.phase_key, stage_key)
     input_artifacts = tuple(
-        artifacts.artifact(artifact_key, stage_key=case_info.stage_key, params_key=params_key)
+        artifacts.artifact(
+            artifact_key,
+            stage_key=stage_key,
+            params_key=params_key,
+        )
         for artifact_key in stage_spec.input_artifact_keys
     )
     if case_info.needs_init:
@@ -599,7 +684,7 @@ def build_cpp_case_task(
             *input_artifacts,
             artifacts.artifact(
                 INIT_CENTROIDS_ARTIFACT,
-                stage_key=case_info.stage_key,
+                stage_key=stage_key,
                 params_key=params_key,
             ),
         )
@@ -614,12 +699,12 @@ def build_cpp_case_task(
     output_artifacts = (metrics_out,) if metrics_out is not None else ()
 
     return Task(
-        name=cpp_task_name(cpp_case, params_key),
+        name=cpp_task_name(cpp_case, stage_key, params_key),
         command=command,
         kind="cpp_timing",
         cpp_case=cpp_case,
         phase_key=case_info.phase_key,
-        stage_key=case_info.stage_key,
+        stage_key=stage_key,
         input_artifacts=input_artifacts,
         output_artifacts=output_artifacts,
         cpp_json_arg=cpp_json_arg,
@@ -631,6 +716,7 @@ def add_cpp_case_task(
     tasks: list[Task],
     *,
     cpp_case: str,
+    stage_key: str = FULL_STAGE_KEY,
     case: BenchmarkCase,
     artifacts: BenchmarkArtifacts,
     options: PipelineOptions,
@@ -639,6 +725,7 @@ def add_cpp_case_task(
     tasks.append(
         build_cpp_case_task(
             cpp_case=cpp_case,
+            stage_key=stage_key,
             case=case,
             artifacts=artifacts,
             options=options,
@@ -647,14 +734,18 @@ def add_cpp_case_task(
     )
 
 
-def cachegrind_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
+def cachegrind_task_name(
+    cpp_case: str,
+    stage_key: str = FULL_STAGE_KEY,
+    params_key: str = NO_PARAMS,
+) -> str:
     case = get_cpp_case(cpp_case)
     suffix = ""
     if params_key != NO_PARAMS:
         suffix = f" ({params_key} covariance)"
     stage_suffix = ""
-    if case.stage_key != FULL_STAGE_KEY:
-        stage_suffix = f" [{stage_display_name(case.stage_key)}]"
+    if stage_key != FULL_STAGE_KEY:
+        stage_suffix = f" [{stage_display_name(stage_key)}]"
     return f"Cachegrind: {case.display_name}{stage_suffix}{suffix}"
 
 
@@ -662,6 +753,7 @@ def build_cachegrind_task(
     *,
     case: BenchmarkCase,
     cpp_case: str,
+    stage_key: str,
     artifacts: BenchmarkArtifacts,
     options: PipelineOptions,
     params_key: str = NO_PARAMS,
@@ -670,7 +762,7 @@ def build_cachegrind_task(
     out_dir = repo_relative_path(options.cachegrind_results_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = cachegrind_file_stem(cpp_case, case_info.stage_key, params_key, case.case_id)
+    stem = cachegrind_file_stem(cpp_case, stage_key, params_key, case.case_id)
     raw_output = out_dir / f"{stem}.out"
     annotated_output = out_dir / f"{stem}.annotate.txt"
     stdout_path = out_dir / f"valgrind.{stem}.stdout.txt"
@@ -679,7 +771,7 @@ def build_cachegrind_task(
     summary_path = cachegrind_summary_path(
         out_dir,
         cpp_case,
-        case_info.stage_key,
+        stage_key,
         params_key,
         case.case_id,
     )
@@ -687,7 +779,7 @@ def build_cachegrind_task(
     metrics_path: Path | None = None
     if case_info.needs_metrics:
         metrics_path = out_dir / (
-            f"{case_info.phase_key}_{case_info.stage_key}_metrics_"
+            f"{case_info.phase_key}_{stage_key}_metrics_"
             f"{case_info.variant_key}_{params_key}_cpp_{case.case_id}.json"
         )
 
@@ -709,6 +801,7 @@ def build_cachegrind_task(
     command.extend(
         cpp_case_runtime_args(
             cpp_case=cpp_case,
+            stage_key=stage_key,
             case=case,
             artifacts=artifacts,
             params_key=params_key,
@@ -717,15 +810,15 @@ def build_cachegrind_task(
     )
 
     return Task(
-        name=cachegrind_task_name(cpp_case, params_key),
+        name=cachegrind_task_name(cpp_case, stage_key, params_key),
         command=command,
         kind="cachegrind",
         cpp_case=cpp_case,
         phase_key=case_info.phase_key,
-        stage_key=case_info.stage_key,
+        stage_key=stage_key,
         cachegrind=CachegrindTaskInfo(
             cpp_case=cpp_case,
-            stage_key=case_info.stage_key,
+            stage_key=stage_key,
             D=case.D,
             N=case.N,
             K=case.K,
@@ -849,11 +942,21 @@ def build_pipeline(
     active_phase_keys = enabled_phase_keys - excluded_phase_keys
 
     def stage_is_active(phase_key: str, stage_key: str = FULL_STAGE_KEY) -> bool:
-        return phase_key in active_phase_keys and (phase_key, stage_key) not in excluded_phase_stage_keys
+        return (
+            phase_key in active_phase_keys
+            and stage_key in stage_keys_by_phase.get(phase_key, ())
+            and (phase_key, stage_key) not in excluded_phase_stage_keys
+        )
 
-    def cpp_case_is_active(cpp_case: str) -> bool:
+    def cpp_case_stage_is_active(
+        cpp_case: str,
+        stage_key: str = FULL_STAGE_KEY,
+    ) -> bool:
         case_info = get_cpp_case(cpp_case)
-        return stage_is_active(case_info.phase_key, case_info.stage_key)
+        return (
+            case_info.supports_stage(stage_key)
+            and stage_is_active(case_info.phase_key, stage_key)
+        )
 
     needs_gmm_init = "gmm" in active_phase_keys
     if ("gmm" in enabled_phase_keys) and not options.gmm_covariance_types:
@@ -878,7 +981,7 @@ def build_pipeline(
 
     if "soa" in active_phase_keys:
         for cpp_case in options.cpp_soa_cases:
-            if not cpp_case_is_active(cpp_case):
+            if not cpp_case_stage_is_active(cpp_case):
                 continue
             add_cpp_case_task(
                 tasks,
@@ -890,7 +993,7 @@ def build_pipeline(
 
     if "pp" in active_phase_keys:
         for cpp_case in options.cpp_pp_cases:
-            if not cpp_case_is_active(cpp_case):
+            if not cpp_case_stage_is_active(cpp_case):
                 continue
             add_cpp_case_task(
                 tasks,
@@ -928,7 +1031,7 @@ def build_pipeline(
 
     if "lloyd" in active_phase_keys:
         for cpp_case in options.cpp_lloyd_cases:
-            if not cpp_case_is_active(cpp_case):
+            if not cpp_case_stage_is_active(cpp_case):
                 continue
             add_cpp_case_task(
                 tasks,
@@ -986,7 +1089,7 @@ def build_pipeline(
             gmm_precisions_bin = artifacts.gmm_precisions_bin(covariance_type)
 
             for cpp_case in options.cpp_gmm_cases:
-                if not cpp_case_is_active(cpp_case):
+                if not cpp_case_stage_is_active(cpp_case):
                     continue
                 add_cpp_case_task(
                     tasks,
@@ -1054,6 +1157,74 @@ def build_pipeline(
                     )
                 )
 
+    if "hdbscan" in active_phase_keys:
+        _validate_hdbscan_stage_keys(options.hdbscan_stages)
+
+        hdbscan_targets = [
+            target
+            for target in active_cpp_targets_for_case(case, options, exclusion_rules)
+            if target.phase_key == "hdbscan"
+        ]
+        for target in hdbscan_targets:
+            add_cpp_case_task(
+                tasks,
+                cpp_case=target.cpp_case,
+                stage_key=target.stage_key,
+                case=case,
+                artifacts=artifacts,
+                options=options,
+                params_key=target.params_key,
+            )
+
+        if options.run_python_hdbscan:
+            for stage_key in options.hdbscan_stages:
+                if not stage_is_active("hdbscan", stage_key):
+                    continue
+
+                tasks.append(
+                    Task(
+                        name=f"Python: HDBSCAN [{stage_display_name(stage_key)}]",
+                        command=[
+                            sys.executable,
+                            repo_path("python", "benchmark_pipeline", "benches", "bench_hdbscan.py"),
+                            "--dataset-bin",
+                            artifacts.dataset_bin,
+                            *case.dimension_args(),
+                            "--stage",
+                            stage_key,
+                            "--min-samples",
+                            str(case.K),
+                            "--metrics-file",
+                            artifacts.metrics(
+                                "hdbscan",
+                                stage_key,
+                                REFERENCE_VARIANT,
+                                LANGUAGE_PY_KEY,
+                            ),
+                            *python_pyperf_args(
+                                options,
+                                artifacts.timing(
+                                    "hdbscan",
+                                    stage_key,
+                                    REFERENCE_VARIANT,
+                                    LANGUAGE_PY_KEY,
+                                ),
+                            ),
+                        ],
+                        phase_key="hdbscan",
+                        stage_key=stage_key,
+                        input_artifacts=(artifacts.dataset_bin,),
+                        output_artifacts=(
+                            artifacts.metrics(
+                                "hdbscan",
+                                stage_key,
+                                REFERENCE_VARIANT,
+                                LANGUAGE_PY_KEY,
+                            ),
+                        ),
+                    )
+                )
+
     for target in active_cachegrind_targets_for_case(
         case,
         options,
@@ -1063,6 +1234,7 @@ def build_pipeline(
             build_cachegrind_task(
                 case=case,
                 cpp_case=target.cpp_case,
+                stage_key=target.stage_key,
                 artifacts=artifacts,
                 options=options,
                 params_key=target.params_key,

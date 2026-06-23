@@ -21,6 +21,9 @@ class PipelineOptions:
     run_python_lloyd: bool
     cpp_gmm_cases: tuple[str, ...]
     run_python_gmm: bool
+    cpp_hdbscan_cases: tuple[str, ...]
+    run_python_hdbscan: bool
+    hdbscan_stages: tuple[str, ...]
     run_cachegrind: bool
     cachegrind_I1: str | None
     cachegrind_D1: str | None
@@ -57,13 +60,16 @@ def default_config() -> BenchmarkConfig:
             timing_values=5,
             timing_min_time=0.05,
             gmm_covariance_types=("spherical", "diag", "full",),
-            cpp_soa_cases=("soa_static", "soa_dynamic"),
-            cpp_pp_cases=("pp_static", "pp_dynamic"),
+            cpp_soa_cases=(),
+            cpp_pp_cases=(),
             run_python_pp=False,
             cpp_lloyd_cases=(),
             run_python_lloyd=False,
             cpp_gmm_cases=(),
             run_python_gmm=False,
+            cpp_hdbscan_cases=("hdbscan_static",),
+            run_python_hdbscan=True,
+            hdbscan_stages=("distance",),
             run_cachegrind=True,
             cachegrind_I1="32768,8,64",
             cachegrind_D1="49152,12,64",

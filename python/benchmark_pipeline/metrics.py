@@ -149,6 +149,76 @@ def validate_gmm_timing_process_metrics(
     )
 
 
+def validate_hdbscan_timing_process_metrics(candidate: dict, reference: dict, path: str) -> None:
+    if candidate.get("phase") != reference.get("phase"):
+        raise RuntimeError(f"phase mismatch in {path}")
+
+    if candidate.get("stage") != reference.get("stage"):
+        raise RuntimeError(f"stage mismatch in {path}")
+
+    if candidate.get("dtype") != reference.get("dtype"):
+        raise RuntimeError(f"dtype mismatch in {path}")
+
+    if candidate.get("shape") != reference.get("shape"):
+        raise RuntimeError(f"shape mismatch in {path}")
+
+    if int(candidate.get("min_samples", -1)) != int(reference.get("min_samples", -1)):
+        raise RuntimeError(f"min_samples mismatch in {path}")
+
+    assert_close(
+        f"diagonal_max_abs in {path}",
+        float(candidate.get("diagonal_max_abs", 0.0)),
+        float(reference.get("diagonal_max_abs", 0.0)),
+    )
+    assert_close(
+        f"symmetry_max_abs in {path}",
+        float(candidate.get("symmetry_max_abs", 0.0)),
+        float(reference.get("symmetry_max_abs", 0.0)),
+    )
+
+    candidate_summary = candidate.get("summary", {})
+    reference_summary = reference.get("summary", {})
+
+    for field in (
+        "value_count",
+        "finite_count",
+        "nan_count",
+        "pos_inf_count",
+        "neg_inf_count",
+        "fnv1a64_float32",
+    ):
+        if candidate_summary.get(field) != reference_summary.get(field):
+            raise RuntimeError(
+                f"HDBSCAN summary {field} mismatch in {path}: "
+                f"{candidate_summary.get(field)!r} vs {reference_summary.get(field)!r}"
+            )
+
+    for field in ("sum", "sum_abs", "sum_squares", "weighted_sum", "min", "max"):
+        assert_close(
+            f"summary.{field} in {path}",
+            float(candidate_summary[field]),
+            float(reference_summary[field]),
+            rel_tol=1e-7,
+            abs_tol=1e-6,
+        )
+
+    candidate_probes = candidate_summary.get("probes", [])
+    reference_probes = reference_summary.get("probes", [])
+    if len(candidate_probes) != len(reference_probes):
+        raise RuntimeError(f"HDBSCAN probe count mismatch in {path}")
+
+    for i, (cand, ref) in enumerate(zip(candidate_probes, reference_probes)):
+        if cand.get("index") != ref.get("index"):
+            raise RuntimeError(f"HDBSCAN probe index mismatch in {path} at probe {i}")
+        assert_close(
+            f"summary.probes[{i}].value in {path}",
+            float(cand["value"]),
+            float(ref["value"]),
+            rel_tol=1e-7,
+            abs_tol=1e-6,
+        )
+
+
 def validate_cpp_timing_process_metrics(timing_process_metrics: list[str]) -> dict:
     if not timing_process_metrics:
         raise RuntimeError("No C++ timing-process metrics files to validate")
@@ -166,6 +236,10 @@ def validate_cpp_timing_process_metrics(timing_process_metrics: list[str]) -> di
 
         if reference.get("phase") == "gmm":
             validate_gmm_timing_process_metrics(candidate, reference, path)
+            continue
+
+        if reference.get("phase") == "hdbscan":
+            validate_hdbscan_timing_process_metrics(candidate, reference, path)
             continue
 
         if int(candidate["algorithm_iterations"]) != int(

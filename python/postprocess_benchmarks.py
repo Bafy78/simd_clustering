@@ -7,8 +7,10 @@ from benchmark_postprocess.io import write_json
 from benchmark_postprocess.parity import (
     completed_metric_keys,
     gmm_completed_config_ids,
+    hdbscan_completed_config_ids,
     lloyd_completed_config_ids,
     load_gmm_metrics_map,
+    load_hdbscan_metrics_map,
     load_lloyd_metrics_map,
 )
 from benchmark_postprocess.records import load_timing_process_aware_records
@@ -135,16 +137,19 @@ def main() -> None:
     args.spill_detection_out_dir = repo_relative_path(args.spill_detection_out_dir)
     args.cachegrind_results_dir = repo_relative_path(args.cachegrind_results_dir)
 
-    print("Step 1/4: Loading Lloyd and GMM metrics artifacts...")
+    print("Step 1/4: Loading Lloyd, GMM, and HDBSCAN metrics artifacts...")
     lloyd_metrics = load_lloyd_metrics_map(args.data_dir)
     gmm_metrics = load_gmm_metrics_map(args.data_dir)
+    hdbscan_metrics = load_hdbscan_metrics_map(args.data_dir)
 
     print(f"Step 2/4: Loading benchmark records from {args.data_dir}...")
     lloyd_config_ids = lloyd_completed_config_ids(lloyd_metrics)
     gmm_config_ids = gmm_completed_config_ids(gmm_metrics)
+    hdbscan_config_ids = hdbscan_completed_config_ids(hdbscan_metrics)
     lloyd_metric_keys = completed_metric_keys(lloyd_metrics)
     gmm_metric_keys = completed_metric_keys(gmm_metrics)
-    completed_algorithm_config_ids = lloyd_config_ids | gmm_config_ids
+    hdbscan_metric_keys = completed_metric_keys(hdbscan_metrics)
+    completed_algorithm_config_ids = lloyd_config_ids | gmm_config_ids | hdbscan_config_ids
     completed_config_ids_by_phase = {}
     if completed_algorithm_config_ids:
         completed_config_ids_by_phase["soa"] = completed_algorithm_config_ids
@@ -152,6 +157,7 @@ def main() -> None:
     completed_metric_keys_by_phase = {
         "lloyd": lloyd_metric_keys,
         "gmm": gmm_metric_keys,
+        "hdbscan": hdbscan_metric_keys,
     }
 
     records = load_timing_process_aware_records(
@@ -181,6 +187,7 @@ def main() -> None:
         compile_artifacts=compile_artifacts,
         cachegrind=cachegrind,
         gmm_metrics=gmm_metrics,
+        hdbscan_metrics=hdbscan_metrics,
         exclusions=exclusions,
     )
 
@@ -213,6 +220,9 @@ def main() -> None:
     print(f"GMM metrics records: {len(gmm_metrics)}")
     print(f"GMM completed configs: {len(gmm_config_ids)}")
     print(f"GMM completed config/stage/params keys: {len(gmm_metric_keys)}")
+    print(f"HDBSCAN metrics records: {len(hdbscan_metrics)}")
+    print(f"HDBSCAN completed configs: {len(hdbscan_config_ids)}")
+    print(f"HDBSCAN completed config/stage/params keys: {len(hdbscan_metric_keys)}")
     print(f"Configured benchmark phase/stage exclusions: {len(exclusions)}")
     print(
         "C++ compile artifact records: "
