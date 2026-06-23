@@ -3,7 +3,7 @@ from typing import Any
 
 from benchmark_postprocess.io import load_json
 from benchmark_pipeline.compile_artifacts import COMPILE_ARTIFACTS_FILENAME
-from benchmark_postprocess.naming import parse_benchmark_filename
+from benchmark_postprocess.naming import parse_benchmark_filename, parse_metrics_filename
 from benchmark_postprocess.parity import (
     MetricsKey,
     gmm_algorithm_iteration_count,
@@ -56,25 +56,21 @@ def load_timing_process_aware_records(
     lloyd_metrics: dict[MetricsKey, dict[str, Any]],
     gmm_metrics: dict[MetricsKey, dict[str, Any]] | None = None,
     completed_config_ids_by_phase: dict[str, set[str]] | None = None,
-    completed_metric_keys_by_phase: dict[str, set[tuple[str, str]]] | None = None,
+    completed_metric_keys_by_phase: dict[str, set[tuple[str, str, str]]] | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
 
-    known_artifact_prefixes = (
-        "lloyd_metrics_",
-        "gmm_metrics_",
-    )
-
     for json_path in sorted(data_dir.glob("*.json")):
-        if (
-            json_path.name
-            in {
-                "benchmark_summary.json",
-                EXCLUSIONS_FILENAME,
-                COMPILE_ARTIFACTS_FILENAME,
-            }
-            or json_path.name.startswith(known_artifact_prefixes)
-        ):
+        if json_path.name in {
+            "benchmark_summary.json",
+            EXCLUSIONS_FILENAME,
+            COMPILE_ARTIFACTS_FILENAME,
+        }:
+            continue
+
+        if parse_metrics_filename(json_path, "lloyd") is not None:
+            continue
+        if parse_metrics_filename(json_path, "gmm") is not None:
             continue
 
         identity = parse_benchmark_filename(json_path)
@@ -86,11 +82,12 @@ def load_timing_process_aware_records(
         lang_key = identity.language_key
         variant_key = identity.variant_key
         config_id = identity.config_id
+        stage_key = identity.stage_key
         params_key = identity.params_key
 
         if completed_metric_keys_by_phase is not None and phase_key in completed_metric_keys_by_phase:
             allowed_metric_keys = completed_metric_keys_by_phase[phase_key]
-            if (config_id, params_key) not in allowed_metric_keys:
+            if (config_id, stage_key, params_key) not in allowed_metric_keys:
                 continue
 
         if completed_config_ids_by_phase is not None:
@@ -102,6 +99,7 @@ def load_timing_process_aware_records(
             algorithm_iterations = lloyd_algorithm_iteration_count(
                 lloyd_metrics,
                 config_id=config_id,
+                stage_key=stage_key,
                 variant_key=variant_key,
                 lang_key=lang_key,
                 params_key=params_key,
@@ -113,6 +111,7 @@ def load_timing_process_aware_records(
             algorithm_iterations = gmm_algorithm_iteration_count(
                 gmm_metrics,
                 config_id=config_id,
+                stage_key=stage_key,
                 variant_key=variant_key,
                 lang_key=lang_key,
                 params_key=params_key,

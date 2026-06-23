@@ -6,6 +6,7 @@ from benchmark_metadata import (
     LANGUAGE_PY_KEY,
     NO_PARAMS,
     language_display_name,
+    stage_display_name,
 )
 from benchmark_postprocess.naming import (
     BenchmarkIdentity,
@@ -134,6 +135,21 @@ def _phase_entry(
         identity.phase,
         {
             "phase_key": identity.phase_key,
+            "phase": identity.phase,
+            "stages": {},
+        },
+    )
+
+
+def _stage_entry(
+    phase_entry: dict[str, Any],
+    identity: BenchmarkIdentity,
+) -> dict[str, Any]:
+    return phase_entry["stages"].setdefault(
+        identity.stage,
+        {
+            "stage_key": identity.stage_key,
+            "stage": identity.stage,
             "variants": {},
         },
     )
@@ -193,7 +209,7 @@ def _append_parity_status(records: list[dict[str, Any]], phase_name: str) -> Non
 
     if failures:
         failed_ids = ", ".join(
-            f"{parity['config_id']}:{parity.get('variant_key')}:{parity.get('params_key')}"
+            f"{parity['config_id']}:{parity['stage_key']}:{parity.get('variant_key')}:{parity.get('params_key')}"
             for parity in failures[:10]
         )
         print(
@@ -223,9 +239,21 @@ def _append_exclusions(
 
         phase_key = str(exclusion["phase_key"])
         phase_name = str(exclusion.get("phase", phase_key))
-        config_entry.setdefault("excluded_phases", {})[phase_name] = {
+        stage_key = str(exclusion["stage_key"])
+        stage_name = str(exclusion.get("stage", stage_display_name(stage_key)))
+        phase_exclusion = config_entry.setdefault("excluded_phases", {}).setdefault(
+            phase_name,
+            {
+                "phase_key": phase_key,
+                "phase": phase_name,
+                "stages": {},
+            },
+        )
+        phase_exclusion["stages"][stage_name] = {
             "phase_key": phase_key,
             "phase": phase_name,
+            "stage_key": stage_key,
+            "stage": stage_name,
             "reason": exclusion.get("reason", ""),
             "matched_rules": exclusion.get("matched_rules", []),
         }
@@ -239,6 +267,7 @@ def _sorted_exclusions(exclusions: list[dict[str, Any]]) -> list[dict[str, Any]]
             int(item["samples"]),
             int(item["clusters"]),
             str(item["phase_key"]),
+            str(item["stage_key"]),
         ),
     )
 
@@ -262,6 +291,7 @@ def _attach_cachegrind_records(
             samples=int(record["N"]),
             clusters=int(record["K"]),
             phase_key=str(record["phase_key"]),
+            stage_key=str(record["stage_key"]),
             variant_key=str(record["variant_key"]),
             language_key=LANGUAGE_CPP_KEY,
             params_key=str(record.get("params_key", NO_PARAMS)),
@@ -269,7 +299,8 @@ def _attach_cachegrind_records(
 
         config_entry = _config_entry(configs, identity)
         phase_entry = _phase_entry(config_entry, identity)
-        variant_entry = _variant_entry(phase_entry, identity)
+        stage_entry = _stage_entry(phase_entry, identity)
+        variant_entry = _variant_entry(stage_entry, identity)
         parameterization_entry = _parameterization_entry(variant_entry, identity)
         parameterization_entry["cachegrind"] = {
             "cpp_case": record.get("cpp_case"),
@@ -309,7 +340,8 @@ def build_summary(
 
         config_entry = _config_entry(configs, identity)
         phase_entry = _phase_entry(config_entry, identity)
-        variant_entry = _variant_entry(phase_entry, identity)
+        stage_entry = _stage_entry(phase_entry, identity)
+        variant_entry = _variant_entry(stage_entry, identity)
         parameterization_entry = _parameterization_entry(variant_entry, identity)
         parameterization_entry["languages"][identity.language] = (
             summarize_language_records(group)
@@ -323,97 +355,104 @@ def build_summary(
         for phase_entry in config_entry["phases"].values():
             phase_key = phase_entry["phase_key"]
 
-            for variant_entry in phase_entry.get("variants", {}).values():
-                variant_key = variant_entry["variant_key"]
+            for stage_entry in phase_entry.get("stages", {}).values():
+                stage_key = stage_entry["stage_key"]
 
-                for parameterization_entry in variant_entry.get(
-                    "parameterizations", {}
-                ).values():
-                    identity = BenchmarkIdentity(
-                        dimensions=D,
-                        samples=N,
-                        clusters=K,
-                        phase_key=phase_key,
-                        variant_key=variant_key,
-                        language_key=LANGUAGE_CPP_KEY,
-                        params_key=parameterization_entry["params_key"],
-                    )
-                    cpp_records = grouped.get(identity)
-                    py_records = _py_reference_records(grouped, identity)
+                for variant_entry in stage_entry.get("variants", {}).values():
+                    variant_key = variant_entry["variant_key"]
 
-                    if py_records:
-                        parameterization_entry["languages"][language_display_name(LANGUAGE_PY_KEY)] = (
-                            summarize_language_records(py_records)
+                    for parameterization_entry in variant_entry.get(
+                        "parameterizations", {}
+                    ).values():
+                        identity = BenchmarkIdentity(
+                            dimensions=D,
+                            samples=N,
+                            clusters=K,
+                            phase_key=phase_key,
+                            stage_key=stage_key,
+                            variant_key=variant_key,
+                            language_key=LANGUAGE_CPP_KEY,
+                            params_key=parameterization_entry["params_key"],
                         )
+                        cpp_records = grouped.get(identity)
+                        py_records = _py_reference_records(grouped, identity)
 
-                    if cpp_records and py_records:
-                        speedup_seed = stable_child_seed(
-                            bootstrap_seed,
-                            identity.config_id,
-                            identity.phase_key,
-                            identity.variant_key,
-                            identity.params_key,
-                        )
-
-                        parameterization_entry["speedup"] = build_speedup_block(
-                            cpp_records,
-                            py_records,
-                            bootstrap_iterations=bootstrap_iterations,
-                            ci_level=ci_level,
-                            seed=speedup_seed,
-                        )
-
-                    if identity.phase_key == "lloyd" and cpp_records and py_records:
-                        parity = compute_lloyd_comparison(
-                            lloyd_metrics,
-                            config_id=identity.config_id,
-                            cpp_variant_key=identity.variant_key,
-                            params_key=identity.params_key,
-                        )
-
-                        parameterization_entry["languages"].setdefault(language_display_name(LANGUAGE_CPP_KEY), {})[
-                            "inertia"
-                        ] = parity["cpp_inertia"]
-                        parameterization_entry["languages"].setdefault(language_display_name(LANGUAGE_PY_KEY), {})[
-                            "inertia"
-                        ] = parity["python_inertia"]
-
-                        parameterization_entry["parity"] = parity
-                        lloyd_comparison_records.append(parity)
-
-                    if identity.phase_key == "gmm" and gmm_metrics is not None:
-                        cpp_metrics = _metrics_for(gmm_metrics, identity)
-                        py_metrics = _metrics_for(gmm_metrics, identity.python_reference())
-
-                        if cpp_metrics is not None:
-                            parameterization_entry["languages"].setdefault(
-                                language_display_name(LANGUAGE_CPP_KEY), {}
-                            ).update(
-                                {
-                                    "covariance_type": cpp_metrics["covariance_type"],
-                                    "lower_bound": cpp_metrics["lower_bound"],
-                                }
-                            )
-
-                        if py_metrics is not None:
-                            parameterization_entry["languages"].setdefault(
-                                language_display_name(LANGUAGE_PY_KEY), {}
-                            ).update(
-                                {
-                                    "covariance_type": py_metrics["covariance_type"],
-                                    "lower_bound": py_metrics["lower_bound"],
-                                }
+                        if py_records:
+                            parameterization_entry["languages"][language_display_name(LANGUAGE_PY_KEY)] = (
+                                summarize_language_records(py_records)
                             )
 
                         if cpp_records and py_records:
-                            parity = compute_gmm_comparison(
-                                gmm_metrics,
+                            speedup_seed = stable_child_seed(
+                                bootstrap_seed,
+                                identity.config_id,
+                                identity.phase_key,
+                                identity.stage_key,
+                                identity.variant_key,
+                                identity.params_key,
+                            )
+
+                            parameterization_entry["speedup"] = build_speedup_block(
+                                cpp_records,
+                                py_records,
+                                bootstrap_iterations=bootstrap_iterations,
+                                ci_level=ci_level,
+                                seed=speedup_seed,
+                            )
+
+                        if identity.phase_key == "lloyd" and cpp_records and py_records:
+                            parity = compute_lloyd_comparison(
+                                lloyd_metrics,
                                 config_id=identity.config_id,
                                 cpp_variant_key=identity.variant_key,
                                 params_key=identity.params_key,
+                                stage_key=identity.stage_key,
                             )
+
+                            parameterization_entry["languages"].setdefault(language_display_name(LANGUAGE_CPP_KEY), {})[
+                                "inertia"
+                            ] = parity["cpp_inertia"]
+                            parameterization_entry["languages"].setdefault(language_display_name(LANGUAGE_PY_KEY), {})[
+                                "inertia"
+                            ] = parity["python_inertia"]
+
                             parameterization_entry["parity"] = parity
-                            gmm_parity_records.append(parity)
+                            lloyd_comparison_records.append(parity)
+
+                        if identity.phase_key == "gmm" and gmm_metrics is not None:
+                            cpp_metrics = _metrics_for(gmm_metrics, identity)
+                            py_metrics = _metrics_for(gmm_metrics, identity.python_reference())
+
+                            if cpp_metrics is not None:
+                                parameterization_entry["languages"].setdefault(
+                                    language_display_name(LANGUAGE_CPP_KEY), {}
+                                ).update(
+                                    {
+                                        "covariance_type": cpp_metrics["covariance_type"],
+                                        "lower_bound": cpp_metrics["lower_bound"],
+                                    }
+                                )
+
+                            if py_metrics is not None:
+                                parameterization_entry["languages"].setdefault(
+                                    language_display_name(LANGUAGE_PY_KEY), {}
+                                ).update(
+                                    {
+                                        "covariance_type": py_metrics["covariance_type"],
+                                        "lower_bound": py_metrics["lower_bound"],
+                                    }
+                                )
+
+                            if cpp_records and py_records:
+                                parity = compute_gmm_comparison(
+                                    gmm_metrics,
+                                    config_id=identity.config_id,
+                                    cpp_variant_key=identity.variant_key,
+                                    params_key=identity.params_key,
+                                    stage_key=identity.stage_key,
+                                )
+                                parameterization_entry["parity"] = parity
+                                gmm_parity_records.append(parity)
 
     _append_exclusions(configs, exclusions)
     _attach_cachegrind_records(configs, cachegrind)
@@ -423,14 +462,14 @@ def build_summary(
 
     return {
         "metadata": {
-            "schema_version": 6,
+            "schema_version": 7,
             "description": (
                 "Post-processed benchmark summary. Raw pyperf/nanobench JSON "
                 "values are grouped by timing process/pyperf run before aggregation. "
-                "C++ variants and algorithm parameterizations are represented explicitly; "
+                "C++ stages, variants, and algorithm parameterizations are represented explicitly; "
                 "Python reference runs are attached to each comparable C++ variant with "
                 "the same parameterization. Configured exclusions are preserved as "
-                "reported-but-not-run D/N/K/phase entries."
+                "reported-but-not-run D/N/K/phase/stage entries."
             ),
             "time_unit": "seconds",
             "time_per_algorithm_iteration_definition": (
@@ -447,7 +486,7 @@ def build_summary(
                 ),
                 "executable_size_definition": (
                     "Size in bytes of the generated nanobench executable captured "
-                    "immediately after compiling that D/phase/variant."
+                    "immediately after compiling that D/phase/stage/variant."
                 ),
             },
             "cachegrind": {
@@ -467,8 +506,8 @@ def build_summary(
                 "seed": int(bootstrap_seed),
             },
             "algorithm_metrics": {
-                "lloyd_source": "precomputed lloyd_metrics_{variant}_{cpp,py}_*.json files",
-                "gmm_source": "precomputed gmm_metrics_{variant}_{covariance_type}_{cpp,py}_*.json files",
+                "lloyd_source": "precomputed lloyd_{stage}_metrics_{variant}_{cpp,py}_*.json files",
+                "gmm_source": "precomputed gmm_{stage}_metrics_{variant}_{covariance_type}_{cpp,py}_*.json files",
                 "parity_note": (
                     "Lloyd and GMM parity are computed per C++ variant against the "
                     "shared sklearn reference for the same parameterization using "

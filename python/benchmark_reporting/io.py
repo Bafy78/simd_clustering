@@ -6,7 +6,7 @@ from html import escape
 
 from benchmark_pipeline.paths import repo_relative_path
 from benchmark_reporting.constants import *
-from benchmark_metadata import NO_PARAMS, PHASE_DISPLAY_NAMES
+from benchmark_metadata import FULL_STAGE_KEY, NO_PARAMS, PHASE_DISPLAY_NAMES, STAGE_DISPLAY_NAMES, stage_display_name
 
 DEFAULT_BENCHMARK_SUMMARY_JSON = Path("datasets/benchmark_summary.json")
 
@@ -48,11 +48,16 @@ def load_exclusion_summary(
 
     for exclusion in summary.get("exclusions", []):
         phase_key = exclusion.get("phase_key")
+        stage_key = exclusion["stage_key"]
         records.append(
             {
                 COL_PHASE: _phase_display_name(
                     phase_key,
                     exclusion.get("phase", phase_key),
+                ),
+                COL_STAGE: _stage_display_name(
+                    stage_key,
+                    exclusion.get("stage"),
                 ),
                 COL_DIMENSIONS: int(exclusion["dimensions"]),
                 COL_SAMPLES: int(exclusion["samples"]),
@@ -69,14 +74,10 @@ def load_exclusion_summary(
     if df.empty:
         return df
 
-    df[COL_PHASE] = pd.Categorical(
-        df[COL_PHASE],
-        categories=list(PHASE_DISPLAY_NAMES.values()),
-        ordered=True,
-    )
+    df = _apply_phase_stage_categories(df)
 
     return df.sort_values(
-        [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+        [COL_PHASE, COL_STAGE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
     ).reset_index(drop=True)
 
 
@@ -119,11 +120,13 @@ def load_compile_artifact_summary(
     for result in compile_artifacts.get("records", []):
         phase_key = result.get("phase_key")
         variant_key = result.get("variant_key")
+        stage_key = result["stage_key"]
         executable_size_bytes = int(result["executable_size_bytes"])
 
         rows.append(
             {
                 COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
+                COL_STAGE: _stage_display_name(stage_key, result.get("stage")),
                 COL_VARIANT: _variant_display_name(variant_key),
                 COL_DIMENSIONS: int(result["D"]),
                 COL_CPP_CASE: result.get("cpp_case"),
@@ -139,14 +142,10 @@ def load_compile_artifact_summary(
     if df.empty:
         return df
 
-    df[COL_PHASE] = pd.Categorical(
-        df[COL_PHASE],
-        categories=list(PHASE_DISPLAY_NAMES.values()),
-        ordered=True,
-    )
+    df = _apply_phase_stage_categories(df)
 
     return df.sort_values(
-        [COL_PHASE, COL_VARIANT, COL_DIMENSIONS]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_DIMENSIONS]
     ).reset_index(drop=True)
 
 def load_spill_detection_summary(
@@ -165,6 +164,7 @@ def load_spill_detection_summary(
         rows.append(
             {
                 COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
+                COL_STAGE: _stage_display_name(FULL_STAGE_KEY),
                 COL_VARIANT: _variant_display_name(variant_key),
                 COL_PARAMS: _params_display_name(gmm_covariance_type),
                 "C++ Case": cpp_case_name,
@@ -179,14 +179,10 @@ def load_spill_detection_summary(
     if df.empty:
         return df
 
-    df[COL_PHASE] = pd.Categorical(
-        df[COL_PHASE],
-        categories=list(PHASE_DISPLAY_NAMES.values()),
-        ordered=True,
-    )
+    df = _apply_phase_stage_categories(df)
 
     return df.sort_values(
-        [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS]
     ).reset_index(drop=True)
 
 
@@ -201,6 +197,7 @@ def load_cachegrind_summary(
     for result in cachegrind.get("records", []):
         phase_key = result.get("phase_key")
         variant_key = result.get("variant_key")
+        stage_key = result["stage_key"]
         params_key = result.get("params_key", NO_PARAMS)
         events = result.get("events", {})
         derived = result.get("derived", {})
@@ -210,6 +207,7 @@ def load_cachegrind_summary(
         rows.append(
             {
                 COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
+                COL_STAGE: _stage_display_name(stage_key, result.get("stage")),
                 COL_VARIANT: _variant_display_name(variant_key),
                 COL_PARAMS: _params_display_name(params_key),
                 COL_CPP_CASE: result.get("cpp_case"),
@@ -246,14 +244,10 @@ def load_cachegrind_summary(
     if df.empty:
         return df
 
-    df[COL_PHASE] = pd.Categorical(
-        df[COL_PHASE],
-        categories=list(PHASE_DISPLAY_NAMES.values()),
-        ordered=True,
-    )
+    df = _apply_phase_stage_categories(df)
 
     return df.sort_values(
-        [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
     ).reset_index(drop=True)
 
 
@@ -265,8 +259,34 @@ def _language_display_name(summary_language_name: str) -> str:
     return summary_language_name
 
 
-def _phase_display_name(phase_key: str, fallback: str) -> str:
-    return PHASE_DISPLAY_NAMES.get(phase_key, fallback)
+def _phase_display_name(phase_key: str | None, fallback: str) -> str:
+    return PHASE_DISPLAY_NAMES.get(str(phase_key), fallback) if phase_key else fallback
+
+
+def _stage_display_name(stage_key: str | None, fallback: str | None = None) -> str:
+    if fallback:
+        return fallback
+    if not stage_key:
+        return stage_display_name(FULL_STAGE_KEY)
+    return stage_display_name(stage_key)
+
+
+def _apply_phase_stage_categories(df: pd.DataFrame) -> pd.DataFrame:
+    if COL_PHASE in df:
+        df[COL_PHASE] = pd.Categorical(
+            df[COL_PHASE],
+            categories=list(PHASE_DISPLAY_NAMES.values()),
+            ordered=True,
+        )
+    if COL_STAGE in df:
+        stage_values = list(STAGE_DISPLAY_NAMES.values())
+        extra_stages = sorted(set(df[COL_STAGE].dropna().astype(str)) - set(stage_values))
+        df[COL_STAGE] = pd.Categorical(
+            df[COL_STAGE],
+            categories=stage_values + extra_stages,
+            ordered=True,
+        )
+    return df
 
 
 def _variant_display_name(variant_key: str | None, fallback: str | None = None) -> str:
@@ -324,18 +344,47 @@ def _selected_stat(
 
 def _iter_phase_variant_parameterizations(
     phase_entry: dict[str, Any],
-) -> Iterator[tuple[str, dict[str, Any], str, dict[str, Any]]]:
-    """Yield schema v3 variant/parameterization entries."""
-    for variant_name, variant_entry in phase_entry.get("variants", {}).items():
-        parameterizations = variant_entry.get("parameterizations")
-        if parameterizations is None:
-            raise RuntimeError(
-                "Expected schema v3 summary entries with a 'parameterizations' block. "
-                "Run the current post-processing step again."
-            )
+) -> Iterator[
+    tuple[str, dict[str, Any], str, dict[str, Any], str, dict[str, Any]]
+]:
+    """Yield stage/variant/parameterization entries.
 
-        for params_name, parameterization_entry in parameterizations.items():
-            yield variant_name, variant_entry, params_name, parameterization_entry
+    New summaries nest variants under phase.stages. Legacy summaries that kept
+    variants directly under the phase are treated as the Full stage.
+    """
+    if "stages" in phase_entry:
+        stage_items = phase_entry.get("stages", {}).items()
+    else:
+        stage_items = [(stage_display_name(FULL_STAGE_KEY), {
+            "stage_key": FULL_STAGE_KEY,
+            "stage": stage_display_name(FULL_STAGE_KEY),
+            "variants": phase_entry.get("variants", {}),
+        })]
+
+    for stage_name, stage_entry in stage_items:
+        stage_key = stage_entry.get("stage_key", FULL_STAGE_KEY)
+        stage_name = _stage_display_name(
+            stage_key,
+            stage_entry.get("stage", stage_name),
+        )
+
+        for variant_name, variant_entry in stage_entry.get("variants", {}).items():
+            parameterizations = variant_entry.get("parameterizations")
+            if parameterizations is None:
+                raise RuntimeError(
+                    "Expected summary entries with a 'parameterizations' block. "
+                    "Run the current post-processing step again."
+                )
+
+            for params_name, parameterization_entry in parameterizations.items():
+                yield (
+                    stage_name,
+                    stage_entry,
+                    variant_name,
+                    variant_entry,
+                    params_name,
+                    parameterization_entry,
+                )
 
 
 def load_benchmark_data(
@@ -364,6 +413,8 @@ def load_benchmark_data(
             phase_name = _phase_display_name(phase_key, phase_name_from_json)
 
             for (
+                stage_name,
+                _stage_entry,
                 variant_name_from_json,
                 variant_entry,
                 params_name_from_json,
@@ -396,6 +447,7 @@ def load_benchmark_data(
                     )
                     record = {
                         COL_PHASE: phase_name,
+                        COL_STAGE: stage_name,
                         COL_LANGUAGE: language_name,
                         COL_VARIANT: variant_name,
                         COL_PARAMS: params_name,
@@ -433,11 +485,7 @@ def load_benchmark_data(
     if df.empty:
         return df
 
-    df[COL_PHASE] = pd.Categorical(
-        df[COL_PHASE],
-        categories=list(PHASE_DISPLAY_NAMES.values()),
-        ordered=True,
-    )
+    df = _apply_phase_stage_categories(df)
 
     df[COL_LANGUAGE] = pd.Categorical(
         df[COL_LANGUAGE],
@@ -464,7 +512,7 @@ def load_benchmark_data(
     )
 
     return df.sort_values(
-        [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, COL_LANGUAGE]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, COL_LANGUAGE]
     ).reset_index(drop=True)
 
 
@@ -491,6 +539,8 @@ def load_speedup_summary(
             phase_name = _phase_display_name(phase_key, phase_name_from_json)
 
             for (
+                stage_name,
+                _stage_entry,
                 variant_name_from_json,
                 variant_entry,
                 params_name_from_json,
@@ -518,6 +568,7 @@ def load_speedup_summary(
                 records.append(
                     {
                         COL_PHASE: phase_name,
+                        COL_STAGE: stage_name,
                         COL_VARIANT: variant_name,
                         COL_PARAMS: params_name,
                         COL_DIMENSIONS: D,
@@ -539,11 +590,7 @@ def load_speedup_summary(
     if df.empty:
         return df
 
-    df[COL_PHASE] = pd.Categorical(
-        df[COL_PHASE],
-        categories=list(PHASE_DISPLAY_NAMES.values()),
-        ordered=True,
-    )
+    df = _apply_phase_stage_categories(df)
 
     variant_order = ["Static", "Dynamic", "Auto", "Reference"]
     present_variants = [v for v in variant_order if v in set(df[COL_VARIANT])]
@@ -564,7 +611,7 @@ def load_speedup_summary(
     )
 
     return df.sort_values(
-        [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
     ).reset_index(drop=True)
 
 
@@ -584,6 +631,8 @@ def load_lloyd_parity_summary(
                 continue
 
             for (
+                stage_name,
+                _stage_entry,
                 variant_name_from_json,
                 variant_entry,
                 params_name_from_json,
@@ -610,6 +659,7 @@ def load_lloyd_parity_summary(
 
                 records.append(
                     {
+                        COL_STAGE: stage_name,
                         COL_VARIANT: variant_name,
                         COL_PARAMS: params_name,
                         COL_DIMENSIONS: D,
@@ -644,7 +694,8 @@ def load_lloyd_parity_summary(
     if df.empty:
         return df
 
-    return df.sort_values(by="Diff (%)", ascending=False).reset_index(drop=True)
+    df = _apply_phase_stage_categories(df)
+    return df.sort_values(by=["Diff (%)", COL_STAGE], ascending=[False, True]).reset_index(drop=True)
 
 
 def load_gmm_parity_summary(
@@ -663,6 +714,8 @@ def load_gmm_parity_summary(
                 continue
 
             for (
+                stage_name,
+                _stage_entry,
                 variant_name_from_json,
                 variant_entry,
                 params_name_from_json,
@@ -687,6 +740,7 @@ def load_gmm_parity_summary(
 
                 records.append(
                     {
+                        COL_STAGE: stage_name,
                         COL_VARIANT: variant_name,
                         COL_PARAMS: params_name,
                         COL_DIMENSIONS: D,
@@ -734,15 +788,17 @@ def load_gmm_parity_summary(
     if df.empty:
         return df
 
+    df = _apply_phase_stage_categories(df)
     return df.sort_values(
         by=[
             "Status",
             "Lower Bound Diff Abs",
+            COL_STAGE,
             COL_VARIANT,
             COL_PARAMS,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
         ],
-        ascending=[True, False, True, True, True, True, True],
+        ascending=[True, False, True, True, True, True, True, True],
     ).reset_index(drop=True)

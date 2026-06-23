@@ -12,3 +12,5 @@ datasets*/
 callgrind_results/
 diagnostics_results/
 spill_detector_results/
+
+!/pyrightconfig.json

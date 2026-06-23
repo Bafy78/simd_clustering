@@ -4,16 +4,21 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from benchmark_metadata import (
+    FULL_STAGE_KEY,
     NO_PARAMS,
     PHASE_KEYS,
+    all_stage_keys,
     fallback_phase_display_name,
+    stage_display_name,
 )
 
 VALID_PHASE_KEYS = PHASE_KEYS
+VALID_STAGE_KEYS = all_stage_keys()
 EXCLUSIONS_FILENAME = "benchmark_exclusions.json"
 
 IntSelector = int | tuple[int, ...] | list[int] | set[int] | None
 PhaseSelector = str | tuple[str, ...] | list[str] | set[str] | None
+StageSelector = str | tuple[str, ...] | list[str] | set[str] | None
 StringSelector = str | tuple[str, ...] | list[str] | set[str] | None
 
 
@@ -22,14 +27,15 @@ class BenchmarkExclusionRule:
     """
     Exclude benchmark work for selected D/N/K combinations.
 
-    Rules are phase-aware so one D/N/K point can be skipped for GMM while Lloyd,
-    K-Means++, or the SoA tax still runs. Leave phase_keys as None to apply to
-    every phase. Exact selectors (dimensions/samples/clusters) can be combined
-    with min_/max_ bounds.
+    Rules are phase- and stage-aware so one D/N/K point can be skipped for a
+    specific phase stage while other stages still run. Leave phase_keys or
+    stage_keys as None to apply to every enabled phase or stage. Exact selectors
+    (dimensions/samples/clusters) can be combined with min_/max_ bounds.
     """
 
     reason: str
     phase_keys: PhaseSelector = None
+    stage_keys: StageSelector = None
     dimensions: IntSelector = None
     samples: IntSelector = None
     clusters: IntSelector = None
@@ -50,11 +56,34 @@ class BenchmarkExclusionRule:
             )
         return phase_keys
 
-    def matches(self, *, D: int, N: int, K: int, phase_key: str) -> bool:
+    def resolved_stage_keys(self) -> tuple[str, ...] | None:
+        stage_keys = _normalize_stage_selector(self.stage_keys)
+        if stage_keys is None:
+            return None
+        unknown = sorted(set(stage_keys) - set(VALID_STAGE_KEYS))
+        if unknown:
+            raise ValueError(
+                f"Unknown exclusion stage key(s) {unknown}. "
+                f"Expected one or more of: {', '.join(VALID_STAGE_KEYS)}"
+            )
+        return stage_keys
+
+    def matches(
+        self,
+        *,
+        D: int,
+        N: int,
+        K: int,
+        phase_key: str,
+        stage_key: str = FULL_STAGE_KEY,
+    ) -> bool:
         if not self.reason.strip():
             raise ValueError("Benchmark exclusion rules require a non-empty reason.")
 
         if phase_key not in self.resolved_phase_keys():
+            return False
+        resolved_stage_keys = self.resolved_stage_keys()
+        if resolved_stage_keys is not None and stage_key not in resolved_stage_keys:
             return False
 
         return (
@@ -71,12 +100,13 @@ class CachegrindExclusionRule:
 
     These rules are intentionally separate from BenchmarkExclusionRule: they skip
     only the Valgrind/Callgrind-based Cachegrind pass and leave the normal timing suite
-    unchanged. Leave cpp_cases, phase_keys, or params_keys as None to match all.
+    unchanged. Leave cpp_cases, phase_keys, stage_keys, or params_keys as None to match all.
     """
 
     reason: str
     cpp_cases: StringSelector = None
     phase_keys: PhaseSelector = None
+    stage_keys: StageSelector = None
     params_keys: StringSelector = None
     dimensions: IntSelector = None
     samples: IntSelector = None
@@ -98,6 +128,18 @@ class CachegrindExclusionRule:
             )
         return phase_keys
 
+    def resolved_stage_keys(self) -> tuple[str, ...] | None:
+        stage_keys = _normalize_stage_selector(self.stage_keys)
+        if stage_keys is None:
+            return None
+        unknown = sorted(set(stage_keys) - set(VALID_STAGE_KEYS))
+        if unknown:
+            raise ValueError(
+                f"Unknown Cachegrind exclusion stage key(s) {unknown}. "
+                f"Expected one or more of: {', '.join(VALID_STAGE_KEYS)}"
+            )
+        return stage_keys
+
     def resolved_cpp_cases(self) -> tuple[str, ...] | None:
         return _normalize_string_selector(self.cpp_cases)
 
@@ -111,6 +153,7 @@ class CachegrindExclusionRule:
         N: int,
         K: int,
         phase_key: str,
+        stage_key: str = FULL_STAGE_KEY,
         cpp_case: str,
         params_key: str = NO_PARAMS,
     ) -> bool:
@@ -118,6 +161,9 @@ class CachegrindExclusionRule:
             raise ValueError("Cachegrind exclusion rules require a non-empty reason.")
 
         if phase_key not in self.resolved_phase_keys():
+            return False
+        resolved_stage_keys = self.resolved_stage_keys()
+        if resolved_stage_keys is not None and stage_key not in resolved_stage_keys:
             return False
 
         cpp_cases = self.resolved_cpp_cases()
@@ -138,6 +184,14 @@ class CachegrindExclusionRule:
 def _normalize_phase_selector(value: PhaseSelector) -> tuple[str, ...]:
     if value is None:
         return VALID_PHASE_KEYS
+    if isinstance(value, str):
+        return (value,)
+    return tuple(value)
+
+
+def _normalize_stage_selector(value: StageSelector) -> tuple[str, ...] | None:
+    if value is None:
+        return None
     if isinstance(value, str):
         return (value,)
     return tuple(value)
@@ -186,37 +240,51 @@ def exclusion_records_for_case(
     K: int,
     rules: Iterable[BenchmarkExclusionRule],
     phase_keys: Iterable[str] = VALID_PHASE_KEYS,
+    stage_keys_by_phase: dict[str, Iterable[str]] | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     rules = tuple(rules)
 
     for phase_key in phase_keys:
-        matched_rules = [
-            {
-                "rule_index": rule_index,
-                "reason": rule.reason,
-            }
-            for rule_index, rule in enumerate(rules)
-            if rule.matches(D=D, N=N, K=K, phase_key=phase_key)
-        ]
-
-        if not matched_rules:
-            continue
-
-        # Keep a compact human-facing reason while preserving individual rules.
-        reasons = list(dict.fromkeys(rule_record["reason"] for rule_record in matched_rules))
-        records.append(
-            {
-                "config_id": f"{D}D_{N}N_{K}K",
-                "dimensions": int(D),
-                "samples": int(N),
-                "clusters": int(K),
-                "phase_key": phase_key,
-                "phase": phase_display_name(phase_key),
-                "reason": " ; ".join(reasons),
-                "matched_rules": matched_rules,
-            }
+        stage_keys = tuple(
+            stage_keys_by_phase.get(phase_key, (FULL_STAGE_KEY,))
+            if stage_keys_by_phase is not None
+            else (FULL_STAGE_KEY,)
         )
+        for stage_key in stage_keys:
+            matched_rules = [
+                {
+                    "rule_index": rule_index,
+                    "reason": rule.reason,
+                }
+                for rule_index, rule in enumerate(rules)
+                if rule.matches(
+                    D=D,
+                    N=N,
+                    K=K,
+                    phase_key=phase_key,
+                    stage_key=stage_key,
+                )
+            ]
+
+            if not matched_rules:
+                continue
+
+            reasons = list(dict.fromkeys(rule_record["reason"] for rule_record in matched_rules))
+            records.append(
+                {
+                    "config_id": f"{D}D_{N}N_{K}K",
+                    "dimensions": int(D),
+                    "samples": int(N),
+                    "clusters": int(K),
+                    "phase_key": phase_key,
+                    "phase": phase_display_name(phase_key),
+                    "stage_key": stage_key,
+                    "stage": stage_display_name(stage_key),
+                    "reason": " ; ".join(reasons),
+                    "matched_rules": matched_rules,
+                }
+            )
 
     return records
 
@@ -228,15 +296,56 @@ def excluded_phase_keys_for_case(
     K: int,
     rules: Iterable[BenchmarkExclusionRule],
     phase_keys: Iterable[str] = VALID_PHASE_KEYS,
+    stage_keys_by_phase: dict[str, Iterable[str]] | None = None,
 ) -> set[str]:
+    """Return phases whose enabled stages are all excluded for this case."""
+
+    normalized_stage_keys = {
+        phase_key: tuple(
+            stage_keys_by_phase.get(phase_key, (FULL_STAGE_KEY,))
+            if stage_keys_by_phase is not None
+            else (FULL_STAGE_KEY,)
+        )
+        for phase_key in phase_keys
+    }
+    excluded_stage_keys: dict[str, set[str]] = {}
+    for record in exclusion_records_for_case(
+        D=D,
+        N=N,
+        K=K,
+        rules=rules,
+        phase_keys=phase_keys,
+        stage_keys_by_phase=normalized_stage_keys,
+    ):
+        excluded_stage_keys.setdefault(record["phase_key"], set()).add(
+            record["stage_key"]
+        )
+
     return {
-        record["phase_key"]
+        phase_key
+        for phase_key, stage_keys in normalized_stage_keys.items()
+        if stage_keys and set(stage_keys).issubset(excluded_stage_keys.get(phase_key, set()))
+    }
+
+
+def excluded_phase_stage_keys_for_case(
+    *,
+    D: int,
+    N: int,
+    K: int,
+    rules: Iterable[BenchmarkExclusionRule],
+    phase_keys: Iterable[str] = VALID_PHASE_KEYS,
+    stage_keys_by_phase: dict[str, Iterable[str]] | None = None,
+) -> set[tuple[str, str]]:
+    return {
+        (record["phase_key"], record["stage_key"])
         for record in exclusion_records_for_case(
             D=D,
             N=N,
             K=K,
             rules=rules,
             phase_keys=phase_keys,
+            stage_keys_by_phase=stage_keys_by_phase,
         )
     }
 
@@ -247,6 +356,7 @@ def is_phase_excluded(
     N: int,
     K: int,
     phase_key: str,
+    stage_key: str = FULL_STAGE_KEY,
     rules: Iterable[BenchmarkExclusionRule],
 ) -> bool:
     return bool(
@@ -256,10 +366,9 @@ def is_phase_excluded(
             K=K,
             rules=rules,
             phase_keys=(phase_key,),
+            stage_keys_by_phase={phase_key: (stage_key,)},
         )
     )
-
-
 
 
 def is_cachegrind_excluded(
@@ -268,6 +377,7 @@ def is_cachegrind_excluded(
     N: int,
     K: int,
     phase_key: str,
+    stage_key: str = FULL_STAGE_KEY,
     cpp_case: str,
     params_key: str = NO_PARAMS,
     rules: Iterable[CachegrindExclusionRule],
@@ -278,11 +388,13 @@ def is_cachegrind_excluded(
             N=N,
             K=K,
             phase_key=phase_key,
+            stage_key=stage_key,
             cpp_case=cpp_case,
             params_key=params_key,
         )
         for rule in rules
     )
+
 
 def build_exclusion_manifest(
     *,
@@ -291,6 +403,7 @@ def build_exclusion_manifest(
     test_Ks: Iterable[int],
     rules: Iterable[BenchmarkExclusionRule],
     phase_keys: Iterable[str] = VALID_PHASE_KEYS,
+    stage_keys_by_phase: dict[str, Iterable[str]] | None = None,
 ) -> dict[str, Any]:
     rules = tuple(rules)
     exclusions: list[dict[str, Any]] = []
@@ -305,6 +418,7 @@ def build_exclusion_manifest(
                         K=int(K),
                         rules=rules,
                         phase_keys=phase_keys,
+                        stage_keys_by_phase=stage_keys_by_phase,
                     )
                 )
 
@@ -314,14 +428,15 @@ def build_exclusion_manifest(
             item["samples"],
             item["clusters"],
             item["phase_key"],
+            item["stage_key"],
         )
     )
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "description": (
-            "User-configured benchmark exclusions. Each entry is a D/N/K/phase "
-            "combination that the orchestrator intentionally skipped."
+            "User-configured benchmark exclusions. Each entry is a "
+            "D/N/K/phase/stage combination that the orchestrator intentionally skipped."
         ),
         "exclusions": exclusions,
     }
@@ -339,7 +454,7 @@ def load_exclusion_manifest(path: str | Path) -> dict[str, Any]:
     path = Path(path)
     if not path.exists():
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "description": "No benchmark exclusion manifest was found.",
             "exclusions": [],
         }
@@ -349,5 +464,11 @@ def load_exclusion_manifest(path: str | Path) -> dict[str, Any]:
 
     if "exclusions" not in manifest:
         raise ValueError(f"Invalid benchmark exclusion manifest: {path}")
+
+    for exclusion in manifest.get("exclusions", []):
+        if "stage_key" not in exclusion or "stage" not in exclusion:
+            raise ValueError(
+                f"Invalid benchmark exclusion manifest entry without stage: {exclusion!r}"
+            )
 
     return manifest

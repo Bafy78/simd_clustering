@@ -1,0 +1,15 @@
+{
+    "typeCheckingMode": "basic",
+    "include": [
+        "python",
+        "benchmark_analysis.ipynb"
+    ],
+    "executionEnvironments": [
+        {
+            "root": ".",
+            "extraPaths": [
+                "./python"
+            ]
+        }
+    ]
+}

@@ -7,6 +7,7 @@ import numpy as np
 
 from benchmark_postprocess.io import load_json
 from benchmark_metadata import (
+    FULL_STAGE_KEY,
     LANGUAGE_CPP_KEY,
     LANGUAGE_PY_KEY,
     NO_PARAMS,
@@ -37,23 +38,25 @@ GMM_PARITY_THRESHOLDS = {
 
 def metrics_key(
     config_id: str,
+    stage_key: str,
     variant_key: str,
     lang_key: str,
     params_key: str = NO_PARAMS,
 ) -> MetricsKey:
-    return (config_id, variant_key, lang_key, params_key)
+    return (config_id, stage_key, variant_key, lang_key, params_key)
 
 
 def _language_metrics(
     metrics: dict[MetricsKey, dict[str, Any]],
     config_id: str,
+    stage_key: str,
     variant_key: str,
     lang_key: str,
     phase_name: str,
     params_key: str = NO_PARAMS,
 ) -> dict[str, Any]:
     record = metrics.get(
-        metrics_key(config_id, variant_key, lang_key, params_key)
+        metrics_key(config_id, stage_key, variant_key, lang_key, params_key)
     )
 
     if record is not None:
@@ -61,7 +64,7 @@ def _language_metrics(
 
     raise RuntimeError(
         f"Missing {phase_name} metrics file for {lang_key} "
-        f"variant={variant_key} params={params_key} {config_id}. {phase_name} timing needs the "
+        f"stage={stage_key} variant={variant_key} params={params_key} {config_id}. {phase_name} timing needs the "
         "algorithm-iteration count to report time_per_algorithm_iteration_s."
     )
 
@@ -72,11 +75,13 @@ def lloyd_algorithm_iteration_count(
     variant_key: str,
     lang_key: str,
     params_key: str = NO_PARAMS,
+    stage_key: str = FULL_STAGE_KEY,
 ) -> int:
     return int(
         _language_metrics(
             lloyd_metrics,
             config_id=config_id,
+            stage_key=stage_key,
             variant_key=variant_key,
             lang_key=lang_key,
             phase_name="Lloyd",
@@ -91,11 +96,13 @@ def gmm_algorithm_iteration_count(
     variant_key: str,
     lang_key: str,
     params_key: str,
+    stage_key: str = FULL_STAGE_KEY,
 ) -> int:
     return int(
         _language_metrics(
             gmm_metrics,
             config_id=config_id,
+            stage_key=stage_key,
             variant_key=variant_key,
             lang_key=lang_key,
             phase_name="GMM",
@@ -137,6 +144,8 @@ def normalize_lloyd_metrics_record(
     return {
         **record,
         "config_id": identity.config_id,
+        "stage_key": identity.stage_key,
+        "stage": identity.stage,
         "variant_key": identity.variant_key,
         "variant": identity.variant,
         "params_key": identity.params_key,
@@ -184,6 +193,8 @@ def normalize_gmm_metrics_record(
     return {
         **record,
         "config_id": identity.config_id,
+        "stage_key": identity.stage_key,
+        "stage": identity.stage,
         "variant_key": identity.variant_key,
         "variant": identity.variant,
         "params_key": identity.params_key,
@@ -197,7 +208,7 @@ def normalize_gmm_metrics_record(
 def load_lloyd_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
     metrics_records: dict[MetricsKey, dict[str, Any]] = {}
 
-    for path in sorted(data_dir.glob("lloyd_metrics_*.json")):
+    for path in sorted(set(data_dir.glob("lloyd_metrics_*.json")) | set(data_dir.glob("lloyd_*_metrics_*.json"))):
         identity = parse_metrics_filename(path, "lloyd")
 
         if identity is None:
@@ -219,7 +230,7 @@ def load_lloyd_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
 def load_gmm_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
     metrics_records: dict[MetricsKey, dict[str, Any]] = {}
 
-    for path in sorted(data_dir.glob("gmm_metrics_*.json")):
+    for path in sorted(set(data_dir.glob("gmm_metrics_*.json")) | set(data_dir.glob("gmm_*_metrics_*.json"))):
         identity = parse_metrics_filename(path, "gmm")
 
         if identity is None:
@@ -241,12 +252,12 @@ def load_gmm_metrics_map(data_dir: Path) -> dict[MetricsKey, dict[str, Any]]:
 def completed_metric_keys(
     metrics: dict[MetricsKey, dict[str, Any]],
     required_languages: tuple[str, ...] = REQUIRED_LANGUAGE_KEYS,
-) -> set[tuple[str, str]]:
-    """Return (config_id, params_key) pairs with C++ metrics plus a Python reference."""
-    by_config_params: dict[tuple[str, str], set[str]] = {}
+) -> set[tuple[str, str, str]]:
+    """Return (config_id, stage_key, params_key) keys with C++ plus reference metrics."""
+    by_config_params: dict[tuple[str, str, str], set[str]] = {}
 
-    for config_id, _variant_key, lang_key, params_key in metrics:
-        by_config_params.setdefault((config_id, params_key), set()).add(lang_key)
+    for config_id, stage_key, _variant_key, lang_key, params_key in metrics:
+        by_config_params.setdefault((config_id, stage_key, params_key), set()).add(lang_key)
 
     required = set(required_languages)
     return {
@@ -262,7 +273,7 @@ def completed_config_ids(
 ) -> set[str]:
     return {
         config_id
-        for config_id, _params_key in completed_metric_keys(
+        for config_id, _stage_key, _params_key in completed_metric_keys(
             metrics,
             required_languages=required_languages,
         )
@@ -341,10 +352,12 @@ def compute_lloyd_comparison(
     cpp_variant_key: str,
     py_variant_key: str = REFERENCE_VARIANT,
     params_key: str = NO_PARAMS,
+    stage_key: str = FULL_STAGE_KEY,
 ) -> dict[str, Any]:
     cpp = _language_metrics(
         lloyd_metrics,
         config_id=config_id,
+        stage_key=stage_key,
         variant_key=cpp_variant_key,
         lang_key=LANGUAGE_CPP_KEY,
         phase_name="Lloyd",
@@ -353,6 +366,7 @@ def compute_lloyd_comparison(
     py = _language_metrics(
         lloyd_metrics,
         config_id=config_id,
+        stage_key=stage_key,
         variant_key=py_variant_key,
         lang_key=LANGUAGE_PY_KEY,
         phase_name="Lloyd",
@@ -385,6 +399,8 @@ def compute_lloyd_comparison(
 
     return {
         "config_id": config_id,
+        "stage_key": stage_key,
+        "stage": cpp.get("stage"),
         "variant_key": cpp_variant_key,
         "variant": variant_display_name(cpp_variant_key),
         "params_key": params_key,
@@ -413,11 +429,13 @@ def compute_gmm_comparison(
     cpp_variant_key: str,
     params_key: str,
     py_variant_key: str = REFERENCE_VARIANT,
+    stage_key: str = FULL_STAGE_KEY,
 ) -> dict[str, Any]:
     """Build GMM parity info from one C++ variant and the shared sklearn reference."""
     cpp = _language_metrics(
         gmm_metrics,
         config_id=config_id,
+        stage_key=stage_key,
         variant_key=cpp_variant_key,
         lang_key=LANGUAGE_CPP_KEY,
         phase_name="GMM",
@@ -426,6 +444,7 @@ def compute_gmm_comparison(
     py = _language_metrics(
         gmm_metrics,
         config_id=config_id,
+        stage_key=stage_key,
         variant_key=py_variant_key,
         lang_key=LANGUAGE_PY_KEY,
         phase_name="GMM",
@@ -477,6 +496,8 @@ def compute_gmm_comparison(
 
     return {
         "config_id": config_id,
+        "stage_key": stage_key,
+        "stage": cpp.get("stage"),
         "variant_key": cpp_variant_key,
         "variant": variant_display_name(cpp_variant_key),
         "params_key": params_key,

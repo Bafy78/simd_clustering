@@ -95,13 +95,13 @@ Both benchmark frontends use one warmup. Postprocessing ignores warmup/calibrati
 
 ## 📊 Metrics, speedups, and confidence intervals
 
-Each language/phase/variant/parameterization/configuration summary reports descriptive statistics for total time and per-algorithm-iteration time. The statistics are produced by [`python/benchmark_postprocess/stats.py`](../python/benchmark_postprocess/stats.py): count, median, mean, standard deviation, MAD, min/max, and selected percentiles. For Lloyd and GMM, per-algorithm-iteration time is total measured time divided by the iteration count stored in the metrics file. For non-iterative phases, the iteration count is treated as `1`.
+Each language/phase/stage/variant/parameterization/configuration summary reports descriptive statistics for total time and per-algorithm-iteration time. The statistics are produced by [`python/benchmark_postprocess/stats.py`](../python/benchmark_postprocess/stats.py): count, median, mean, standard deviation, MAD, min/max, and selected percentiles. For Lloyd and GMM, per-algorithm-iteration time is total measured time divided by the iteration count stored in the metrics file. For non-iterative phases, the iteration count is treated as `1`.
 
-Speedup is defined as `python_time / cpp_time`. Values above `1` therefore mean that the C++ implementation is faster for that phase and configuration. Postprocessing reports both median-based and mean-based speedups.
+Speedup is defined as `python_time / cpp_time`. Values above `1` therefore mean that the C++ implementation is faster for that phase/stage and configuration. Postprocessing reports both median-based and mean-based speedups.
 
 Speedup intervals are computed in [`python/benchmark_postprocess/speedup.py`](../python/benchmark_postprocess/speedup.py) with a clustered bootstrap. For each bootstrap replicate, C++ and Python timing-process groups are separately sampled with replacement, and all timing values inside a selected process remain together. The requested statistic is recomputed for each sampled side, converted to a speedup ratio, and the reported interval is the percentile interval over those ratios.
 
-The bootstrap iteration count, confidence level, and base seed are command-line options of `postprocess_benchmarks.py`. The code derives stable child seeds per configuration, phase, and statistic, so unchanged inputs and postprocessing arguments produce the same intervals.
+The bootstrap iteration count, confidence level, and base seed are command-line options of `postprocess_benchmarks.py`. The code derives stable child seeds per configuration, phase, stage, and statistic, so unchanged inputs and postprocessing arguments produce the same intervals.
 
 Per-algorithm-iteration speedup intervals are not bootstrapped separately. They are derived from the total-time speedup interval by scaling with the C++ and Python algorithm-iteration counts.
 

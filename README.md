@@ -52,7 +52,7 @@ The C++ benchmark build also expects a C++20 compiler plus EVE and nanobench hea
 | Document | Use it for |
 | --- | --- |
 | [🚀 Run and reproduce](documentation/run_and_reproduce.md) | Installing prerequisites, running the sweep, postprocessing outputs, and opening the notebook. |
-| [🧭 Architecture and artifact map](documentation/architecture_and_artifacts.md) | Understanding the C++/Python pipeline, benchmark case registry, generated artifact names, and auxiliary tooling. |
+| [🧭 Architecture and artifact map](documentation/architecture_and_artifacts.md) | Understanding the C++/Python pipeline, benchmark case registry, and auxiliary tooling. |
 | [📏 Benchmark methodology](documentation/benchmark_methodology.md) | Dataset generation, initialization policy, timing boundaries, repetitions, speedups, confidence intervals, and interpretation limits. |
 | [✅ Scikit-learn parity and validation](documentation/scikit_parity_and_validation.md) | Metric files, parity checks, validation layers, failure interpretation, and diagnostic limits. |
 | [⚙️ SIMD and kernel mechanics](documentation/simd_and_kernel_mechanics.md) | Static-D and dynamic-D data layouts, SIMD implementation structure, and kernel-level mechanics. |

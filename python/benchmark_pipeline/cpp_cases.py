@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from benchmark_metadata import FULL_STAGE_KEY
 from benchmark_pipeline.gmm_covariance import SUPPORTED_GMM_COVARIANCE_TYPES
+from benchmark_pipeline.stages import DATASET_ARTIFACT
 from benchmark_pipeline.paths import BIN_DIR, repo_path
 
 
@@ -16,6 +18,8 @@ class CppCase:
     phase_key: str
     variant_key: str
     display_name: str
+    stage_key: str = FULL_STAGE_KEY
+    primary_input_artifact_key: str = DATASET_ARTIFACT
     needs_gmm_init: bool = False
     needs_covariance_type_arg: bool = False
     supported_gmm_covariance_types: tuple[str, ...] = ()

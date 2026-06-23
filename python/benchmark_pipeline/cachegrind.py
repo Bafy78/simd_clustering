@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_pipeline.cpp_cases import get_cpp_case
+from benchmark_metadata import stage_display_name
 from benchmark_pipeline.exclusions import CachegrindExclusionRule, phase_display_name
 from benchmark_pipeline.paths import REPO_ROOT, repo_relative_path
 
@@ -41,27 +42,34 @@ def profile_events_string() -> str:
     return ",".join(PROFILE_EVENTS)
 
 
-def cachegrind_file_stem(cpp_case: str, params_key: str, case_id: str) -> str:
-    return f"cachegrind.{cpp_case}.{params_key}.{case_id}"
+def cachegrind_file_stem(
+    cpp_case: str,
+    stage_key: str,
+    params_key: str,
+    case_id: str,
+) -> str:
+    return f"cachegrind.{cpp_case}.{stage_key}.{params_key}.{case_id}"
 
 
 def cachegrind_summary_filename(
     cpp_case: str,
+    stage_key: str,
     params_key: str,
     case_id: str,
 ) -> str:
-    return f"{CACHEGRIND_PREFIX}.{cpp_case}.{params_key}.{case_id}.json"
+    return f"{CACHEGRIND_PREFIX}.{cpp_case}.{stage_key}.{params_key}.{case_id}.json"
 
 
 def cachegrind_summary_path(
     out_dir: str | Path,
     cpp_case: str,
+    stage_key: str,
     params_key: str,
     case_id: str,
 ) -> Path:
     return (
         repo_relative_path(out_dir)
-        / cachegrind_summary_filename(cpp_case, params_key, case_id)
+        / cachegrind_summary_filename(cpp_case, stage_key, params_key, case_id)
     )
 
 
@@ -265,6 +273,8 @@ def build_cachegrind_record(
         "cpp_case": cpp_case,
         "phase_key": case.phase_key,
         "phase": phase_display_name(case.phase_key),
+        "stage_key": case.stage_key,
+        "stage": stage_display_name(case.stage_key),
         "variant_key": case.variant_key,
         "variant": case.variant_key.replace("_", " ").title(),
         "params_key": params_key,
@@ -300,6 +310,7 @@ def build_cachegrind_exclusion_record(
             N=N,
             K=K,
             phase_key=case.phase_key,
+            stage_key=case.stage_key,
             cpp_case=cpp_case,
             params_key=params_key,
         )
@@ -317,6 +328,8 @@ def build_cachegrind_exclusion_record(
         "cpp_case": cpp_case,
         "phase_key": case.phase_key,
         "phase": phase_display_name(case.phase_key),
+        "stage_key": case.stage_key,
+        "stage": stage_display_name(case.stage_key),
         "variant_key": case.variant_key,
         "params_key": params_key,
         "reason": " ; ".join(reasons),
@@ -350,6 +363,7 @@ def build_cachegrind_manifest(
                 int(item["D"]),
                 int(item["N"]),
                 int(item["K"]),
+                str(item["stage_key"]),
                 str(item["cpp_case"]),
                 str(item["params_key"]),
             ),

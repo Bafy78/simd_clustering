@@ -89,7 +89,6 @@ def default_config() -> BenchmarkConfig:
             ),
             BenchmarkExclusionRule(
                 phase_keys=("gmm",),
-                min_clusters=11,
                 min_samples=300_001,
                 reason=(
                     "Excluded because GMM doesn't scale well with K and N, so the "

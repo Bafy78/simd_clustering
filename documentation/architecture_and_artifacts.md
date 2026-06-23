@@ -3,7 +3,7 @@
 This document describes how the benchmark code is organized and which files are produced by the normal pipeline.
 
 The main conceptual coordinates used throughout the project are `D` for dimensions, `N` for samples, and `K` for clusters or mixture components. All benchmark configurations
-are identified by these three coordinates, together with the algorithm phase, implementation language, algorithm variant, and, for algorithms that need it, an algorithm parameter key. All the code also uses this naming convention.
+are identified by these three coordinates, together with the algorithm phase, stage, implementation language, algorithm variant, and, for algorithms that need it, an algorithm parameter key. All the code also uses this naming convention.
 
 ## 🧩 Main supported algorithmic phases
 
@@ -23,7 +23,7 @@ Each phase has a different level of support across C++, Python, metrics, parity 
 | Lloyd / K-Means |           ✅ |              ✅ |         ✅ |                       ✅ |              ✅ |
 | GMM EM          |           ✅ |              ✅ |         ✅ |                       ✅ |              ✅ |
 
-The pipeline is modular: phases can be enabled or disabled depending on what is currently being studied. The project should therefore be understood as a collection of reusable benchmark stages rather than a single permanently fixed experiment script.
+The pipeline is modular: phases can be enabled or disabled depending on what is currently being studied. The project should therefore be understood as a collection of reusable benchmark steps rather than a single permanently fixed experiment script.
 
 ## 💻 C++ algorithm layer
 
@@ -62,10 +62,14 @@ The registry maps C++ benchmark case names, or `cpp_case` values, such as:
 to compile instructions, benchmark case headers, case types, mode-specific build options, and the semantic keys needed by artifact naming:
 
 * `phase_key`, such as `lloyd` or `gmm`;
+* `stage_key`, currently `full` for the existing phases;
 * `variant_key`, such as `static`, `dynamic`, or `auto`;
+* `primary_input_artifact_key`, which identifies which logical setup artifact is passed to the case;
 * GMM covariance support for cases that do not implement every covariance type.
 
 The `variant_key` is deliberately shared across phases so postprocessing can pair related artifacts, for example `soa_static` with `lloyd_static` and `soa_dynamic` with `lloyd_dynamic`. Python/scikit-learn tasks use a shared `reference` variant and are compared against each C++ variant without duplicating the Python benchmark task.
+
+Stage metadata lives in [`python/benchmark_pipeline/stages.py`](../python/benchmark_pipeline/stages.py). A stage declares the logical artifacts it consumes and which of those are predecessor/reference artifacts. [`python/benchmark_pipeline/tasks.py`](../python/benchmark_pipeline/tasks.py) turns that into `Task.input_artifacts` and `Task.output_artifacts`, so a stage can consume a dataset, generated initialization files, or a precomputed intermediate without timing the production of that input.
 
 This registry is reused by all the tools.
 
@@ -88,7 +92,7 @@ Lifecycle:
    * run C++ nanobench binaries;
    * run Python/scikit-learn benchmarks;
    * collect timing JSONs;
-   * when enabled, run one Cachegrind pass for each non-excluded C++ config/case/parameterization target.
+   * when enabled, run one Cachegrind pass for each non-excluded C++ config/case/stage/parameterization target.
 
 5. **Metrics collection**
    * collect algorithm outputs and raw validation metrics;

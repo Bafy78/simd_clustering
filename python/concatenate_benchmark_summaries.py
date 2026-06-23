@@ -2,7 +2,7 @@
 """Merge two post-processed benchmark summary JSON files.
 
 The merge is intentionally hierarchical: data is preserved unless the two
-summaries contain the same configuration, phase, variant, and parameterization.
+summaries contain the same configuration, phase, stage, variant, and parameterization.
 When that full identity is present in both inputs, the high-priority summary's
 parameterization block replaces the low-priority block atomically.
 
@@ -32,6 +32,7 @@ T = TypeVar("T")
 class MergeStats:
     configs_added: int = 0
     phases_added: int = 0
+    stages_added: int = 0
     variants_added: int = 0
     parameterizations_added: int = 0
     parameterizations_replaced: int = 0
@@ -48,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Merge two benchmark_summary.json files while preserving all "
-            "non-redundant config/phase/variant/parameterization data."
+            "non-redundant config/phase/stage/variant/parameterization data."
         )
     )
     parser.add_argument(
@@ -118,6 +119,10 @@ def phase_entry_key(mapping_key: str, phase: JsonDict) -> str:
     return str(phase.get("phase_key", mapping_key))
 
 
+def stage_entry_key(mapping_key: str, stage: JsonDict) -> str:
+    return str(stage["stage_key"])
+
+
 def variant_entry_key(mapping_key: str, variant: JsonDict) -> str:
     return str(variant.get("variant_key", mapping_key))
 
@@ -126,12 +131,13 @@ def parameterization_entry_key(mapping_key: str, parameterization: JsonDict) -> 
     return str(parameterization.get("params_key", mapping_key))
 
 
-def exclusion_key(exclusion: JsonDict) -> tuple[int, int, int, str]:
+def exclusion_key(exclusion: JsonDict) -> tuple[int, int, int, str, str]:
     return (
         _required_int(exclusion, "dimensions", "exclusion"),
         _required_int(exclusion, "samples", "exclusion"),
         _required_int(exclusion, "clusters", "exclusion"),
         str(exclusion.get("phase_key", exclusion.get("phase", ""))),
+        str(exclusion["stage_key"]),
     )
 
 
@@ -250,13 +256,20 @@ def merge_variant(low: JsonDict, high: JsonDict, stats: MergeStats) -> JsonDict:
     return merged
 
 
-def merge_phase(low: JsonDict, high: JsonDict, stats: MergeStats) -> JsonDict:
+def _phase_stage_mapping(phase: JsonDict) -> dict[str, JsonDict]:
+    stages = phase.get("stages", {})
+    if not isinstance(stages, dict):
+        raise ValueError(f"Expected phase.stages to be a JSON object, got {type(stages)}")
+    return copy.deepcopy(stages)
+
+
+def merge_stage(low: JsonDict, high: JsonDict, stats: MergeStats) -> JsonDict:
     merged = _copy_non_container_fields(low, high, skip={"variants"})
 
     low_variants = copy.deepcopy(low.get("variants", {}))
     high_variants = high.get("variants", {})
-    low_index = _index_nested_mapping(low_variants, variant_entry_key, "phase.variants")
-    high_index = _index_nested_mapping(high_variants, variant_entry_key, "phase.variants")
+    low_index = _index_nested_mapping(low_variants, variant_entry_key, "stage.variants")
+    high_index = _index_nested_mapping(high_variants, variant_entry_key, "stage.variants")
 
     for variant_stable_key, high_display_key in high_index.items():
         high_variant = high_variants[high_display_key]
@@ -276,6 +289,35 @@ def merge_phase(low: JsonDict, high: JsonDict, stats: MergeStats) -> JsonDict:
             stats.variants_added += 1
 
     merged["variants"] = _sorted_nested_mapping(low_variants, variant_entry_key)
+    return merged
+
+
+def merge_phase(low: JsonDict, high: JsonDict, stats: MergeStats) -> JsonDict:
+    merged = _copy_non_container_fields(low, high, skip={"variants", "stages"})
+
+    low_stages = _phase_stage_mapping(low)
+    high_stages = _phase_stage_mapping(high)
+    low_index = _index_nested_mapping(low_stages, stage_entry_key, "phase.stages")
+    high_index = _index_nested_mapping(high_stages, stage_entry_key, "phase.stages")
+
+    for stage_stable_key, high_display_key in high_index.items():
+        high_stage = high_stages[high_display_key]
+        if stage_stable_key in low_index:
+            low_display_key = low_index[stage_stable_key]
+            merged_stage = merge_stage(low_stages[low_display_key], high_stage, stats)
+            _replace_mapping_entry(
+                low_stages,
+                low_display_key,
+                high_display_key,
+                merged_stage,
+            )
+            low_index[stage_stable_key] = high_display_key
+        else:
+            low_stages[high_display_key] = copy.deepcopy(high_stage)
+            low_index[stage_stable_key] = high_display_key
+            stats.stages_added += 1
+
+    merged["stages"] = _sorted_nested_mapping(low_stages, stage_entry_key)
     return merged
 
 
@@ -327,8 +369,8 @@ def index_configs(configs: Any, context: str) -> dict[tuple[int, int, int], Json
     return indexed
 
 
-def concrete_phase_keys(configs: Iterable[JsonDict]) -> set[tuple[int, int, int, str]]:
-    keys: set[tuple[int, int, int, str]] = set()
+def concrete_phase_stage_keys(configs: Iterable[JsonDict]) -> set[tuple[int, int, int, str, str]]:
+    keys: set[tuple[int, int, int, str, str]] = set()
     for config in configs:
         cfg_key = config_key(config)
         phases = config.get("phases", {})
@@ -339,48 +381,21 @@ def concrete_phase_keys(configs: Iterable[JsonDict]) -> set[tuple[int, int, int,
                 raise ValueError(
                     f"Expected phase {display_key!r} in config {cfg_key!r} to be an object"
                 )
-            keys.add((*cfg_key, phase_entry_key(str(display_key), phase)))
+            phase_key = phase_entry_key(str(display_key), phase)
+            stages = _phase_stage_mapping(phase)
+            for stage_display_key, stage in stages.items():
+                keys.add((*cfg_key, phase_key, stage_entry_key(str(stage_display_key), stage)))
     return keys
 
 
 def collect_exclusions(summary: JsonDict) -> list[JsonDict]:
-    """Collect top-level exclusions, plus nested exclusions if needed.
-
-    The current schema stores exclusions both at top level and in each config's
-    excluded_phases block. The top-level list is authoritative when present;
-    nested collection is a compatibility fallback for older or hand-edited files.
-    """
-    collected: dict[tuple[int, int, int, str], JsonDict] = {}
+    """Collect top-level exclusions."""
+    collected: dict[tuple[int, int, int, str, str], JsonDict] = {}
 
     for exclusion in summary.get("exclusions", []) or []:
         if not isinstance(exclusion, dict):
             raise ValueError(f"Expected exclusion entries to be objects: {exclusion!r}")
         collected[exclusion_key(exclusion)] = copy.deepcopy(exclusion)
-
-    for config in summary.get("configs", []) or []:
-        if not isinstance(config, dict):
-            continue
-        cfg_key = config_key(config)
-        for display_key, excluded_phase in (config.get("excluded_phases", {}) or {}).items():
-            if not isinstance(excluded_phase, dict):
-                continue
-            phase_key = str(excluded_phase.get("phase_key", display_key))
-            full_key = (*cfg_key, phase_key)
-            collected.setdefault(
-                full_key,
-                {
-                    "dimensions": cfg_key[0],
-                    "samples": cfg_key[1],
-                    "clusters": cfg_key[2],
-                    "config_id": config.get("config_id", config_id_for_key(cfg_key)),
-                    "phase_key": phase_key,
-                    "phase": str(excluded_phase.get("phase", display_key)),
-                    "reason": excluded_phase.get("reason", ""),
-                    "matched_rules": copy.deepcopy(
-                        excluded_phase.get("matched_rules", [])
-                    ),
-                },
-            )
 
     return [collected[key] for key in sorted(collected)]
 
@@ -391,14 +406,14 @@ def merge_exclusions(
     configs: dict[tuple[int, int, int], JsonDict],
     stats: MergeStats,
 ) -> list[JsonDict]:
-    merged_by_key: dict[tuple[int, int, int, str], JsonDict] = {}
+    merged_by_key: dict[tuple[int, int, int, str, str], JsonDict] = {}
 
     for exclusion in collect_exclusions(low):
         merged_by_key[exclusion_key(exclusion)] = copy.deepcopy(exclusion)
     for exclusion in collect_exclusions(high):
         merged_by_key[exclusion_key(exclusion)] = copy.deepcopy(exclusion)
 
-    phase_data_keys = concrete_phase_keys(configs.values())
+    phase_data_keys = concrete_phase_stage_keys(configs.values())
     active: list[JsonDict] = []
     for key in sorted(merged_by_key):
         if key in phase_data_keys:
@@ -410,10 +425,11 @@ def merge_exclusions(
     return active
 
 
-def compile_artifact_key(record: JsonDict) -> tuple[int, str, str, str]:
+def compile_artifact_key(record: JsonDict) -> tuple[int, str, str, str, str]:
     return (
         _required_int(record, "D", "compile artifact"),
         str(record.get("phase_key", "")),
+        str(record["stage_key"]),
         str(record.get("variant_key", "")),
         str(record.get("cpp_case", "")),
     )
@@ -442,7 +458,7 @@ def merge_compile_artifacts(
     )
     merged.setdefault("schema_version", 1)
 
-    records_by_key: dict[tuple[int, str, str, str], JsonDict] = {}
+    records_by_key: dict[tuple[int, str, str, str, str], JsonDict] = {}
     for record in low_artifacts.get("records", []) or []:
         records_by_key[compile_artifact_key(record)] = copy.deepcopy(record)
     for record in high_artifacts.get("records", []) or []:
@@ -460,31 +476,34 @@ def merge_compile_artifacts(
 
 
 
-def cachegrind_record_key(record: JsonDict) -> tuple[int, int, int, str, str]:
+def cachegrind_record_key(record: JsonDict) -> tuple[int, int, int, str, str, str]:
     return (
         _required_int(record, "D", "Cachegrind record"),
         _required_int(record, "N", "Cachegrind record"),
         _required_int(record, "K", "Cachegrind record"),
+        str(record["stage_key"]),
         str(record.get("cpp_case", "")),
         str(record.get("params_key", "default")),
     )
 
 
-def cachegrind_target_key(record: JsonDict) -> tuple[int, int, int, str, str]:
+def cachegrind_target_key(record: JsonDict) -> tuple[int, int, int, str, str, str]:
     return (
         _required_int(record, "D", "Cachegrind planned record"),
         _required_int(record, "N", "Cachegrind planned record"),
         _required_int(record, "K", "Cachegrind planned record"),
+        str(record["stage_key"]),
         str(record.get("cpp_case", "")),
         str(record.get("params_key", "default")),
     )
 
 
-def cachegrind_exclusion_key(exclusion: JsonDict) -> tuple[int, int, int, str, str]:
+def cachegrind_exclusion_key(exclusion: JsonDict) -> tuple[int, int, int, str, str, str]:
     return (
         _required_int(exclusion, "dimensions", "Cachegrind exclusion"),
         _required_int(exclusion, "samples", "Cachegrind exclusion"),
         _required_int(exclusion, "clusters", "Cachegrind exclusion"),
+        str(exclusion["stage_key"]),
         str(exclusion.get("cpp_case", "")),
         str(exclusion.get("params_key", "default")),
     )
@@ -527,19 +546,19 @@ def merge_cachegrind_summaries(
         }
     )
 
-    records_by_key: dict[tuple[int, int, int, str, str], JsonDict] = {}
+    records_by_key: dict[tuple[int, int, int, str, str, str], JsonDict] = {}
     for record in low_cachegrind.get("records", []) or []:
         records_by_key[cachegrind_record_key(record)] = copy.deepcopy(record)
     for record in high_cachegrind.get("records", []) or []:
         records_by_key[cachegrind_record_key(record)] = copy.deepcopy(record)
 
-    planned_by_key: dict[tuple[int, int, int, str, str], JsonDict] = {}
+    planned_by_key: dict[tuple[int, int, int, str, str, str], JsonDict] = {}
     for record in low_cachegrind.get("planned_records", []) or []:
         planned_by_key[cachegrind_target_key(record)] = copy.deepcopy(record)
     for record in high_cachegrind.get("planned_records", []) or []:
         planned_by_key[cachegrind_target_key(record)] = copy.deepcopy(record)
 
-    exclusions_by_key: dict[tuple[int, int, int, str, str], JsonDict] = {}
+    exclusions_by_key: dict[tuple[int, int, int, str, str, str], JsonDict] = {}
     for exclusion in low_cachegrind.get("exclusions", []) or []:
         exclusions_by_key[cachegrind_exclusion_key(exclusion)] = copy.deepcopy(exclusion)
     for exclusion in high_cachegrind.get("exclusions", []) or []:
@@ -595,14 +614,32 @@ def rebuild_config_excluded_phases(
         config = ensure_config_for_exclusion(configs, exclusion)
         phase_key = str(exclusion.get("phase_key", exclusion.get("phase", "")))
         phase_name = str(exclusion.get("phase", phase_key))
-        config.setdefault("excluded_phases", {})[phase_name] = {
+        stage_key = str(exclusion["stage_key"])
+        stage_name = str(exclusion["stage"])
+
+        phase_exclusion = config.setdefault("excluded_phases", {}).setdefault(
+            phase_name,
+            {
+                "phase_key": phase_key,
+                "phase": phase_name,
+                "stages": {},
+            },
+        )
+        phase_exclusion.setdefault("stages", {})[stage_name] = {
             "phase_key": phase_key,
             "phase": phase_name,
+            "stage_key": stage_key,
+            "stage": stage_name,
             "reason": exclusion.get("reason", ""),
             "matched_rules": copy.deepcopy(exclusion.get("matched_rules", [])),
         }
 
     for config in configs.values():
+        for phase in config.get("excluded_phases", {}).values():
+            phase["stages"] = _sorted_nested_mapping(
+                phase.get("stages", {}),
+                lambda display_key, entry: str(entry["stage_key"]),
+            )
         config["excluded_phases"] = _sorted_nested_mapping(
             config.get("excluded_phases", {}),
             lambda display_key, entry: str(entry.get("phase_key", display_key)),
@@ -665,6 +702,7 @@ def merge_metadata(
         "counts": {
             "configs_added": stats.configs_added,
             "phases_added": stats.phases_added,
+            "stages_added": stats.stages_added,
             "variants_added": stats.variants_added,
             "parameterizations_added": stats.parameterizations_added,
             "parameterizations_replaced": stats.parameterizations_replaced,
@@ -746,6 +784,7 @@ def main() -> None:
     print(f"Active exclusions: {len(merged.get('exclusions', []))}")
     print(f"Configs added: {stats.configs_added}")
     print(f"Phases added: {stats.phases_added}")
+    print(f"Stages added: {stats.stages_added}")
     print(f"Variants added: {stats.variants_added}")
     print(f"Parameterizations added: {stats.parameterizations_added}")
     print(f"Parameterizations replaced: {stats.parameterizations_replaced}")

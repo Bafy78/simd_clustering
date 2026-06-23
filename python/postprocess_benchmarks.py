@@ -209,11 +209,11 @@ def main() -> None:
     print(f"Bootstrap iterations: {args.bootstrap_iterations}")
     print(f"Lloyd metrics records: {len(lloyd_metrics)}")
     print(f"Lloyd completed configs: {len(lloyd_config_ids)}")
-    print(f"Lloyd completed config/params keys: {len(lloyd_metric_keys)}")
+    print(f"Lloyd completed config/stage/params keys: {len(lloyd_metric_keys)}")
     print(f"GMM metrics records: {len(gmm_metrics)}")
     print(f"GMM completed configs: {len(gmm_config_ids)}")
-    print(f"GMM completed config/params keys: {len(gmm_metric_keys)}")
-    print(f"Configured benchmark phase exclusions: {len(exclusions)}")
+    print(f"GMM completed config/stage/params keys: {len(gmm_metric_keys)}")
+    print(f"Configured benchmark phase/stage exclusions: {len(exclusions)}")
     print(
         "C++ compile artifact records: "
         f"{summary['compile_artifacts'].get('record_count', 0)}"

@@ -30,6 +30,7 @@ from benchmark_pipeline.tasks import (
     active_cpp_targets_for_case,
     cachegrind_model_for_options,
     enabled_phase_keys_for_options,
+    enabled_stage_keys_by_phase_for_options,
 )
 
 
@@ -107,6 +108,7 @@ def build_cachegrind_manifest_for_config(config: BenchmarkConfig) -> dict[str, A
                         "config_id": case.case_id,
                         "cpp_case": target.cpp_case,
                         "phase_key": target.phase_key,
+                        "stage_key": target.stage_key,
                         "variant_key": target.variant_key,
                         "params_key": target.params_key,
                     }
@@ -131,6 +133,7 @@ def write_benchmark_exclusion_manifest(
         test_Ks=config.test_Ks,
         rules=config.exclusion_rules,
         phase_keys=enabled_phase_keys_for_options(config.pipeline),
+        stage_keys_by_phase=enabled_stage_keys_by_phase_for_options(config.pipeline),
     )
     path = datasets_dir / EXCLUSIONS_FILENAME
     write_exclusion_manifest(path, manifest)
@@ -138,7 +141,7 @@ def write_benchmark_exclusion_manifest(
     if manifest["exclusions"]:
         print(
             f"Registered {len(manifest['exclusions'])} configured benchmark "
-            f"phase exclusions in {path}."
+            f"phase/stage exclusions in {path}."
         )
 
 

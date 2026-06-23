@@ -10,33 +10,35 @@ from benchmark_metadata import (
     format_config_id,
     language_display_name,
     params_display_name,
-    phase_display_name,
+    fallback_phase_display_name,
+    stage_display_name,
     variant_display_name,
 )
-MetricsKey = tuple[str, str, str, str]
+MetricsKey = tuple[str, str, str, str, str]
 TOKEN_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_-]*"
 VARIANT_PATTERN = rf"(?P<variant>{TOKEN_PATTERN})"
+STAGE_PATTERN = rf"(?P<stage>{TOKEN_PATTERN})"
 PARAMS_PATTERN = rf"(?P<params>{TOKEN_PATTERN})"
 CONFIG_ID_PATTERN = r"(?P<D>\d+)D_(?P<N>\d+)N_(?P<K>\d+)K"
 
-# Timing artifacts:
-#   {phase}_{variant}_{lang}_{D}D_{N}N_{K}K.json
-#   gmm_{variant}_{covariance_type}_{lang}_{D}D_{N}N_{K}K.json
+# Current timing artifacts:
+#   {phase}_{stage}_{variant}_{lang}_{D}D_{N}N_{K}K.json
+#   gmm_{stage}_{variant}_{covariance_type}_{lang}_{D}D_{N}N_{K}K.json
 BENCHMARK_JSON_RE = re.compile(
-    rf"^(?P<phase>soa|pp|lloyd)_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
+    rf"^(?P<phase>soa|pp|lloyd)_{STAGE_PATTERN}_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
 GMM_BENCHMARK_JSON_RE = re.compile(
-    rf"^gmm_{VARIANT_PATTERN}_{PARAMS_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
+    rf"^gmm_{STAGE_PATTERN}_{VARIANT_PATTERN}_{PARAMS_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
 
-# Metrics artifacts:
-#   lloyd_metrics_{variant}_{lang}_{D}D_{N}N_{K}K.json
-#   gmm_metrics_{variant}_{covariance_type}_{lang}_{D}D_{N}N_{K}K.json
+# Current metrics artifacts:
+#   lloyd_{stage}_metrics_{variant}_{lang}_{D}D_{N}N_{K}K.json
+#   gmm_{stage}_metrics_{variant}_{covariance_type}_{lang}_{D}D_{N}N_{K}K.json
 LLOYD_METRICS_JSON_RE = re.compile(
-    rf"^lloyd_metrics_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
+    rf"^lloyd_{STAGE_PATTERN}_metrics_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
 GMM_METRICS_JSON_RE = re.compile(
-    rf"^gmm_metrics_{VARIANT_PATTERN}_{PARAMS_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
+    rf"^gmm_{STAGE_PATTERN}_metrics_{VARIANT_PATTERN}_{PARAMS_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
 
 
@@ -46,6 +48,7 @@ class BenchmarkIdentity:
     samples: int
     clusters: int
     phase_key: str
+    stage_key: str
     variant_key: str
     language_key: str
     params_key: str = NO_PARAMS
@@ -57,6 +60,7 @@ class BenchmarkIdentity:
             samples=int(record["samples"]),
             clusters=int(record["clusters"]),
             phase_key=str(record["phase_key"]),
+            stage_key=str(record["stage_key"]),
             variant_key=str(record["variant_key"]),
             language_key=str(record["language_key"]),
             params_key=str(record.get("params_key", NO_PARAMS)),
@@ -74,6 +78,7 @@ class BenchmarkIdentity:
     def metrics_key(self) -> MetricsKey:
         return (
             self.config_id,
+            self.stage_key,
             self.variant_key,
             self.language_key,
             self.params_key,
@@ -81,7 +86,11 @@ class BenchmarkIdentity:
 
     @property
     def phase(self) -> str:
-        return phase_display_name(self.phase_key)
+        return fallback_phase_display_name(self.phase_key)
+
+    @property
+    def stage(self) -> str:
+        return stage_display_name(self.stage_key)
 
     @property
     def variant(self) -> str:
@@ -112,6 +121,7 @@ class BenchmarkIdentity:
             samples=self.samples,
             clusters=self.clusters,
             phase_key=self.phase_key,
+            stage_key=self.stage_key,
             variant_key=self.variant_key if variant_key is None else variant_key,
             language_key=language_key,
             params_key=self.params_key,
@@ -124,6 +134,8 @@ class BenchmarkIdentity:
         return {
             "phase_key": self.phase_key,
             "phase": self.phase,
+            "stage_key": self.stage_key,
+            "stage": self.stage,
             "variant_key": self.variant_key,
             "variant": self.variant,
             "params_key": self.params_key,
@@ -156,6 +168,7 @@ def _parsed_common(
         samples=N,
         clusters=K,
         phase_key=phase_key,
+        stage_key=match.group("stage"),
         variant_key=match.group("variant"),
         language_key=match.group("lang"),
         params_key=params_key,
@@ -191,4 +204,8 @@ def parse_metrics_filename(path: Path, phase_key: str) -> BenchmarkIdentity | No
     if not match:
         return None
 
-    return _parsed_common(match, phase_key=phase_key, params_key=params_key)
+    return _parsed_common(
+        match,
+        phase_key=phase_key,
+        params_key=params_key,
+    )

@@ -138,9 +138,9 @@ It performs four high-level steps:
 
 The postprocessor only computes parity for configurations that have the required C++ and Python metrics files. Missing metrics are treated as incomplete data, not as a successful comparison.
 
-Parity is computed per C++ variant and per algorithm parameterization. For example, `lloyd_metrics_static_cpp_...json` and `lloyd_metrics_dynamic_cpp_...json` are both compared against the same `lloyd_metrics_reference_py_...json` scikit-learn reference.
+Parity is computed per stage, C++ variant, and algorithm parameterization. For example, `lloyd_full_metrics_static_cpp_...json` and `lloyd_full_metrics_dynamic_cpp_...json` are both compared against the same `lloyd_full_metrics_reference_py_...json` scikit-learn reference.
 
-In the final summary, each parity-bearing phase gets a `parity` block containing:
+In the final summary, each parity-bearing phase/stage entry gets a `parity` block containing:
 
 * `status`, usually `PASS` or `FAIL`;
 * `failure_reasons`;
@@ -152,7 +152,7 @@ This is deliberate. The summary should be self-describing enough that plots and 
 
 ## 🚨 How to interpret failures
 
-A parity failure does not automatically mean that the C++ kernel is wrong, but it does mean the corresponding benchmark result should not be treated as a clean scikit-learn-equivalent speed comparison without further investigation.
+A parity failure does not automatically mean that the C++ kernel is wrong, but it does mean the corresponding benchmark result should not be treated as a clean scikit-learn-equivalent phase/stage speed comparison without further investigation.
 
 When a parity check fails, the first things to inspect are the raw metrics files, not the timing summary. The metrics files contain the actual algorithm outputs used to decide the parity status.
 

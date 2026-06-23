@@ -5,6 +5,7 @@ from pathlib import Path
 from benchmark_pipeline.config import PipelineOptions
 from benchmark_pipeline.exclusions import (
     BenchmarkExclusionRule,
+    excluded_phase_stage_keys_for_case,
     excluded_phase_keys_for_case,
     is_cachegrind_excluded,
 )
@@ -19,10 +20,21 @@ from benchmark_pipeline.cachegrind import (
 from benchmark_pipeline.gmm_covariance import validate_gmm_covariance_types
 from benchmark_pipeline.paths import DATASETS_DIR, repo_path, repo_relative_path
 from benchmark_metadata import (
+    FULL_STAGE_KEY,
     LANGUAGE_CPP_KEY,
     LANGUAGE_PY_KEY,
     NO_PARAMS,
     REFERENCE_VARIANT,
+    stage_display_name,
+)
+from benchmark_pipeline.stages import (
+    DATASET_ARTIFACT,
+    GMM_MEANS_ARTIFACT,
+    GMM_PRECISIONS_ARTIFACT,
+    GMM_WEIGHTS_ARTIFACT,
+    INIT_CENTROIDS_ARTIFACT,
+    get_stage_spec,
+    stage_keys_for_phase,
 )
 
 
@@ -54,6 +66,10 @@ class Task:
     command: list[str]
     kind: str = "subprocess"
     cpp_case: str | None = None
+    phase_key: str | None = None
+    stage_key: str = FULL_STAGE_KEY
+    input_artifacts: tuple[str, ...] = ()
+    output_artifacts: tuple[str, ...] = ()
     cpp_json_arg: int | None = None
     cpp_metrics_arg: int | None = None
     cachegrind: "CachegrindTaskInfo | None" = None
@@ -62,6 +78,7 @@ class Task:
 @dataclass(frozen=True)
 class CachegrindTaskInfo:
     cpp_case: str
+    stage_key: str
     D: int
     N: int
     K: int
@@ -102,12 +119,13 @@ def gmm_precisions_path(
 
 def artifact_name_parts(
     phase_key: str,
+    stage_key: str,
     variant_key: str,
     language_key: str,
     case_id: str,
     params_key: str = NO_PARAMS,
 ) -> list[str]:
-    parts = [phase_key, variant_key]
+    parts = [phase_key, stage_key, variant_key]
 
     if params_key != NO_PARAMS:
         parts.append(params_key)
@@ -118,6 +136,7 @@ def artifact_name_parts(
 
 def timing_artifact_name(
     phase_key: str,
+    stage_key: str,
     variant_key: str,
     language_key: str,
     case_id: str,
@@ -126,6 +145,7 @@ def timing_artifact_name(
     return "_".join(
         artifact_name_parts(
             phase_key,
+            stage_key,
             variant_key,
             language_key,
             case_id,
@@ -136,25 +156,28 @@ def timing_artifact_name(
 
 def metrics_artifact_name(
     phase_key: str,
+    stage_key: str,
     variant_key: str,
     language_key: str,
     case_id: str,
     params_key: str = NO_PARAMS,
 ) -> str:
     return "_".join(
-        [phase_key, "metrics"]
+        [phase_key, stage_key, "metrics"]
         + artifact_name_parts(
+            "",
             "",
             variant_key,
             language_key,
             case_id,
             params_key,
-        )[1:]
+        )[2:]
     ) + ".json"
 
 
 def timing_artifact_path(
     phase_key: str,
+    stage_key: str,
     variant_key: str,
     language_key: str,
     case_id: str,
@@ -164,6 +187,7 @@ def timing_artifact_path(
     return dataset_path(
         timing_artifact_name(
             phase_key,
+            stage_key,
             variant_key,
             language_key,
             case_id,
@@ -175,6 +199,7 @@ def timing_artifact_path(
 
 def metrics_artifact_path(
     phase_key: str,
+    stage_key: str,
     variant_key: str,
     language_key: str,
     case_id: str,
@@ -184,6 +209,7 @@ def metrics_artifact_path(
     return dataset_path(
         metrics_artifact_name(
             phase_key,
+            stage_key,
             variant_key,
             language_key,
             case_id,
@@ -228,15 +254,49 @@ class BenchmarkArtifacts:
     def gmm_precisions_bin(self, covariance_type: str) -> str:
         return gmm_precisions_path(covariance_type, self.case_id, self.datasets_dir)
 
+    def generic_stage_artifact(
+        self,
+        stage_key: str,
+        artifact_key: str,
+        params_key: str = NO_PARAMS,
+    ) -> str:
+        params_part = "" if params_key == NO_PARAMS else f"_{params_key}"
+        return self.dataset(
+            f"{stage_key}_{artifact_key}{params_part}_{self.case_id}.bin"
+        )
+
+    def artifact(
+        self,
+        artifact_key: str,
+        *,
+        stage_key: str = FULL_STAGE_KEY,
+        params_key: str = NO_PARAMS,
+    ) -> str:
+        if artifact_key == DATASET_ARTIFACT:
+            return self.dataset_bin
+        if artifact_key == INIT_CENTROIDS_ARTIFACT:
+            return self.init_centroids_bin
+        if artifact_key == GMM_WEIGHTS_ARTIFACT:
+            return self.gmm_weights_bin
+        if artifact_key == GMM_MEANS_ARTIFACT:
+            return self.gmm_means_bin
+        if artifact_key == GMM_PRECISIONS_ARTIFACT:
+            if params_key == NO_PARAMS:
+                raise ValueError("gmm_precisions artifacts require a params_key")
+            return self.gmm_precisions_bin(params_key)
+        return self.generic_stage_artifact(stage_key, artifact_key, params_key)
+
     def timing(
         self,
         phase_key: str,
+        stage_key: str,
         variant_key: str,
         language_key: str,
         params_key: str = NO_PARAMS,
     ) -> str:
         return timing_artifact_path(
             phase_key,
+            stage_key,
             variant_key,
             language_key,
             self.case_id,
@@ -247,12 +307,14 @@ class BenchmarkArtifacts:
     def metrics(
         self,
         phase_key: str,
+        stage_key: str,
         variant_key: str,
         language_key: str,
         params_key: str = NO_PARAMS,
     ) -> str:
         return metrics_artifact_path(
             phase_key,
+            stage_key,
             variant_key,
             language_key,
             self.case_id,
@@ -276,6 +338,15 @@ def enabled_phase_keys_for_options(options: PipelineOptions) -> set[str]:
     return phase_keys
 
 
+def enabled_stage_keys_by_phase_for_options(
+    options: PipelineOptions,
+) -> dict[str, tuple[str, ...]]:
+    return {
+        phase_key: stage_keys_for_phase(phase_key)
+        for phase_key in enabled_phase_keys_for_options(options)
+    }
+
+
 @dataclass(frozen=True, order=True)
 class CppTarget:
     cpp_case: str
@@ -284,6 +355,10 @@ class CppTarget:
     @property
     def phase_key(self) -> str:
         return get_cpp_case(self.cpp_case).phase_key
+
+    @property
+    def stage_key(self) -> str:
+        return get_cpp_case(self.cpp_case).stage_key
 
     @property
     def variant_key(self) -> str:
@@ -297,31 +372,36 @@ def active_cpp_targets_for_case(
 ) -> list[CppTarget]:
     """Return concrete C++ targets that normal timing would run for one D/N/K."""
     enabled_phase_keys = enabled_phase_keys_for_options(options)
-    excluded_phase_keys = excluded_phase_keys_for_case(
+    stage_keys_by_phase = enabled_stage_keys_by_phase_for_options(options)
+    excluded_phase_stage_keys = excluded_phase_stage_keys_for_case(
         D=case.D,
         N=case.N,
         K=case.K,
         rules=exclusion_rules,
         phase_keys=enabled_phase_keys,
+        stage_keys_by_phase=stage_keys_by_phase,
     )
-    active_phase_keys = enabled_phase_keys - excluded_phase_keys
 
     targets: list[CppTarget] = []
 
-    if "soa" in active_phase_keys:
+    if "soa" in enabled_phase_keys:
         targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_soa_cases)
-    if "pp" in active_phase_keys:
+    if "pp" in enabled_phase_keys:
         targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_pp_cases)
-    if "lloyd" in active_phase_keys:
+    if "lloyd" in enabled_phase_keys:
         targets.extend(CppTarget(cpp_case) for cpp_case in options.cpp_lloyd_cases)
-    if "gmm" in active_phase_keys:
+    if "gmm" in enabled_phase_keys:
         for covariance_type in options.gmm_covariance_types:
             targets.extend(
                 CppTarget(cpp_case, covariance_type)
                 for cpp_case in options.cpp_gmm_cases
             )
 
-    return sorted(targets)
+    return sorted(
+        target
+        for target in targets
+        if (target.phase_key, target.stage_key) not in excluded_phase_stage_keys
+    )
 
 
 def active_cachegrind_targets_for_case(
@@ -340,6 +420,7 @@ def active_cachegrind_targets_for_case(
             N=case.N,
             K=case.K,
             phase_key=target.phase_key,
+            stage_key=target.stage_key,
             cpp_case=target.cpp_case,
             params_key=target.params_key,
             rules=options.cachegrind_exclusion_rules,
@@ -367,7 +448,11 @@ def cpp_case_runtime_args(
 ) -> list[str]:
     case_info = get_cpp_case(cpp_case)
     command_args = [
-        artifacts.dataset_bin,
+        artifacts.artifact(
+            case_info.primary_input_artifact_key,
+            stage_key=case_info.stage_key,
+            params_key=params_key,
+        ),
         str(case.N),
     ]
 
@@ -375,7 +460,13 @@ def cpp_case_runtime_args(
         command_args.append(str(case.K))
 
     if case_info.needs_init:
-        command_args.append(artifacts.init_centroids_bin)
+        command_args.append(
+            artifacts.artifact(
+                INIT_CENTROIDS_ARTIFACT,
+                stage_key=case_info.stage_key,
+                params_key=params_key,
+            )
+        )
 
     if case_info.needs_gmm_init:
         if params_key == NO_PARAMS:
@@ -403,9 +494,12 @@ def cpp_case_runtime_args(
 
 def cpp_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
     case = get_cpp_case(cpp_case)
+    stage_suffix = ""
+    if case.stage_key != FULL_STAGE_KEY:
+        stage_suffix = f" [{stage_display_name(case.stage_key)}]"
     if case.phase_key == "gmm" and params_key != NO_PARAMS:
-        return f"C++: {case.display_name} ({params_key} covariance)"
-    return f"C++: {case.display_name}"
+        return f"C++: {case.display_name}{stage_suffix} ({params_key} covariance)"
+    return f"C++: {case.display_name}{stage_suffix}"
 
 
 def cpp_timing_args(options: PipelineOptions) -> list[str]:
@@ -434,6 +528,7 @@ def cpp_case_timing_artifact(
     case_info = get_cpp_case(cpp_case)
     return artifacts.timing(
         case_info.phase_key,
+        case_info.stage_key,
         case_info.variant_key,
         LANGUAGE_CPP_KEY,
         params_key,
@@ -452,6 +547,7 @@ def cpp_case_metrics_artifact(
 
     return artifacts.metrics(
         case_info.phase_key,
+        case_info.stage_key,
         case_info.variant_key,
         LANGUAGE_CPP_KEY,
         params_key,
@@ -492,11 +588,40 @@ def build_cpp_case_task(
     )
     command.extend(cpp_timing_args(options))
 
+    case_info = get_cpp_case(cpp_case)
+    stage_spec = get_stage_spec(case_info.phase_key, case_info.stage_key)
+    input_artifacts = tuple(
+        artifacts.artifact(artifact_key, stage_key=case_info.stage_key, params_key=params_key)
+        for artifact_key in stage_spec.input_artifact_keys
+    )
+    if case_info.needs_init:
+        input_artifacts = (
+            *input_artifacts,
+            artifacts.artifact(
+                INIT_CENTROIDS_ARTIFACT,
+                stage_key=case_info.stage_key,
+                params_key=params_key,
+            ),
+        )
+    if case_info.needs_gmm_init:
+        input_artifacts = (
+            *input_artifacts,
+            artifacts.gmm_weights_bin,
+            artifacts.gmm_means_bin,
+            artifacts.gmm_precisions_bin(params_key),
+        )
+
+    output_artifacts = (metrics_out,) if metrics_out is not None else ()
+
     return Task(
         name=cpp_task_name(cpp_case, params_key),
         command=command,
         kind="cpp_timing",
         cpp_case=cpp_case,
+        phase_key=case_info.phase_key,
+        stage_key=case_info.stage_key,
+        input_artifacts=input_artifacts,
+        output_artifacts=output_artifacts,
         cpp_json_arg=cpp_json_arg,
         cpp_metrics_arg=cpp_metrics_arg,
     )
@@ -527,7 +652,10 @@ def cachegrind_task_name(cpp_case: str, params_key: str = NO_PARAMS) -> str:
     suffix = ""
     if params_key != NO_PARAMS:
         suffix = f" ({params_key} covariance)"
-    return f"Cachegrind: {case.display_name}{suffix}"
+    stage_suffix = ""
+    if case.stage_key != FULL_STAGE_KEY:
+        stage_suffix = f" [{stage_display_name(case.stage_key)}]"
+    return f"Cachegrind: {case.display_name}{stage_suffix}{suffix}"
 
 
 def build_cachegrind_task(
@@ -542,7 +670,7 @@ def build_cachegrind_task(
     out_dir = repo_relative_path(options.cachegrind_results_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = cachegrind_file_stem(cpp_case, params_key, case.case_id)
+    stem = cachegrind_file_stem(cpp_case, case_info.stage_key, params_key, case.case_id)
     raw_output = out_dir / f"{stem}.out"
     annotated_output = out_dir / f"{stem}.annotate.txt"
     stdout_path = out_dir / f"valgrind.{stem}.stdout.txt"
@@ -551,13 +679,17 @@ def build_cachegrind_task(
     summary_path = cachegrind_summary_path(
         out_dir,
         cpp_case,
+        case_info.stage_key,
         params_key,
         case.case_id,
     )
 
     metrics_path: Path | None = None
     if case_info.needs_metrics:
-        metrics_path = out_dir / f"{cpp_case}_metrics_cpp.{params_key}.{case.case_id}.json"
+        metrics_path = out_dir / (
+            f"{case_info.phase_key}_{case_info.stage_key}_metrics_"
+            f"{case_info.variant_key}_{params_key}_cpp_{case.case_id}.json"
+        )
 
     command = [
         "valgrind",
@@ -589,8 +721,11 @@ def build_cachegrind_task(
         command=command,
         kind="cachegrind",
         cpp_case=cpp_case,
+        phase_key=case_info.phase_key,
+        stage_key=case_info.stage_key,
         cachegrind=CachegrindTaskInfo(
             cpp_case=cpp_case,
+            stage_key=case_info.stage_key,
             D=case.D,
             N=case.N,
             K=case.K,
@@ -649,7 +784,21 @@ def build_dataset_setup_task(
     if gmm_covariance_types:
         setup_name += " & GMM Init"
 
-    return Task(name=setup_name, command=setup_command)
+    produced = [artifacts.dataset_bin, artifacts.init_centroids_bin]
+    if gmm_covariance_types:
+        produced.extend([artifacts.gmm_weights_bin, artifacts.gmm_means_bin])
+        produced.extend(
+            artifacts.gmm_precisions_bin(covariance_type)
+            for covariance_type in gmm_covariance_types
+        )
+
+    return Task(
+        name=setup_name,
+        command=setup_command,
+        phase_key=None,
+        stage_key=FULL_STAGE_KEY,
+        output_artifacts=tuple(produced),
+    )
 
 
 def _validate_cpp_gmm_cases(
@@ -680,14 +829,31 @@ def build_pipeline(
     _validate_cpp_gmm_cases(options.cpp_gmm_cases, options.gmm_covariance_types)
 
     enabled_phase_keys = enabled_phase_keys_for_options(options)
+    stage_keys_by_phase = enabled_stage_keys_by_phase_for_options(options)
     excluded_phase_keys = excluded_phase_keys_for_case(
         D=case.D,
         N=case.N,
         K=case.K,
         rules=exclusion_rules,
         phase_keys=enabled_phase_keys,
+        stage_keys_by_phase=stage_keys_by_phase,
+    )
+    excluded_phase_stage_keys = excluded_phase_stage_keys_for_case(
+        D=case.D,
+        N=case.N,
+        K=case.K,
+        rules=exclusion_rules,
+        phase_keys=enabled_phase_keys,
+        stage_keys_by_phase=stage_keys_by_phase,
     )
     active_phase_keys = enabled_phase_keys - excluded_phase_keys
+
+    def stage_is_active(phase_key: str, stage_key: str = FULL_STAGE_KEY) -> bool:
+        return phase_key in active_phase_keys and (phase_key, stage_key) not in excluded_phase_stage_keys
+
+    def cpp_case_is_active(cpp_case: str) -> bool:
+        case_info = get_cpp_case(cpp_case)
+        return stage_is_active(case_info.phase_key, case_info.stage_key)
 
     needs_gmm_init = "gmm" in active_phase_keys
     if ("gmm" in enabled_phase_keys) and not options.gmm_covariance_types:
@@ -712,6 +878,8 @@ def build_pipeline(
 
     if "soa" in active_phase_keys:
         for cpp_case in options.cpp_soa_cases:
+            if not cpp_case_is_active(cpp_case):
+                continue
             add_cpp_case_task(
                 tasks,
                 cpp_case=cpp_case,
@@ -722,6 +890,8 @@ def build_pipeline(
 
     if "pp" in active_phase_keys:
         for cpp_case in options.cpp_pp_cases:
+            if not cpp_case_is_active(cpp_case):
+                continue
             add_cpp_case_task(
                 tasks,
                 cpp_case=cpp_case,
@@ -730,7 +900,7 @@ def build_pipeline(
                 options=options,
             )
 
-        if options.run_python_pp:
+        if options.run_python_pp and stage_is_active("pp"):
             tasks.append(
                 Task(
                     name="Python: K-Means++ Initialization",
@@ -742,14 +912,24 @@ def build_pipeline(
                         *case.dimension_args(),
                         *python_pyperf_args(
                             options,
-                            artifacts.timing("pp", REFERENCE_VARIANT, LANGUAGE_PY_KEY),
+                            artifacts.timing(
+                                "pp",
+                                FULL_STAGE_KEY,
+                                REFERENCE_VARIANT,
+                                LANGUAGE_PY_KEY,
+                            ),
                         ),
                     ],
+                    phase_key="pp",
+                    stage_key=FULL_STAGE_KEY,
+                    input_artifacts=(artifacts.dataset_bin,),
                 )
             )
 
     if "lloyd" in active_phase_keys:
         for cpp_case in options.cpp_lloyd_cases:
+            if not cpp_case_is_active(cpp_case):
+                continue
             add_cpp_case_task(
                 tasks,
                 cpp_case=cpp_case,
@@ -758,7 +938,7 @@ def build_pipeline(
                 options=options,
             )
 
-        if options.run_python_lloyd:
+        if options.run_python_lloyd and stage_is_active("lloyd"):
             tasks.append(
                 Task(
                     name="Python: Lloyd Algorithm",
@@ -771,12 +951,33 @@ def build_pipeline(
                         "--init-centroids-bin",
                         artifacts.init_centroids_bin,
                         "--metrics-file",
-                        artifacts.metrics("lloyd", REFERENCE_VARIANT, LANGUAGE_PY_KEY),
+                        artifacts.metrics(
+                            "lloyd",
+                            FULL_STAGE_KEY,
+                            REFERENCE_VARIANT,
+                            LANGUAGE_PY_KEY,
+                        ),
                         *python_pyperf_args(
                             options,
-                            artifacts.timing("lloyd", REFERENCE_VARIANT, LANGUAGE_PY_KEY),
+                            artifacts.timing(
+                                "lloyd",
+                                FULL_STAGE_KEY,
+                                REFERENCE_VARIANT,
+                                LANGUAGE_PY_KEY,
+                            ),
                         ),
                     ],
+                    phase_key="lloyd",
+                    stage_key=FULL_STAGE_KEY,
+                    input_artifacts=(artifacts.dataset_bin, artifacts.init_centroids_bin),
+                    output_artifacts=(
+                        artifacts.metrics(
+                            "lloyd",
+                            FULL_STAGE_KEY,
+                            REFERENCE_VARIANT,
+                            LANGUAGE_PY_KEY,
+                        ),
+                    ),
                 )
             )
 
@@ -785,6 +986,8 @@ def build_pipeline(
             gmm_precisions_bin = artifacts.gmm_precisions_bin(covariance_type)
 
             for cpp_case in options.cpp_gmm_cases:
+                if not cpp_case_is_active(cpp_case):
+                    continue
                 add_cpp_case_task(
                     tasks,
                     cpp_case=cpp_case,
@@ -794,7 +997,7 @@ def build_pipeline(
                     params_key=covariance_type,
                 )
 
-            if options.run_python_gmm:
+            if options.run_python_gmm and stage_is_active("gmm"):
                 tasks.append(
                     Task(
                         name=f"Python: GaussianMixture EM ({covariance_type} covariance)",
@@ -815,6 +1018,7 @@ def build_pipeline(
                             "--metrics-file",
                             artifacts.metrics(
                                 "gmm",
+                                FULL_STAGE_KEY,
                                 REFERENCE_VARIANT,
                                 LANGUAGE_PY_KEY,
                                 covariance_type,
@@ -823,12 +1027,30 @@ def build_pipeline(
                                 options,
                                 artifacts.timing(
                                     "gmm",
+                                    FULL_STAGE_KEY,
                                     REFERENCE_VARIANT,
                                     LANGUAGE_PY_KEY,
                                     covariance_type,
                                 ),
                             ),
                         ],
+                        phase_key="gmm",
+                        stage_key=FULL_STAGE_KEY,
+                        input_artifacts=(
+                            artifacts.dataset_bin,
+                            artifacts.gmm_weights_bin,
+                            artifacts.gmm_means_bin,
+                            gmm_precisions_bin,
+                        ),
+                        output_artifacts=(
+                            artifacts.metrics(
+                                "gmm",
+                                FULL_STAGE_KEY,
+                                REFERENCE_VARIANT,
+                                LANGUAGE_PY_KEY,
+                                covariance_type,
+                            ),
+                        ),
                     )
                 )
 

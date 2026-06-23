@@ -54,6 +54,7 @@ def load_cachegrind_records(results_dir: str | Path) -> list[dict[str, Any]]:
             int(item["D"]),
             int(item["N"]),
             int(item["K"]),
+            str(item["stage_key"]),
             str(item["cpp_case"]),
             str(item["params_key"]),
         ),

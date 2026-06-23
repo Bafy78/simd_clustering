@@ -12,6 +12,7 @@ def filter_bench(
     df,
     *,
     phase=None,
+    stage=None,
     language=None,
     variant=None,
     params=None,
@@ -23,6 +24,7 @@ def filter_bench(
 
     filters = {
         COL_PHASE: phase,
+        COL_STAGE: stage,
         COL_LANGUAGE: language,
         COL_VARIANT: variant,
         COL_PARAMS: params,
@@ -119,11 +121,14 @@ def add_speedup_retention(
     result = df_speedup.copy()
 
     if group_cols is None:
-        group_cols = [COL_PHASE, COL_DIMENSIONS, COL_SAMPLES]
+        identity_cols = [COL_PHASE]
+        if COL_STAGE in result.columns:
+            identity_cols.append(COL_STAGE)
         if COL_VARIANT in result.columns:
-            group_cols = [COL_PHASE, COL_VARIANT, COL_DIMENSIONS, COL_SAMPLES]
+            identity_cols.append(COL_VARIANT)
         if COL_PARAMS in result.columns:
-            group_cols = [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES]
+            identity_cols.append(COL_PARAMS)
+        group_cols = identity_cols + [COL_DIMENSIONS, COL_SAMPLES]
 
     if base_clusters is None:
         base_clusters = int(result[COL_CLUSTERS].min())
@@ -300,7 +305,19 @@ def prepare_speedup_comparison_data(
         ordered=True,
     )
 
+    if COL_STAGE in result.columns:
+        present_stages = list(dict.fromkeys(result[COL_STAGE].dropna().astype(str)))
+        stage_categories = [stage for stage in STAGE_ORDER if stage in present_stages]
+        stage_categories.extend(stage for stage in present_stages if stage not in stage_categories)
+        result[COL_STAGE] = pd.Categorical(
+            result[COL_STAGE],
+            categories=stage_categories,
+            ordered=True,
+        )
+
     sort_cols = [COL_PHASE]
+    if COL_STAGE in result.columns:
+        sort_cols.append(COL_STAGE)
     if COL_VARIANT in result.columns:
         sort_cols.append(COL_VARIANT)
     if COL_PARAMS in result.columns:
@@ -312,20 +329,40 @@ def prepare_speedup_comparison_data(
 
 def iter_speedup_phase_data(df_speedup, *, phases=None):
     """
-    Yield one dataframe per speedup phase.
+    Yield one dataframe per speedup phase/stage.
 
-    This is the thing every speedup comparison plot should use.
+    Existing full-stage data keeps the phase-only label. Non-full stages get a
+    ``Phase — Stage`` label so report plots do not collapse distinct stages.
     """
-    df_plot = prepare_speedup_comparison_data(df_speedup)
+    df_plot = prepare_speedup_comparison_data(df_speedup, phases=phases)
 
     if phases is None:
         phases = available_speedup_phases(df_plot)
 
     for phase in phases:
         phase_df = filter_bench(df_plot, phase=phase)
+        if phase_df.empty:
+            continue
 
-        if not phase_df.empty:
+        if COL_STAGE not in phase_df.columns:
             yield phase, phase_df
+            continue
+
+        stage_values = [
+            stage for stage in STAGE_ORDER if stage in set(phase_df[COL_STAGE].dropna().astype(str))
+        ]
+        stage_values.extend(
+            stage
+            for stage in phase_df[COL_STAGE].dropna().astype(str).unique()
+            if stage not in set(stage_values)
+        )
+
+        for stage in stage_values:
+            stage_df = filter_bench(phase_df, stage=stage)
+            if stage_df.empty:
+                continue
+            label = phase if stage == STAGE_ORDER[0] else f"{phase} — {stage}"
+            yield label, stage_df
 
 
 def _safe_ratio(numerator, denominator):

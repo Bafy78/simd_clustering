@@ -141,6 +141,7 @@ def compile_artifact_record(
         "D": int(D),
         "cpp_case": case.name,
         "phase_key": case.phase_key,
+        "stage_key": case.stage_key,
         "variant_key": case.variant_key,
         "architecture": architecture,
         "architecture_flag": f"{option}={value}",

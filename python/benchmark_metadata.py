@@ -6,6 +6,8 @@ REFERENCE_VARIANT = "reference"
 LANGUAGE_CPP_KEY = "cpp"
 LANGUAGE_PY_KEY = "py"
 
+FULL_STAGE_KEY = "full"
+
 PHASE_DISPLAY_NAMES = {
     "soa": "AoS to SoA Tax",
     "pp": "K-Means++ Initialization",
@@ -13,6 +15,15 @@ PHASE_DISPLAY_NAMES = {
     "gmm": "GaussianMixture EM",
 }
 PHASE_KEYS = tuple(PHASE_DISPLAY_NAMES)
+
+STAGE_DISPLAY_NAMES = {
+    FULL_STAGE_KEY: "Full",
+}
+
+PHASE_STAGE_KEYS = {
+    phase_key: (FULL_STAGE_KEY,)
+    for phase_key in PHASE_KEYS
+}
 
 LANGUAGE_DISPLAY_NAMES = {
     LANGUAGE_CPP_KEY: "C++",
@@ -45,7 +56,24 @@ def phase_display_name(phase_key: str) -> str:
 
 
 def fallback_phase_display_name(phase_key: str) -> str:
-    return PHASE_DISPLAY_NAMES.get(phase_key, phase_key)
+    return PHASE_DISPLAY_NAMES.get(phase_key, display_name(phase_key))
+
+
+def stage_display_name(stage_key: str) -> str:
+    return STAGE_DISPLAY_NAMES.get(stage_key, display_name(stage_key))
+
+
+def phase_stage_keys(phase_key: str) -> tuple[str, ...]:
+    return PHASE_STAGE_KEYS.get(phase_key, (FULL_STAGE_KEY,))
+
+
+def all_stage_keys() -> tuple[str, ...]:
+    keys: list[str] = []
+    for stage_keys in PHASE_STAGE_KEYS.values():
+        for stage_key in stage_keys:
+            if stage_key not in keys:
+                keys.append(stage_key)
+    return tuple(keys)
 
 
 def language_display_name(language_key: str) -> str:

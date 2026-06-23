@@ -884,7 +884,7 @@ def benchmark_record_scan_targets(
     records: Iterable[dict[str, object]],
 ) -> list[SpillScanTarget]:
     cpp_case_by_phase_variant = {
-        (case.phase_key, case.variant_key): cpp_case
+        (case.phase_key, case.stage_key, case.variant_key): cpp_case
         for cpp_case, case in CPP_CASES.items()
     }
 
@@ -895,8 +895,9 @@ def benchmark_record_scan_targets(
             continue
 
         phase_key = str(record.get("phase_key"))
+        stage_key = str(record["stage_key"])
         variant_key = str(record.get("variant_key"))
-        cpp_case = cpp_case_by_phase_variant.get((phase_key, variant_key))
+        cpp_case = cpp_case_by_phase_variant.get((phase_key, stage_key, variant_key))
         if cpp_case is None:
             continue
 

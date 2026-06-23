@@ -362,15 +362,16 @@ def cleanup_config_inputs(
     datasets_dir = repo_relative_path(datasets_dir)
     artifacts = BenchmarkArtifacts(case_id, datasets_dir)
 
-    for path in [
-        artifacts.dataset_bin,
-        artifacts.init_centroids_bin,
-        artifacts.gmm_weights_bin,
-        artifacts.gmm_means_bin,
-    ]:
-        delete_if_exists(path, label="temporary input")
+    paths = {
+        Path(artifacts.dataset_bin),
+        Path(artifacts.init_centroids_bin),
+        Path(artifacts.gmm_weights_bin),
+        Path(artifacts.gmm_means_bin),
+    }
+    paths.update(datasets_dir.glob(f"gmm_precisions_*_{case_id}.bin"))
+    paths.update(datasets_dir.glob(f"*_{case_id}.bin"))
 
-    for path in datasets_dir.glob(f"gmm_precisions_*_{case_id}.bin"):
+    for path in sorted(paths):
         delete_if_exists(str(path), label="temporary input")
 
 

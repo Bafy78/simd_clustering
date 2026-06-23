@@ -299,11 +299,13 @@ def _set_log_dimension_axis(ax, x_values) -> None:
     ax.xaxis.set_minor_formatter(mtick.NullFormatter())
 
 
-def _line_label(variant, params=None) -> str:
-    variant_text = str(variant)
-    if params is None or str(params) == "Default":
-        return variant_text
-    return f"{variant_text} / {params}"
+def _line_label(variant, params=None, stage=None) -> str:
+    parts = [str(variant)]
+    if params is not None and str(params) != "Default":
+        parts.append(str(params))
+    if stage is not None and _stage_label(stage) != STAGE_ORDER[0]:
+        parts.append(_stage_label(stage))
+    return " / ".join(parts)
 
 
 def _ordered_present_phases(df) -> list[str]:
@@ -317,15 +319,55 @@ def _ordered_present_phases(df) -> list[str]:
     return ordered + extras
 
 
+def _ordered_present_phase_stage_pairs(df) -> list[tuple[str, str]]:
+    if COL_STAGE not in df.columns:
+        return [(phase, STAGE_ORDER[0]) for phase in _ordered_present_phases(df)]
+
+    pairs = [
+        (str(row[COL_PHASE]), str(row[COL_STAGE]))
+        for _, row in df[[COL_PHASE, COL_STAGE]].dropna().drop_duplicates().iterrows()
+    ]
+    phase_order = {phase: index for index, phase in enumerate(PHASE_ORDER)}
+    stage_order = {stage: index for index, stage in enumerate(STAGE_ORDER)}
+    return sorted(
+        pairs,
+        key=lambda item: (
+            phase_order.get(item[0], len(phase_order)),
+            stage_order.get(item[1], len(stage_order)),
+            item[0],
+            item[1],
+        ),
+    )
+
+
+def _stage_label(stage) -> str:
+    return str(stage) if stage is not None else STAGE_ORDER[0]
+
+
+def _phase_stage_title(phase, stage) -> str:
+    stage = _stage_label(stage)
+    if stage == STAGE_ORDER[0]:
+        return str(phase)
+    return f"{phase} — {stage}"
+
+
 def plot_executable_sizes(df):
     """Plot generated nanobench executable size by compiled dimension."""
     if df.empty:
         return None
 
-    plot_df = df.sort_values([COL_PHASE, COL_VARIANT, COL_DIMENSIONS]).copy()
+    plot_df = df.sort_values([COL_PHASE, COL_STAGE, COL_VARIANT, COL_DIMENSIONS]).copy()
 
     phases = list(plot_df[COL_PHASE].dropna().astype(str).unique())
     variants = list(plot_df[COL_VARIANT].dropna().astype(str).unique())
+    stage_variants = list(
+        dict.fromkeys(
+            zip(
+                plot_df[COL_STAGE].dropna().astype(str),
+                plot_df[COL_VARIANT].dropna().astype(str),
+            )
+        )
+    )
 
     color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     phase_colors = {
@@ -335,16 +377,17 @@ def plot_executable_sizes(df):
 
     line_styles = ["-", "--", ":", "-."]
     variant_line_styles = {
-        variant: line_styles[i % len(line_styles)]
-        for i, variant in enumerate(variants)
+        stage_variant: line_styles[i % len(line_styles)]
+        for i, stage_variant in enumerate(stage_variants)
     }
 
     fig, ax = plt.subplots(figsize=(9, 5))
 
-    for (phase, variant), line_df in plot_df.groupby(
-        [COL_PHASE, COL_VARIANT], sort=False, observed=True
+    for (phase, stage, variant), line_df in plot_df.groupby(
+        [COL_PHASE, COL_STAGE, COL_VARIANT], sort=False, observed=True
     ):
         phase = str(phase)
+        stage = str(stage)
         variant = str(variant)
         line_df = line_df.sort_values(COL_DIMENSIONS)
 
@@ -352,10 +395,10 @@ def plot_executable_sizes(df):
             line_df[COL_DIMENSIONS],
             line_df[COL_EXECUTABLE_SIZE_MIB],
             color=phase_colors[phase],
-            linestyle=variant_line_styles[variant],
+            linestyle=variant_line_styles[(stage, variant)],
             marker="o",
             markersize=4,
-            label=f"{phase} / {variant}",
+            label=f"{_phase_stage_title(phase, stage)} / {variant}",
         )
 
     _set_log_dimension_axis(ax, plot_df[COL_DIMENSIONS].unique())
@@ -371,8 +414,8 @@ def plot_executable_sizes(df):
         for phase, color in phase_colors.items()
     ]
     variant_handles = [
-        Line2D([0], [0], color="black", linestyle=style, label=variant)
-        for variant, style in variant_line_styles.items()
+        Line2D([0], [0], color="black", linestyle=style, label=_line_label(variant, stage=stage))
+        for (stage, variant), style in variant_line_styles.items()
     ]
 
     header_handle = Line2D([], [], linestyle="none", marker=None, alpha=0)
@@ -386,8 +429,8 @@ def plot_executable_sizes(df):
     legend_labels = (
         ["Phase"]
         + list(phase_colors.keys())
-        + ["Variant"]
-        + list(variant_line_styles.keys())
+        + ["Stage / Variant"]
+        + [_line_label(variant, stage=stage) for stage, variant in variant_line_styles.keys()]
     )
 
     legend = ax.legend(
@@ -401,7 +444,7 @@ def plot_executable_sizes(df):
     )
 
     for text in legend.get_texts():
-        if text.get_text() in {"Phase", "Variant"}:
+        if text.get_text() in {"Phase", "Stage / Variant"}:
             text.set_weight("bold")
 
     return fig
@@ -421,8 +464,8 @@ def plot_spill_detection_by_phase(df):
 
     figures = []
 
-    for phase in _ordered_present_phases(df):
-        phase_df = df[df[COL_PHASE].astype(str) == phase].copy()
+    for phase, stage in _ordered_present_phase_stage_pairs(df):
+        phase_df = df[(df[COL_PHASE].astype(str) == phase) & (df[COL_STAGE].astype(str) == stage)].copy()
         if phase_df.empty:
             continue
 
@@ -453,7 +496,7 @@ def plot_spill_detection_by_phase(df):
 
         _set_log_dimension_axis(ax, phase_df[COL_DIMENSIONS].unique())
 
-        ax.set_title(f"Spill detection — {phase}")
+        ax.set_title(f"Spill detection — {_phase_stage_title(phase, stage)}")
         ax.set_xlabel(COL_DIMENSIONS)
         ax.set_ylabel("Potential spills")
         ax.grid(True, which="major", alpha=0.4)
@@ -473,6 +516,7 @@ def _cachegrind_metric_by_dimension(
 ):
     value_cols = [
         COL_PHASE,
+        COL_STAGE,
         COL_VARIANT,
         COL_PARAMS,
         COL_DIMENSIONS,
@@ -489,12 +533,12 @@ def _cachegrind_metric_by_dimension(
     return (
         metric_df
         .groupby(
-            [COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS],
+            [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS],
             observed=True,
             as_index=False,
         )[metric_col]
         .median()
-        .sort_values([COL_PHASE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS])
+        .sort_values([COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS])
     )
 
 
@@ -528,8 +572,8 @@ def plot_cachegrind_metric_by_phase(
 
     figures = []
 
-    for phase in _ordered_present_phases(plot_df):
-        phase_df = plot_df[plot_df[COL_PHASE].astype(str) == phase].copy()
+    for phase, stage in _ordered_present_phase_stage_pairs(plot_df):
+        phase_df = plot_df[(plot_df[COL_PHASE].astype(str) == phase) & (plot_df[COL_STAGE].astype(str) == stage)].copy()
         if phase_df.empty:
             continue
 
@@ -569,7 +613,7 @@ def plot_cachegrind_metric_by_phase(
         elif yscale is not None:
             ax.set_yscale(yscale)
 
-        ax.set_title(f"{title} — {phase}")
+        ax.set_title(f"{title} — {_phase_stage_title(phase, stage)}")
         ax.set_xlabel(COL_DIMENSIONS)
         ax.set_ylabel(ylabel)
         ax.grid(True, which="major", alpha=0.4)
@@ -652,7 +696,7 @@ def plot_cachegrind_report(df, plot_specs=CACHEGRIND_REPORT_PLOTS):
     data references, and miss-rate plots.
 
     Each metric is summarized by median over the recorded N/K configurations for
-    the same phase, variant, params, and compiled dimension. This mirrors the
+    the same phase, stage, variant, params, and compiled dimension. This mirrors the
     report's executable-size and spill-detector D-scaling views while avoiding a
     giant per-config counter table.
     """
@@ -729,12 +773,14 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
     df_cpp = filter_bench(
         df_bench,
         language=LANG_CPP,
+        stage=STAGE_ORDER[0],
     ).copy()
 
     algorithm_N_values = set(
         filter_bench(
             df_cpp,
             phase=algorithm_phase,
+            stage=STAGE_ORDER[0],
         )[COL_SAMPLES].dropna().unique()
     )
 
@@ -742,6 +788,7 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
         filter_bench(
             df_cpp,
             phase=fixed_phases,
+            stage=STAGE_ORDER[0],
         )[COL_SAMPLES].dropna().unique()
     )
 
@@ -785,6 +832,7 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
         df_bench,
         phase=algorithm_phase,
         language=LANG_CPP,
+        stage=STAGE_ORDER[0],
         samples=selected_N,
     )[algorithm_cols].copy()
 
@@ -792,6 +840,7 @@ def plot_fixed_costs_vs_algorithm_iteration_time(
         df_bench,
         phase=fixed_phases,
         language=LANG_CPP,
+        stage=STAGE_ORDER[0],
         samples=selected_N,
     )[fixed_cols].copy()
 

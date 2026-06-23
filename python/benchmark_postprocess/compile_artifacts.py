@@ -5,25 +5,27 @@ from benchmark_postprocess.io import load_json
 from benchmark_pipeline.compile_artifacts import COMPILE_ARTIFACTS_FILENAME
 
 
-def _compile_identity_from_record(record: dict[str, Any]) -> tuple[int, str, str]:
+def _compile_identity_from_record(record: dict[str, Any]) -> tuple[int, str, str, str]:
     return (
         int(record["dimensions"]),
         str(record["phase_key"]),
+        str(record["stage_key"]),
         str(record["variant_key"]),
     )
 
 
-def _compile_identity_from_artifact(record: dict[str, Any]) -> tuple[int, str, str]:
+def _compile_identity_from_artifact(record: dict[str, Any]) -> tuple[int, str, str, str]:
     return (
         int(record["D"]),
         str(record["phase_key"]),
+        str(record["stage_key"]),
         str(record["variant_key"]),
     )
 
 
-def _artifact_sort_key(record: dict[str, Any]) -> tuple[int, str, str, str]:
-    D, phase_key, variant_key = _compile_identity_from_artifact(record)
-    return D, phase_key, variant_key, str(record["cpp_case"])
+def _artifact_sort_key(record: dict[str, Any]) -> tuple[int, str, str, str, str]:
+    D, phase_key, stage_key, variant_key = _compile_identity_from_artifact(record)
+    return D, phase_key, stage_key, variant_key, str(record["cpp_case"])
 
 
 def build_compile_artifact_summary(
@@ -57,7 +59,7 @@ def build_compile_artifact_summary(
     if int(payload.get("schema_version", 0)) != 1:
         raise ValueError(f"Unsupported compile artifact schema in {artifact_path}")
 
-    indexed: dict[tuple[int, str, str], dict[str, Any]] = {}
+    indexed: dict[tuple[int, str, str, str], dict[str, Any]] = {}
     for artifact_record in payload.get("records", []):
         identity = _compile_identity_from_artifact(artifact_record)
         if identity not in expected_identities:
@@ -65,15 +67,16 @@ def build_compile_artifact_summary(
         if identity in indexed:
             raise ValueError(
                 "Duplicate compile artifact for "
-                f"D={identity[0]}, phase={identity[1]!r}, variant={identity[2]!r}"
+                f"D={identity[0]}, phase={identity[1]!r}, "
+                f"stage={identity[2]!r}, variant={identity[3]!r}"
             )
         indexed[identity] = artifact_record
 
     missing = sorted(expected_identities - set(indexed))
     if missing:
         missing_text = ", ".join(
-            f"D={D}/phase={phase_key}/variant={variant_key}"
-            for D, phase_key, variant_key in missing
+            f"D={D}/phase={phase_key}/stage={stage_key}/variant={variant_key}"
+            for D, phase_key, stage_key, variant_key in missing
         )
         raise RuntimeError(f"Missing compile artifact records for: {missing_text}")
 
