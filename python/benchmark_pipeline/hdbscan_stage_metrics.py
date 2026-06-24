@@ -182,12 +182,25 @@ def _single_linkage_to_flat_float32(values: ArrayLike) -> tuple[NDArray[np.float
     )
 
 
-def _select_to_flat_float32(values: object) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
-    if not isinstance(values, tuple) or len(values) != 2:
-        raise ValueError("Expected select stage output to be a (labels, probabilities) tuple")
+def _label_probability_output_to_flat_float32(
+    values: object,
+    *,
+    stage: str,
+) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
+    if isinstance(values, tuple) and len(values) == 2:
+        raw_labels = values[0]
+        raw_probabilities = values[1]
+    elif hasattr(values, "labels") and hasattr(values, "probabilities"):
+        raw_labels = getattr(values, "labels")
+        raw_probabilities = getattr(values, "probabilities")
+    else:
+        raise ValueError(
+            f"Expected {stage} stage output to be either a (labels, probabilities) "
+            "tuple or an object with labels/probabilities attributes"
+        )
 
-    labels = np.ascontiguousarray(values[0], dtype=np.int32)
-    probabilities = np.ascontiguousarray(values[1], dtype=np.float32)
+    labels = np.ascontiguousarray(raw_labels, dtype=np.int32)
+    probabilities = np.ascontiguousarray(raw_probabilities, dtype=np.float32)
     if labels.shape != probabilities.shape:
         raise ValueError(
             "Expected select labels and probabilities to have identical shape, "
@@ -264,8 +277,8 @@ def hdbscan_stage_metrics_payload(
             "cluster_size_summary": _float32_summary(cluster_sizes),
         }
 
-    if stage == "select":
-        flat, labels, probabilities = _select_to_flat_float32(values)
+    if stage in {"select", "full"}:
+        flat, labels, probabilities = _label_probability_output_to_flat_float32(values, stage=stage)
         n_samples = int(labels.size)
         unique_clusters = np.unique(labels[labels >= 0])
         return {

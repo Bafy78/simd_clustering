@@ -119,8 +119,36 @@ struct static_hdbscan_case {
             return;
         }
 
+        if (stage_ == "full") {
+            euclidean_distance_matrix<D>(
+                samples_,
+                distance_matrix_
+            );
+            mutual_reachability_matrix(
+                std::span<const float>(distance_matrix_.data(), distance_matrix_.size()),
+                N_,
+                min_samples_,
+                mutual_reachability_matrix_
+            );
+            minimum_spanning_tree_edges(
+                std::span<const float>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
+                N_,
+                mst_edges_
+            );
+            single_linkage_tree_from_mst_edges(
+                std::span<const mst_edge>(mst_edges_.data(), mst_edges_.size()),
+                N_,
+                single_linkage_tree_
+            );
+            selection_result_ = select_clusters_from_single_linkage_tree(
+                std::span<const single_linkage_row>(single_linkage_tree_.data(), single_linkage_tree_.size()),
+                min_samples_
+            );
+            return;
+        }
+
         throw std::invalid_argument(
-            "static_hdbscan_case only implements stages 'distance', 'mreach', 'mst', 'linkage', and 'select' for now"
+            "static_hdbscan_case only implements stages 'distance', 'mreach', 'mst', 'linkage', 'select', and 'full' for now"
         );
     }
 
@@ -137,7 +165,7 @@ struct static_hdbscan_case {
         } else if (stage_ == "linkage") {
             ankerl::nanobench::doNotOptimizeAway(single_linkage_tree_.data());
             ankerl::nanobench::doNotOptimizeAway(single_linkage_tree_.size());
-        } else if (stage_ == "select") {
+        } else if (stage_ == "select" || stage_ == "full") {
             ankerl::nanobench::doNotOptimizeAway(selection_result_.labels.data());
             ankerl::nanobench::doNotOptimizeAway(selection_result_.labels.size());
             ankerl::nanobench::doNotOptimizeAway(selection_result_.probabilities.data());
@@ -177,9 +205,10 @@ struct static_hdbscan_case {
             return;
         }
 
-        if (stage_ == "select") {
-            hdbscan_metrics::write_hdbscan_select_metrics(
+        if (stage_ == "select" || stage_ == "full") {
+            hdbscan_metrics::write_hdbscan_label_probability_metrics(
                 metrics_json_out_,
+                stage_,
                 std::span<const std::int32_t>(selection_result_.labels.data(), selection_result_.labels.size()),
                 std::span<const float>(selection_result_.probabilities.data(), selection_result_.probabilities.size()),
                 N_,
@@ -240,14 +269,14 @@ private:
         : stage_(stage),
           N_(N),
           min_samples_(min_samples),
-          samples_(eve::algo::no_init, stage == "distance" ? N : 0) {
-        if (stage_ != "distance" && stage_ != "mreach" && stage_ != "mst" && stage_ != "linkage" && stage_ != "select") {
+          samples_(eve::algo::no_init, (stage == "distance" || stage == "full") ? N : 0) {
+        if (stage_ != "distance" && stage_ != "mreach" && stage_ != "mst" && stage_ != "linkage" && stage_ != "select" && stage_ != "full") {
             throw std::invalid_argument(
-                "static_hdbscan_case only implements stages 'distance', 'mreach', 'mst', 'linkage', and 'select' for now"
+                "static_hdbscan_case only implements stages 'distance', 'mreach', 'mst', 'linkage', 'select', and 'full' for now"
             );
         }
 
-        if (stage_ == "distance") {
+        if (stage_ == "distance" || stage_ == "full") {
             const auto raw_aos_data = read_aos_f32(input_bin, N_, D);
             copy_aos_to_static_samples<D>(raw_aos_data, N_, samples_);
         } else if (stage_ == "mreach") {

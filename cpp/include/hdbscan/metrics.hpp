@@ -332,15 +332,16 @@ inline void write_hdbscan_linkage_metrics(
 }
 
 
-inline void write_hdbscan_select_metrics(
+inline void write_hdbscan_label_probability_metrics(
     const std::string& filename,
+    const std::string& stage,
     std::span<const std::int32_t> labels,
     std::span<const float> probabilities,
     std::size_t N,
     std::size_t min_samples
 ) {
     if (labels.size() != N || probabilities.size() != N) {
-        throw std::runtime_error("HDBSCAN select metrics label/probability size does not match N");
+        throw std::runtime_error("HDBSCAN label/probability metrics size does not match N");
     }
 
     std::vector<float> flat;
@@ -373,7 +374,7 @@ inline void write_hdbscan_select_metrics(
     out << "  \"schema_version\": 1,\n";
     out << "  \"phase\": \"hdbscan\",\n";
     out << "  \"language\": \"cpp\",\n";
-    out << "  \"stage\": \"select\",\n";
+    out << "  \"stage\": \"" << stage << "\",\n";
     out << "  \"dtype\": \"float32\",\n";
     out << "  \"n_samples\": " << N << ",\n";
     out << "  \"min_samples\": " << min_samples << ",\n";
@@ -390,6 +391,23 @@ inline void write_hdbscan_select_metrics(
     write_float_vector_summary_json(out, probabilities, "    ");
     out << "  }\n";
     out << "}\n";
+}
+
+inline void write_hdbscan_select_metrics(
+    const std::string& filename,
+    std::span<const std::int32_t> labels,
+    std::span<const float> probabilities,
+    std::size_t N,
+    std::size_t min_samples
+) {
+    write_hdbscan_label_probability_metrics(
+        filename,
+        "select",
+        labels,
+        probabilities,
+        N,
+        min_samples
+    );
 }
 
 } // namespace hdbscan_metrics

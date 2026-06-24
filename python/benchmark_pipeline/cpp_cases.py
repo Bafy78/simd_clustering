@@ -155,6 +155,7 @@ CPP_CASES: dict[str, CppCase] = {
             HDBSCAN_MST_STAGE_KEY,
             HDBSCAN_LINKAGE_STAGE_KEY,
             HDBSCAN_SELECT_STAGE_KEY,
+            FULL_STAGE_KEY,
         ),
     ),
 }

@@ -757,7 +757,7 @@ def compute_hdbscan_comparison(
                 **{f"diagonal_{name}": value for name, value in diagonal_checks.items()},
             }
         )
-    elif stage_key == "select":
+    elif stage_key in {"select", "full"}:
         label_checks, label_details = _summary_comparison(
             cpp.get("label_summary", {}),
             py.get("label_summary", {}),
@@ -807,7 +807,7 @@ def compute_hdbscan_comparison(
         result["diagonal_summary_scalar_diffs"] = diagonal_details["scalar_diffs"]
         result["diagonal_probe_value_max_abs_diff"] = diagonal_details["probe_value_max_abs_diff"]
         result["diagonal_hash_equal"] = diagonal_details["hash_equal"]
-    if stage_key == "select":
+    if stage_key in {"select", "full"}:
         result["cpp_noise_count"] = int(cpp.get("noise_count", -1))
         result["python_noise_count"] = int(py.get("noise_count", -1))
         result["cpp_cluster_count"] = int(cpp.get("cluster_count", -1))
