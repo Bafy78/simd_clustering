@@ -173,3 +173,42 @@ inline void core_distances(
         );
     }
 }
+inline void mutual_reachability_matrix(
+    std::span<const float> distance_matrix,
+    std::size_t N,
+    std::size_t min_samples,
+    std::vector<float, eve::aligned_allocator<float>>& mutual_reachability
+) {
+    if (distance_matrix.size() != N * N) {
+        throw std::runtime_error("HDBSCAN mreach stage expected a dense N x N distance matrix");
+    }
+
+    std::vector<float, eve::aligned_allocator<float>> core;
+    core_distances(distance_matrix, N, min_samples, core);
+
+    if (mutual_reachability.size() != N * N) {
+        mutual_reachability.resize(N * N);
+    }
+
+    for (std::size_t row = 0; row < N; ++row) {
+        const float core_i = core[row];
+        const float* row_in = distance_matrix.data() + row * N;
+        float* row_out = mutual_reachability.data() + row * N;
+
+        auto distance_range = eve::algo::as_range(row_in, row_in + N);
+        auto core_range = eve::algo::as_range(core.data(), core.data() + N);
+        auto out_range = eve::algo::as_range(row_out, row_out + N);
+        auto zipped = eve::views::zip(distance_range, core_range, out_range);
+
+        eve::algo::for_each[eve::algo::force_cardinal<cardinal{}()>](
+            zipped,
+            [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
+                auto [distance_it, core_it, out_it] = it;
+                const auto distance = eve::load[ignore](distance_it);
+                const auto core_j = eve::load[ignore](core_it);
+                const auto mreach = eve::max(eve::max(distance, wide_f(core_i)), core_j);
+                eve::store[ignore](mreach, out_it);
+            }
+        );
+    }
+}

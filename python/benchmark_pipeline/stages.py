@@ -12,7 +12,6 @@ from dataclasses import dataclass
 
 from benchmark_metadata import (
     FULL_STAGE_KEY,
-    HDBSCAN_CORE_STAGE_KEY,
     HDBSCAN_DISTANCE_STAGE_KEY,
     HDBSCAN_LINKAGE_STAGE_KEY,
     HDBSCAN_MREACH_STAGE_KEY,
@@ -29,13 +28,11 @@ GMM_WEIGHTS_ARTIFACT = "gmm_weights"
 GMM_MEANS_ARTIFACT = "gmm_means"
 GMM_PRECISIONS_ARTIFACT = "gmm_precisions"
 HDBSCAN_DISTANCE_MATRIX_ARTIFACT = "distance_matrix"
-HDBSCAN_CORE_DISTANCES_ARTIFACT = "core_distances"
 HDBSCAN_MREACH_MATRIX_ARTIFACT = "mreach_matrix"
 HDBSCAN_MST_EDGES_ARTIFACT = "mst_edges"
 HDBSCAN_LINKAGE_TREE_ARTIFACT = "single_linkage_tree"
 HDBSCAN_STAGE_ARTIFACT_KEYS = (
     HDBSCAN_DISTANCE_MATRIX_ARTIFACT,
-    HDBSCAN_CORE_DISTANCES_ARTIFACT,
     HDBSCAN_MREACH_MATRIX_ARTIFACT,
     HDBSCAN_MST_EDGES_ARTIFACT,
     HDBSCAN_LINKAGE_TREE_ARTIFACT,
@@ -76,19 +73,10 @@ DEFAULT_STAGE_SPECS.update(
             stage_key=HDBSCAN_DISTANCE_STAGE_KEY,
             input_artifact_keys=(DATASET_ARTIFACT,),
         ),
-        ("hdbscan", HDBSCAN_CORE_STAGE_KEY): StageSpec(
-            phase_key="hdbscan",
-            stage_key=HDBSCAN_CORE_STAGE_KEY,
-            input_artifact_keys=(HDBSCAN_DISTANCE_MATRIX_ARTIFACT,),
-            reference_input_artifact_keys=(DATASET_ARTIFACT,),
-        ),
         ("hdbscan", HDBSCAN_MREACH_STAGE_KEY): StageSpec(
             phase_key="hdbscan",
             stage_key=HDBSCAN_MREACH_STAGE_KEY,
-            input_artifact_keys=(
-                HDBSCAN_DISTANCE_MATRIX_ARTIFACT,
-                HDBSCAN_CORE_DISTANCES_ARTIFACT,
-            ),
+            input_artifact_keys=(HDBSCAN_DISTANCE_MATRIX_ARTIFACT,),
             reference_input_artifact_keys=(DATASET_ARTIFACT,),
         ),
         ("hdbscan", HDBSCAN_MST_STAGE_KEY): StageSpec(

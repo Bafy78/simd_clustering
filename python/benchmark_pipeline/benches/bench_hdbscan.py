@@ -5,7 +5,6 @@ import pyperf
 from benchmark_metadata import HDBSCAN_STAGE_KEYS, SKLEARN_BRUTE_REFERENCE
 from benchmark_pipeline.hdbscan_reference import (
     compose_sklearn_brute_stages,
-    sklearn_brute_core_distances,
     sklearn_brute_distance_matrix,
     sklearn_brute_full,
     sklearn_brute_mst_edges,
@@ -49,21 +48,12 @@ def prepare_stage_input(X, stage_key: str, min_samples: int):
         return (X,)
 
     distance_matrix = np.ascontiguousarray(sklearn_brute_distance_matrix(X), dtype=np.float32)
-    if stage_key == "core":
-        return (distance_matrix,)
-
-    core_distances = sklearn_brute_core_distances(
-        distance_matrix,
-        min_samples=min_samples,
-    )
     if stage_key == "mreach":
-        return (distance_matrix, core_distances)
+        return (distance_matrix,)
 
     mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
         distance_matrix,
-        core_distances,
         min_samples=min_samples,
-        validate_core=False,
     )
     if stage_key == "mst":
         return (mutual_reachability_matrix,)
@@ -87,20 +77,11 @@ def run_prepared_stage(stage_key: str, prepared_input, min_samples: int):
         (X,) = prepared_input
         return sklearn_brute_distance_matrix(X)
 
-    if stage_key == "core":
-        (distance_matrix,) = prepared_input
-        return sklearn_brute_core_distances(
-            distance_matrix,
-            min_samples=min_samples,
-        )
-
     if stage_key == "mreach":
-        distance_matrix, core_distances = prepared_input
+        (distance_matrix,) = prepared_input
         return sklearn_brute_mutual_reachability_matrix(
             distance_matrix,
-            core_distances,
             min_samples=min_samples,
-            validate_core=False,
         )
 
     if stage_key == "mst":
@@ -190,7 +171,7 @@ def main() -> None:
         prepared_input = prepare_stage_input(X, args.stage, args.min_samples)
         result = run_prepared_stage(args.stage, prepared_input, args.min_samples)
 
-        if args.stage in {"distance", "core"}:
+        if args.stage in {"distance", "mreach"}:
             write_hdbscan_stage_metrics(
                 args.metrics_file,
                 args.stage,

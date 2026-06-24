@@ -8,7 +8,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 from benchmark_pipeline.hdbscan_reference import (
-    sklearn_brute_core_distances,
     sklearn_brute_distance_matrix,
     sklearn_brute_mst_edges,
     sklearn_brute_mutual_reachability_matrix,
@@ -113,7 +112,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--K", type=int, required=True)
     parser.add_argument("--min-samples", type=int, required=True)
     parser.add_argument("--distance-matrix-out")
-    parser.add_argument("--core-distances-out")
     parser.add_argument("--mreach-matrix-out")
     parser.add_argument("--mst-edges-out")
     parser.add_argument("--single-linkage-tree-out")
@@ -124,7 +122,6 @@ def main() -> None:
     args = parse_args()
     requested_outputs = {
         "distance_matrix": args.distance_matrix_out,
-        "core_distances": args.core_distances_out,
         "mreach_matrix": args.mreach_matrix_out,
         "mst_edges": args.mst_edges_out,
         "single_linkage_tree": args.single_linkage_tree_out,
@@ -139,16 +136,6 @@ def main() -> None:
         requested_outputs[key]
         for key in (
             "distance_matrix",
-            "core_distances",
-            "mreach_matrix",
-            "mst_edges",
-            "single_linkage_tree",
-        )
-    )
-    needs_core = any(
-        requested_outputs[key]
-        for key in (
-            "core_distances",
             "mreach_matrix",
             "mst_edges",
             "single_linkage_tree",
@@ -164,7 +151,6 @@ def main() -> None:
     )
 
     distance_matrix = None
-    core_distances = None
     mutual_reachability_matrix = None
     mst_edges = None
 
@@ -173,23 +159,11 @@ def main() -> None:
         if args.distance_matrix_out:
             write_float32_array(args.distance_matrix_out, distance_matrix)
 
-    if needs_core:
-        assert distance_matrix is not None
-        core_distances = sklearn_brute_core_distances(
-            distance_matrix,
-            min_samples=args.min_samples,
-        )
-        if args.core_distances_out:
-            write_float32_array(args.core_distances_out, core_distances)
-
     if needs_mreach:
         assert distance_matrix is not None
-        assert core_distances is not None
         mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
             distance_matrix,
-            core_distances,
             min_samples=args.min_samples,
-            validate_core=False,
         )
         if args.mreach_matrix_out:
             write_float32_array(args.mreach_matrix_out, mutual_reachability_matrix)

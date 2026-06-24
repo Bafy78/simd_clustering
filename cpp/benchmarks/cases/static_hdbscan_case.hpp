@@ -78,18 +78,18 @@ struct static_hdbscan_case {
             return;
         }
 
-        if (stage_ == "core") {
-            core_distances(
+        if (stage_ == "mreach") {
+            mutual_reachability_matrix(
                 std::span<const float>(distance_matrix_input_.data(), distance_matrix_input_.size()),
                 N_,
                 min_samples_,
-                core_distances_
+                mutual_reachability_matrix_
             );
             return;
         }
 
         throw std::invalid_argument(
-            "static_hdbscan_case only implements stages 'distance' and 'core' for now"
+            "static_hdbscan_case only implements stages 'distance' and 'mreach' for now"
         );
     }
 
@@ -97,9 +97,9 @@ struct static_hdbscan_case {
         if (stage_ == "distance") {
             ankerl::nanobench::doNotOptimizeAway(distance_matrix_.data());
             ankerl::nanobench::doNotOptimizeAway(distance_matrix_.size());
-        } else if (stage_ == "core") {
-            ankerl::nanobench::doNotOptimizeAway(core_distances_.data());
-            ankerl::nanobench::doNotOptimizeAway(core_distances_.size());
+        } else if (stage_ == "mreach") {
+            ankerl::nanobench::doNotOptimizeAway(mutual_reachability_matrix_.data());
+            ankerl::nanobench::doNotOptimizeAway(mutual_reachability_matrix_.size());
         }
         ankerl::nanobench::doNotOptimizeAway(min_samples_);
     }
@@ -115,10 +115,10 @@ struct static_hdbscan_case {
             return;
         }
 
-        if (stage_ == "core") {
-            hdbscan_metrics::write_hdbscan_core_metrics(
+        if (stage_ == "mreach") {
+            hdbscan_metrics::write_hdbscan_mreach_metrics(
                 metrics_json_out_,
-                std::span<const float>(core_distances_.data(), core_distances_.size()),
+                std::span<const float>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
                 N_,
                 min_samples_
             );
@@ -137,16 +137,16 @@ private:
           N_(N),
           min_samples_(min_samples),
           samples_(eve::algo::no_init, stage == "distance" ? N : 0) {
-        if (stage_ != "distance" && stage_ != "core") {
+        if (stage_ != "distance" && stage_ != "mreach") {
             throw std::invalid_argument(
-                "static_hdbscan_case only implements stages 'distance' and 'core' for now"
+                "static_hdbscan_case only implements stages 'distance' and 'mreach' for now"
             );
         }
 
         if (stage_ == "distance") {
             const auto raw_aos_data = read_aos_f32(input_bin, N_, D);
             copy_aos_to_static_samples<D>(raw_aos_data, N_, samples_);
-        } else if (stage_ == "core") {
+        } else if (stage_ == "mreach") {
             distance_matrix_input_ = read_binary_f32(input_bin, N_ * N_);
         }
     }
@@ -157,7 +157,7 @@ private:
     static_samples_soa_vector<D> samples_;
     std::vector<float> distance_matrix_input_;
     std::vector<float, eve::aligned_allocator<float>> distance_matrix_;
-    std::vector<float, eve::aligned_allocator<float>> core_distances_;
+    std::vector<float, eve::aligned_allocator<float>> mutual_reachability_matrix_;
 
     std::string metrics_json_out_;
     std::string nanobench_json_out_;

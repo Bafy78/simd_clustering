@@ -192,14 +192,28 @@ inline void write_hdbscan_distance_metrics(
     out << "}\n";
 }
 
-inline void write_hdbscan_core_metrics(
+inline void write_hdbscan_mreach_metrics(
     const std::string& filename,
-    std::span<const float> core_distances,
+    std::span<const float> mutual_reachability_matrix,
     std::size_t N,
     std::size_t min_samples
 ) {
-    if (core_distances.size() != N) {
-        throw std::runtime_error("HDBSCAN core metrics vector size does not match N");
+    if (mutual_reachability_matrix.size() != N * N) {
+        throw std::runtime_error("HDBSCAN mreach metrics matrix size does not match N * N");
+    }
+
+    double symmetry_max_abs = 0.0;
+    std::vector<float> diagonal;
+    diagonal.reserve(N);
+    for (std::size_t i = 0; i < N; ++i) {
+        diagonal.push_back(mutual_reachability_matrix[i * N + i]);
+        for (std::size_t j = i + 1; j < N; ++j) {
+            const double diff = std::abs(
+                static_cast<double>(mutual_reachability_matrix[i * N + j])
+                - static_cast<double>(mutual_reachability_matrix[j * N + i])
+            );
+            symmetry_max_abs = std::max(symmetry_max_abs, diff);
+        }
     }
 
     std::ofstream out(filename);
@@ -212,13 +226,17 @@ inline void write_hdbscan_core_metrics(
     out << "  \"schema_version\": 1,\n";
     out << "  \"phase\": \"hdbscan\",\n";
     out << "  \"language\": \"cpp\",\n";
-    out << "  \"stage\": \"core\",\n";
+    out << "  \"stage\": \"mreach\",\n";
     out << "  \"dtype\": \"float32\",\n";
     out << "  \"n_samples\": " << N << ",\n";
     out << "  \"min_samples\": " << min_samples << ",\n";
-    out << "  \"shape\": [" << N << "],\n";
+    out << "  \"shape\": [" << N << ", " << N << "],\n";
+    out << "  \"symmetry_max_abs\": " << symmetry_max_abs << ",\n";
     out << "  \"summary\": {\n";
-    write_float_vector_summary_json(out, core_distances, "    ");
+    write_float_vector_summary_json(out, mutual_reachability_matrix, "    ");
+    out << "  },\n";
+    out << "  \"diagonal_summary\": {\n";
+    write_float_vector_summary_json(out, std::span<const float>(diagonal.data(), diagonal.size()), "    ");
     out << "  }\n";
     out << "}\n";
 }

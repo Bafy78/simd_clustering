@@ -26,7 +26,6 @@ from threadpoolctl import threadpool_limits
 
 from benchmark_metadata import (
     FULL_STAGE_KEY,
-    HDBSCAN_CORE_STAGE_KEY,
     HDBSCAN_DISTANCE_STAGE_KEY,
     HDBSCAN_LINKAGE_STAGE_KEY,
     HDBSCAN_MREACH_STAGE_KEY,
@@ -51,7 +50,6 @@ def validate_hdbscan_reference_key(reference_key: str) -> str:
 
 HdbscanStageKey = Literal[
     "distance",
-    "core",
     "mreach",
     "mst",
     "linkage",
@@ -145,23 +143,18 @@ def sklearn_brute_core_distances(
 
 def sklearn_brute_mutual_reachability_matrix(
     distance_matrix: ArrayLike,
-    core_distances: ArrayLike | None = None,
     *,
     min_samples: int,
-    validate_core: bool = True,
 ) -> NDArray[np.float64]:
-    """mreach: distance matrix + core distances -> mutual reachability matrix."""
-    mutual_reachability = _sklearn_mutual_reachability_from_distance_matrix(
+    """mreach: distance matrix -> mutual reachability matrix.
+
+    The private sklearn brute helper computes core distances internally and
+    stores them on the diagonal of the returned mutual-reachability matrix.
+    """
+    return _sklearn_mutual_reachability_from_distance_matrix(
         distance_matrix,
         min_samples=min_samples,
     )
-
-    if validate_core and core_distances is not None:
-        expected_core = np.asarray(core_distances, dtype=np.float64)
-        observed_core = np.diag(mutual_reachability)
-        np.testing.assert_allclose(observed_core, expected_core, rtol=0.0, atol=0.0)
-
-    return mutual_reachability
 
 
 def sklearn_brute_mst_edges(
@@ -265,7 +258,6 @@ def compose_sklearn_brute_stages(
     )
     mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
         distance_matrix,
-        core_distances,
         min_samples=min_samples,
     )
     mst_edges = sklearn_brute_mst_edges(
@@ -412,26 +404,31 @@ def hdbscan_distance_stage_metrics(
     }
 
 
-def hdbscan_core_stage_metrics(
-    core_distances: ArrayLike,
+def hdbscan_mreach_stage_metrics(
+    mutual_reachability_matrix: ArrayLike,
     *,
     min_samples: int,
     language: str,
 ) -> dict[str, Any]:
-    core = np.ascontiguousarray(core_distances, dtype=np.float32)
-    if core.ndim != 1:
-        raise ValueError("HDBSCAN core-distance metrics require a 1-D vector")
+    matrix = np.ascontiguousarray(mutual_reachability_matrix, dtype=np.float32)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("HDBSCAN mutual-reachability metrics require a square 2-D matrix")
+
+    symmetry_max_abs = float(np.max(np.abs(matrix - matrix.T))) if matrix.size else 0.0
+    diagonal = np.ascontiguousarray(np.diag(matrix), dtype=np.float32)
 
     return {
         "schema_version": 1,
         "phase": "hdbscan",
         "language": language,
-        "stage": "core",
+        "stage": "mreach",
         "dtype": "float32",
-        "n_samples": int(core.shape[0]),
+        "n_samples": int(matrix.shape[0]),
         "min_samples": int(min_samples),
-        "shape": [int(core.shape[0])],
-        "summary": _float32_array_summary(core),
+        "shape": [int(matrix.shape[0]), int(matrix.shape[1])],
+        "symmetry_max_abs": symmetry_max_abs,
+        "summary": _float32_array_summary(matrix),
+        "diagonal_summary": _float32_array_summary(diagonal),
     }
 
 
@@ -449,8 +446,8 @@ def hdbscan_stage_metrics(
             min_samples=min_samples,
             language=language,
         )
-    if stage_key == HDBSCAN_CORE_STAGE_KEY:
-        return hdbscan_core_stage_metrics(
+    if stage_key == HDBSCAN_MREACH_STAGE_KEY:
+        return hdbscan_mreach_stage_metrics(
             result,
             min_samples=min_samples,
             language=language,
@@ -514,21 +511,14 @@ def run_sklearn_brute_stage(
 
     distance_matrix = sklearn_brute_distance_matrix(X)
 
-    if stage_key == HDBSCAN_CORE_STAGE_KEY:
-        return sklearn_brute_core_distances(distance_matrix, min_samples=min_samples)
-
-    core_distances = sklearn_brute_core_distances(distance_matrix, min_samples=min_samples)
-
     if stage_key == HDBSCAN_MREACH_STAGE_KEY:
         return sklearn_brute_mutual_reachability_matrix(
             distance_matrix,
-            core_distances,
             min_samples=min_samples,
         )
 
     mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
         distance_matrix,
-        core_distances,
         min_samples=min_samples,
     )
 

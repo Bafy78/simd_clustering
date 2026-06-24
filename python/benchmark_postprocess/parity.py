@@ -35,7 +35,7 @@ GMM_PARITY_THRESHOLDS = {
     "algorithm_iteration_diff_abs": 0,
 }
 
-HDBSCAN_DISTANCE_PARITY_THRESHOLDS = {
+HDBSCAN_STAGE_PARITY_THRESHOLDS = {
     "diagonal_max_abs": 0.0,
     "symmetry_max_abs": 0.0,
     "summary_scalar_abs_diff": 1e-3,
@@ -636,6 +636,58 @@ def _probe_value_max_abs_diff(candidate_summary: dict[str, Any], reference_summa
     return max_abs_diff
 
 
+def _summary_comparison(
+    candidate_summary: dict[str, Any],
+    reference_summary: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    scalar_diffs = {
+        field: _summary_scalar_diff(candidate_summary, reference_summary, field)
+        for field in ("sum", "sum_abs", "sum_squares", "weighted_sum", "min", "max")
+    }
+    scalar_abs_diff_max = max(diff["abs_diff"] for diff in scalar_diffs.values())
+    scalar_rel_diff_max = max(diff["rel_diff"] for diff in scalar_diffs.values())
+    probe_value_max_abs_diff = _probe_value_max_abs_diff(candidate_summary, reference_summary)
+
+    summary_count_fields = (
+        "value_count",
+        "finite_count",
+        "nan_count",
+        "pos_inf_count",
+        "neg_inf_count",
+    )
+    summary_counts_equal = all(
+        candidate_summary.get(field) == reference_summary.get(field)
+        for field in summary_count_fields
+    )
+
+    checks = {
+        "summary_counts": summary_counts_equal,
+        "summary_scalar_abs_or_rel_diff": (
+            scalar_abs_diff_max
+            <= HDBSCAN_STAGE_PARITY_THRESHOLDS["summary_scalar_abs_diff"]
+            or scalar_rel_diff_max
+            <= HDBSCAN_STAGE_PARITY_THRESHOLDS["summary_scalar_rel_diff"]
+        ),
+        "probe_value_max_abs_diff": _is_finite_and_within(
+            probe_value_max_abs_diff,
+            HDBSCAN_STAGE_PARITY_THRESHOLDS["probe_value_max_abs_diff"],
+        ),
+    }
+    details = {
+        "scalar_diffs": scalar_diffs,
+        "scalar_abs_diff_max": scalar_abs_diff_max,
+        "scalar_rel_diff_max": scalar_rel_diff_max,
+        "probe_value_max_abs_diff": probe_value_max_abs_diff,
+        "candidate_hash": candidate_summary.get("fnv1a64_float32"),
+        "reference_hash": reference_summary.get("fnv1a64_float32"),
+        "hash_equal": (
+            candidate_summary.get("fnv1a64_float32")
+            == reference_summary.get("fnv1a64_float32")
+        ),
+    }
+    return checks, details
+
+
 def compute_hdbscan_comparison(
     hdbscan_metrics: dict[MetricsKey, dict[str, Any]],
     config_id: str,
@@ -665,56 +717,48 @@ def compute_hdbscan_comparison(
 
     cpp_summary = cpp.get("summary", {})
     py_summary = py.get("summary", {})
-    scalar_diffs = {
-        field: _summary_scalar_diff(cpp_summary, py_summary, field)
-        for field in ("sum", "sum_abs", "sum_squares", "weighted_sum", "min", "max")
-    }
-    scalar_abs_diff_max = max(diff["abs_diff"] for diff in scalar_diffs.values())
-    scalar_rel_diff_max = max(diff["rel_diff"] for diff in scalar_diffs.values())
-    probe_value_max_abs_diff = _probe_value_max_abs_diff(cpp_summary, py_summary)
+    summary_checks, summary_details = _summary_comparison(cpp_summary, py_summary)
 
-    summary_count_fields = (
-        "value_count",
-        "finite_count",
-        "nan_count",
-        "pos_inf_count",
-        "neg_inf_count",
-    )
-    summary_counts_equal = all(
-        cpp_summary.get(field) == py_summary.get(field)
-        for field in summary_count_fields
-    )
+    checks = dict(summary_checks)
+    if stage_key == "distance":
+        checks.update(
+            {
+                "distance_diagonal_is_zero": (
+                    float(cpp.get("diagonal_max_abs", 0.0))
+                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["diagonal_max_abs"]
+                    and float(py.get("diagonal_max_abs", 0.0))
+                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["diagonal_max_abs"]
+                ),
+                "distance_symmetry": (
+                    float(cpp.get("symmetry_max_abs", 0.0))
+                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["symmetry_max_abs"]
+                    and float(py.get("symmetry_max_abs", 0.0))
+                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["symmetry_max_abs"]
+                ),
+            }
+        )
+    elif stage_key == "mreach":
+        diagonal_checks, diagonal_details = _summary_comparison(
+            cpp.get("diagonal_summary", {}),
+            py.get("diagonal_summary", {}),
+        )
+        checks.update(
+            {
+                "mreach_symmetry": (
+                    float(cpp.get("symmetry_max_abs", 0.0))
+                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["symmetry_max_abs"]
+                    and float(py.get("symmetry_max_abs", 0.0))
+                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["symmetry_max_abs"]
+                ),
+                **{f"diagonal_{name}": value for name, value in diagonal_checks.items()},
+            }
+        )
+    else:
+        diagonal_details = None
 
-    checks = {
-        "shape": cpp.get("shape") == py.get("shape"),
-        "dtype": cpp.get("dtype") == py.get("dtype"),
-        "summary_counts": summary_counts_equal,
-        "diagonal_max_abs": (
-            float(cpp.get("diagonal_max_abs", 0.0))
-            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["diagonal_max_abs"]
-            and float(py.get("diagonal_max_abs", 0.0))
-            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["diagonal_max_abs"]
-        ),
-        "symmetry_max_abs": (
-            float(cpp.get("symmetry_max_abs", 0.0))
-            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["symmetry_max_abs"]
-            and float(py.get("symmetry_max_abs", 0.0))
-            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["symmetry_max_abs"]
-        ),
-        "summary_scalar_abs_or_rel_diff": (
-            scalar_abs_diff_max
-            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["summary_scalar_abs_diff"]
-            or scalar_rel_diff_max
-            <= HDBSCAN_DISTANCE_PARITY_THRESHOLDS["summary_scalar_rel_diff"]
-        ),
-        "probe_value_max_abs_diff": _is_finite_and_within(
-            probe_value_max_abs_diff,
-            HDBSCAN_DISTANCE_PARITY_THRESHOLDS["probe_value_max_abs_diff"],
-        ),
-    }
     status, failure_reasons = _status_from_checks(checks)
 
-    return {
+    result = {
         "config_id": config_id,
         "stage_key": stage_key,
         "stage": cpp.get("stage", stage_key),
@@ -725,18 +769,23 @@ def compute_hdbscan_comparison(
         "status": status,
         "failure_reasons": failure_reasons,
         "checks": checks,
-        "thresholds": dict(HDBSCAN_DISTANCE_PARITY_THRESHOLDS),
+        "thresholds": dict(HDBSCAN_STAGE_PARITY_THRESHOLDS),
         "cpp_shape": cpp.get("shape"),
         "python_shape": py.get("shape"),
-        "cpp_hash": cpp_summary.get("fnv1a64_float32"),
-        "python_hash": py_summary.get("fnv1a64_float32"),
-        "hash_equal": cpp_summary.get("fnv1a64_float32") == py_summary.get("fnv1a64_float32"),
-        "summary_scalar_diffs": scalar_diffs,
-        "summary_scalar_abs_diff_max": scalar_abs_diff_max,
-        "summary_scalar_rel_diff_max": scalar_rel_diff_max,
-        "probe_value_max_abs_diff": probe_value_max_abs_diff,
+        "cpp_hash": summary_details["candidate_hash"],
+        "python_hash": summary_details["reference_hash"],
+        "hash_equal": summary_details["hash_equal"],
+        "summary_scalar_diffs": summary_details["scalar_diffs"],
+        "summary_scalar_abs_diff_max": summary_details["scalar_abs_diff_max"],
+        "summary_scalar_rel_diff_max": summary_details["scalar_rel_diff_max"],
+        "probe_value_max_abs_diff": summary_details["probe_value_max_abs_diff"],
         "cpp_diagonal_max_abs": float(cpp.get("diagonal_max_abs", 0.0)),
         "python_diagonal_max_abs": float(py.get("diagonal_max_abs", 0.0)),
         "cpp_symmetry_max_abs": float(cpp.get("symmetry_max_abs", 0.0)),
         "python_symmetry_max_abs": float(py.get("symmetry_max_abs", 0.0)),
     }
+    if stage_key == "mreach":
+        result["diagonal_summary_scalar_diffs"] = diagonal_details["scalar_diffs"]
+        result["diagonal_probe_value_max_abs_diff"] = diagonal_details["probe_value_max_abs_diff"]
+        result["diagonal_hash_equal"] = diagonal_details["hash_equal"]
+    return result
