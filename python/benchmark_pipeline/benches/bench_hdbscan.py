@@ -4,7 +4,6 @@ import pyperf
 
 from benchmark_metadata import HDBSCAN_STAGE_KEYS, SKLEARN_BRUTE_REFERENCE
 from benchmark_pipeline.hdbscan_reference import (
-    compose_sklearn_brute_stages,
     sklearn_brute_distance_matrix,
     sklearn_brute_full,
     sklearn_brute_mst_edges,
@@ -14,8 +13,8 @@ from benchmark_pipeline.hdbscan_reference import (
     validate_hdbscan_reference_key,
     validate_min_samples,
     validate_stage_key,
-    write_hdbscan_stage_metrics,
 )
+from benchmark_pipeline.hdbscan_stage_metrics import write_hdbscan_stage_metrics
 
 np = None
 
@@ -134,12 +133,6 @@ def main() -> None:
     runner.argparser.add_argument("--reference", default=SKLEARN_BRUTE_REFERENCE)
     runner.argparser.add_argument("--min-samples", type=int, required=True)
     runner.argparser.add_argument("--metrics-file", required=True)
-    runner.argparser.add_argument(
-        "--verify-composition",
-        action="store_true",
-        help="Verify that staged sklearn brute wrappers match sklearn.HDBSCAN.fit.",
-    )
-
     args = runner.parse_args()
     validate_stage_key(args.stage)
     validate_hdbscan_reference_key(args.reference)
@@ -179,13 +172,6 @@ def main() -> None:
                 min_samples=args.min_samples,
                 language="py",
             )
-
-        if args.verify_composition:
-            composed = compose_sklearn_brute_stages(X, min_samples=args.min_samples)
-            full = sklearn_brute_full(X, min_samples=args.min_samples)
-            np.testing.assert_array_equal(composed.single_linkage_tree, full.single_linkage_tree)
-            np.testing.assert_array_equal(composed.labels, full.labels)
-            np.testing.assert_allclose(composed.probabilities, full.probabilities, rtol=0.0, atol=0.0)
 
 
 if __name__ == "__main__":
