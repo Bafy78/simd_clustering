@@ -33,6 +33,12 @@ from benchmark_pipeline.stages import (
     GMM_MEANS_ARTIFACT,
     GMM_PRECISIONS_ARTIFACT,
     GMM_WEIGHTS_ARTIFACT,
+    HDBSCAN_CORE_DISTANCES_ARTIFACT,
+    HDBSCAN_DISTANCE_MATRIX_ARTIFACT,
+    HDBSCAN_LINKAGE_TREE_ARTIFACT,
+    HDBSCAN_MREACH_MATRIX_ARTIFACT,
+    HDBSCAN_MST_EDGES_ARTIFACT,
+    HDBSCAN_STAGE_ARTIFACT_KEYS,
     INIT_CENTROIDS_ARTIFACT,
     get_stage_spec,
     stage_keys_for_phase,
@@ -266,6 +272,16 @@ class BenchmarkArtifacts:
             f"{stage_key}_{artifact_key}{params_part}_{self.case_id}.bin"
         )
 
+    def hdbscan_stage_artifact(
+        self,
+        artifact_key: str,
+        params_key: str = NO_PARAMS,
+    ) -> str:
+        params_part = "" if params_key == NO_PARAMS else f"_{params_key}"
+        return self.dataset(
+            f"hdbscan_{artifact_key}{params_part}_{self.case_id}.bin"
+        )
+
     def artifact(
         self,
         artifact_key: str,
@@ -285,6 +301,8 @@ class BenchmarkArtifacts:
             if params_key == NO_PARAMS:
                 raise ValueError("gmm_precisions artifacts require a params_key")
             return self.gmm_precisions_bin(params_key)
+        if artifact_key in HDBSCAN_STAGE_ARTIFACT_KEYS:
+            return self.hdbscan_stage_artifact(artifact_key, params_key)
         return self.generic_stage_artifact(stage_key, artifact_key, params_key)
 
     def timing(
@@ -894,6 +912,92 @@ def build_dataset_setup_task(
     )
 
 
+
+HDBSCAN_STAGE_ARTIFACT_ORDER = (
+    HDBSCAN_DISTANCE_MATRIX_ARTIFACT,
+    HDBSCAN_CORE_DISTANCES_ARTIFACT,
+    HDBSCAN_MREACH_MATRIX_ARTIFACT,
+    HDBSCAN_MST_EDGES_ARTIFACT,
+    HDBSCAN_LINKAGE_TREE_ARTIFACT,
+)
+
+HDBSCAN_STAGE_ARTIFACT_OUTPUT_FLAGS = {
+    HDBSCAN_DISTANCE_MATRIX_ARTIFACT: "--distance-matrix-out",
+    HDBSCAN_CORE_DISTANCES_ARTIFACT: "--core-distances-out",
+    HDBSCAN_MREACH_MATRIX_ARTIFACT: "--mreach-matrix-out",
+    HDBSCAN_MST_EDGES_ARTIFACT: "--mst-edges-out",
+    HDBSCAN_LINKAGE_TREE_ARTIFACT: "--single-linkage-tree-out",
+}
+
+
+def hdbscan_stage_artifact_keys_for_targets(
+    targets: list[CppTarget],
+) -> tuple[str, ...]:
+    """Return canonical HDBSCAN predecessor artifacts needed by C++ targets."""
+    needed: set[str] = set()
+
+    for target in targets:
+        if target.phase_key != "hdbscan":
+            continue
+
+        stage_spec = get_stage_spec(target.phase_key, target.stage_key)
+        if not stage_spec.isolates_stage:
+            continue
+
+        for artifact_key in stage_spec.input_artifact_keys:
+            if artifact_key in HDBSCAN_STAGE_ARTIFACT_KEYS:
+                needed.add(artifact_key)
+
+    return tuple(
+        artifact_key
+        for artifact_key in HDBSCAN_STAGE_ARTIFACT_ORDER
+        if artifact_key in needed
+    )
+
+
+def build_hdbscan_stage_artifact_task(
+    case: BenchmarkCase,
+    artifact_keys: tuple[str, ...],
+    datasets_dir: str | Path = DATASETS_DIR,
+) -> Task:
+    """Generate sklearn-brute artifacts consumed by isolated C++ HDBSCAN stages."""
+    if not artifact_keys:
+        raise ValueError("At least one HDBSCAN stage artifact key is required.")
+
+    unknown = sorted(set(artifact_keys) - set(HDBSCAN_STAGE_ARTIFACT_KEYS))
+    if unknown:
+        raise ValueError(
+            "Unknown HDBSCAN stage artifact key(s): " + ", ".join(unknown)
+        )
+
+    artifacts = BenchmarkArtifacts.for_case(case, datasets_dir)
+    command = [
+        sys.executable,
+        repo_path("python", "benchmark_pipeline", "tools", "hdbscan_stage_artifacts.py"),
+        "--dataset-bin",
+        artifacts.dataset_bin,
+        *case.dimension_args(),
+        "--min-samples",
+        str(case.K),
+    ]
+
+    output_artifacts: list[str] = []
+    for artifact_key in HDBSCAN_STAGE_ARTIFACT_ORDER:
+        if artifact_key not in artifact_keys:
+            continue
+        output_path = artifacts.artifact(artifact_key)
+        command.extend([HDBSCAN_STAGE_ARTIFACT_OUTPUT_FLAGS[artifact_key], output_path])
+        output_artifacts.append(output_path)
+
+    return Task(
+        name="Setup: HDBSCAN stage artifacts",
+        command=command,
+        phase_key="hdbscan",
+        stage_key=FULL_STAGE_KEY,
+        input_artifacts=(artifacts.dataset_bin,),
+        output_artifacts=tuple(output_artifacts),
+    )
+
 def _validate_cpp_gmm_cases(
     cpp_gmm_cases: tuple[str, ...],
     gmm_covariance_types: tuple[str, ...],
@@ -1165,6 +1269,18 @@ def build_pipeline(
             for target in active_cpp_targets_for_case(case, options, exclusion_rules)
             if target.phase_key == "hdbscan"
         ]
+        hdbscan_stage_artifact_keys = hdbscan_stage_artifact_keys_for_targets(
+            hdbscan_targets
+        )
+        if hdbscan_stage_artifact_keys:
+            tasks.append(
+                build_hdbscan_stage_artifact_task(
+                    case,
+                    hdbscan_stage_artifact_keys,
+                    datasets_dir,
+                )
+            )
+
         for target in hdbscan_targets:
             add_cpp_case_task(
                 tasks,

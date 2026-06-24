@@ -47,7 +47,11 @@ def default_config() -> BenchmarkConfig:
     return BenchmarkConfig(
         test_Ds=[1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 17, 23, 30, 40, 60, 90],
         test_Ns=[
-            4_000,
+            128,
+            512,
+            1024,
+            2048,
+            4_096,
             15_000,
             50_000,
             100_000,
@@ -111,6 +115,20 @@ def default_config() -> BenchmarkConfig:
                     "each component has fewer samples than dimensions (`N / K <= D`), "
                     "producing rank-deficient covariance matrices that are only marginally "
                     "regularized and can fail positive-definiteness checks."
+                ),
+            ),
+            BenchmarkExclusionRule(
+                phase_keys=("hdbscan",),
+                min_samples=5000,
+                reason=(
+                    "Too high for hdbscan quadratic complexity"
+                ),
+            ),
+            BenchmarkExclusionRule(
+                phase_keys=("pp","gmm","lloyd",),
+                max_samples=4000,
+                reason=(
+                    "Too small to matter for these algorithms"
                 ),
             ),
         ),
