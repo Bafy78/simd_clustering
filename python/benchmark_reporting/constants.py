@@ -20,6 +20,8 @@ COL_STAGE = "Stage"
 COL_LANGUAGE = "Language"
 COL_VARIANT = "Variant"
 COL_PARAMS = "Params"
+COL_REFERENCE = "Reference"
+COL_REFERENCE_KEY = "reference_key"
 
 COL_DIMENSIONS = "D"
 COL_SAMPLES = "N"

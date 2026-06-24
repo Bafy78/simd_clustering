@@ -33,7 +33,21 @@ from benchmark_metadata import (
     HDBSCAN_MST_STAGE_KEY,
     HDBSCAN_SELECT_STAGE_KEY,
     HDBSCAN_STAGE_KEYS,
+    SKLEARN_BRUTE_REFERENCE,
 )
+
+
+SUPPORTED_HDBSCAN_REFERENCE_KEYS = (SKLEARN_BRUTE_REFERENCE,)
+
+
+def validate_hdbscan_reference_key(reference_key: str) -> str:
+    if reference_key not in SUPPORTED_HDBSCAN_REFERENCE_KEYS:
+        valid = ", ".join(SUPPORTED_HDBSCAN_REFERENCE_KEYS)
+        raise ValueError(
+            f"Unsupported HDBSCAN reference {reference_key!r}. "
+            f"Currently implemented references: {valid}"
+        )
+    return reference_key
 
 HdbscanStageKey = Literal[
     "distance",
@@ -474,3 +488,17 @@ def run_sklearn_brute_stage(
         return sklearn_brute_select_clusters(single_linkage_tree, min_samples=min_samples)
 
     raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
+
+
+def run_hdbscan_reference_stage(
+    reference_key: str,
+    stage_key: str,
+    X: ArrayLike,
+    *,
+    min_samples: int,
+) -> object:
+    """Run one reference implementation stage, including predecessors as setup."""
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    if reference_key == SKLEARN_BRUTE_REFERENCE:
+        return run_sklearn_brute_stage(stage_key, X, min_samples=min_samples)
+    raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")

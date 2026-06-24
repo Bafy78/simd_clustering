@@ -23,6 +23,7 @@ class PipelineOptions:
     run_python_gmm: bool
     cpp_hdbscan_cases: tuple[str, ...]
     run_python_hdbscan: bool
+    hdbscan_references: tuple[str, ...]
     hdbscan_stages: tuple[str, ...]
     run_cachegrind: bool
     cachegrind_I1: str | None
@@ -73,6 +74,7 @@ def default_config() -> BenchmarkConfig:
             run_python_gmm=False,
             cpp_hdbscan_cases=("hdbscan_static",),
             run_python_hdbscan=True,
+            hdbscan_references=("sklearn_brute",),
             hdbscan_stages=("distance",),
             run_cachegrind=True,
             cachegrind_I1="32768,8,64",

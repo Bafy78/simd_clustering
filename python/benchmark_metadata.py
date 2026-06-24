@@ -2,6 +2,8 @@
 
 NO_PARAMS = "default"
 REFERENCE_VARIANT = "reference"
+SKLEARN_BRUTE_REFERENCE = "sklearn_brute"
+HDBSCAN_CONTRIB_REFERENCE = "hdbscan_contrib"
 
 LANGUAGE_CPP_KEY = "cpp"
 LANGUAGE_PY_KEY = "py"
@@ -49,6 +51,25 @@ PHASE_STAGE_KEYS = {
 }
 PHASE_STAGE_KEYS["hdbscan"] = HDBSCAN_STAGE_KEYS
 
+REFERENCE_KEYS_BY_PHASE = {
+    "soa": (),
+    "pp": (REFERENCE_VARIANT,),
+    "lloyd": (REFERENCE_VARIANT,),
+    "gmm": (REFERENCE_VARIANT,),
+    "hdbscan": (SKLEARN_BRUTE_REFERENCE, HDBSCAN_CONTRIB_REFERENCE),
+}
+PRIMARY_REFERENCE_KEY_BY_PHASE = {
+    "pp": REFERENCE_VARIANT,
+    "lloyd": REFERENCE_VARIANT,
+    "gmm": REFERENCE_VARIANT,
+    "hdbscan": SKLEARN_BRUTE_REFERENCE,
+}
+REFERENCE_DISPLAY_NAMES = {
+    REFERENCE_VARIANT: "Reference",
+    SKLEARN_BRUTE_REFERENCE: "sklearn brute",
+    HDBSCAN_CONTRIB_REFERENCE: "hdbscan contrib",
+}
+
 LANGUAGE_DISPLAY_NAMES = {
     LANGUAGE_CPP_KEY: "C++",
     LANGUAGE_PY_KEY: "Python",
@@ -56,7 +77,7 @@ LANGUAGE_DISPLAY_NAMES = {
 
 REPORTING_LANGUAGE_DISPLAY_NAMES = {
     LANGUAGE_CPP_KEY: "C++ (EVE)",
-    LANGUAGE_PY_KEY: "Python (Scikit-Learn)",
+    LANGUAGE_PY_KEY: "Python",
 }
 
 VARIANT_DISPLAY_NAMES = {
@@ -64,6 +85,8 @@ VARIANT_DISPLAY_NAMES = {
     "dynamic": "Dynamic",
     "auto": "Auto",
     REFERENCE_VARIANT: "Reference",
+    SKLEARN_BRUTE_REFERENCE: "sklearn brute",
+    HDBSCAN_CONTRIB_REFERENCE: "hdbscan contrib",
 }
 
 
@@ -98,6 +121,22 @@ def all_stage_keys() -> tuple[str, ...]:
             if stage_key not in keys:
                 keys.append(stage_key)
     return tuple(keys)
+
+
+def reference_keys_for_phase(phase_key: str) -> tuple[str, ...]:
+    return REFERENCE_KEYS_BY_PHASE.get(phase_key, (REFERENCE_VARIANT,))
+
+
+def primary_reference_key_for_phase(phase_key: str) -> str | None:
+    return PRIMARY_REFERENCE_KEY_BY_PHASE.get(phase_key)
+
+
+def is_reference_variant(phase_key: str, variant_key: str) -> bool:
+    return variant_key in reference_keys_for_phase(phase_key)
+
+
+def reference_display_name(reference_key: str) -> str:
+    return REFERENCE_DISPLAY_NAMES.get(reference_key, display_name(reference_key))
 
 
 def language_display_name(language_key: str) -> str:

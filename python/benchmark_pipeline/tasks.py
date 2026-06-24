@@ -26,6 +26,9 @@ from benchmark_metadata import (
     LANGUAGE_PY_KEY,
     NO_PARAMS,
     REFERENCE_VARIANT,
+    SKLEARN_BRUTE_REFERENCE,
+    reference_display_name,
+    reference_keys_for_phase,
     stage_display_name,
 )
 from benchmark_pipeline.stages import (
@@ -365,6 +368,17 @@ def _validate_hdbscan_stage_keys(stage_keys: tuple[str, ...]) -> None:
         valid = ", ".join(HDBSCAN_STAGE_KEYS)
         raise ValueError(
             f"Unknown HDBSCAN stage key(s): {', '.join(unknown)}. "
+            f"Expected one or more of: {valid}"
+        )
+
+
+def _validate_hdbscan_reference_keys(reference_keys: tuple[str, ...]) -> None:
+    valid_reference_keys = reference_keys_for_phase("hdbscan")
+    unknown = sorted(set(reference_keys) - set(valid_reference_keys))
+    if unknown:
+        valid = ", ".join(valid_reference_keys)
+        raise ValueError(
+            f"Unknown HDBSCAN reference key(s): {', '.join(unknown)}. "
             f"Expected one or more of: {valid}"
         )
 
@@ -1263,6 +1277,7 @@ def build_pipeline(
 
     if "hdbscan" in active_phase_keys:
         _validate_hdbscan_stage_keys(options.hdbscan_stages)
+        _validate_hdbscan_reference_keys(options.hdbscan_references)
 
         hdbscan_targets = [
             target
@@ -1293,53 +1308,58 @@ def build_pipeline(
             )
 
         if options.run_python_hdbscan:
-            for stage_key in options.hdbscan_stages:
-                if not stage_is_active("hdbscan", stage_key):
-                    continue
-
-                tasks.append(
-                    Task(
-                        name=f"Python: HDBSCAN [{stage_display_name(stage_key)}]",
-                        command=[
-                            sys.executable,
-                            repo_path("python", "benchmark_pipeline", "benches", "bench_hdbscan.py"),
-                            "--dataset-bin",
-                            artifacts.dataset_bin,
-                            *case.dimension_args(),
-                            "--stage",
-                            stage_key,
-                            "--min-samples",
-                            str(case.K),
-                            "--metrics-file",
-                            artifacts.metrics(
-                                "hdbscan",
-                                stage_key,
-                                REFERENCE_VARIANT,
-                                LANGUAGE_PY_KEY,
-                            ),
-                            *python_pyperf_args(
-                                options,
-                                artifacts.timing(
-                                    "hdbscan",
-                                    stage_key,
-                                    REFERENCE_VARIANT,
-                                    LANGUAGE_PY_KEY,
-                                ),
-                            ),
-                        ],
-                        phase_key="hdbscan",
-                        stage_key=stage_key,
-                        input_artifacts=(artifacts.dataset_bin,),
-                        output_artifacts=(
-                            artifacts.metrics(
-                                "hdbscan",
-                                stage_key,
-                                REFERENCE_VARIANT,
-                                LANGUAGE_PY_KEY,
-                            ),
-                        ),
+            for reference_key in options.hdbscan_references:
+                if reference_key != SKLEARN_BRUTE_REFERENCE:
+                    raise ValueError(
+                        f"HDBSCAN reference {reference_key!r} is registered but not "
+                        "implemented as a benchmark task yet."
                     )
-                )
+
+                for stage_key in options.hdbscan_stages:
+                    if not stage_is_active("hdbscan", stage_key):
+                        continue
+
+                    metrics_path = artifacts.metrics(
+                        "hdbscan",
+                        stage_key,
+                        reference_key,
+                        LANGUAGE_PY_KEY,
+                    )
+                    timing_path = artifacts.timing(
+                        "hdbscan",
+                        stage_key,
+                        reference_key,
+                        LANGUAGE_PY_KEY,
+                    )
+
+                    tasks.append(
+                        Task(
+                            name=(
+                                f"Python: HDBSCAN {reference_display_name(reference_key)} "
+                                f"[{stage_display_name(stage_key)}]"
+                            ),
+                            command=[
+                                sys.executable,
+                                repo_path("python", "benchmark_pipeline", "benches", "bench_hdbscan.py"),
+                                "--dataset-bin",
+                                artifacts.dataset_bin,
+                                *case.dimension_args(),
+                                "--stage",
+                                stage_key,
+                                "--reference",
+                                reference_key,
+                                "--min-samples",
+                                str(case.K),
+                                "--metrics-file",
+                                metrics_path,
+                                *python_pyperf_args(options, timing_path),
+                            ],
+                            phase_key="hdbscan",
+                            stage_key=stage_key,
+                            input_artifacts=(artifacts.dataset_bin,),
+                            output_artifacts=(metrics_path,),
+                        )
+                    )
 
     for target in active_cachegrind_targets_for_case(
         case,

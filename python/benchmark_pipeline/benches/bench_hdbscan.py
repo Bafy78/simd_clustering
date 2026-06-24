@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pyperf
 
-from benchmark_metadata import HDBSCAN_STAGE_KEYS
+from benchmark_metadata import HDBSCAN_STAGE_KEYS, SKLEARN_BRUTE_REFERENCE
 from benchmark_pipeline.hdbscan_reference import (
     compose_sklearn_brute_stages,
     sklearn_brute_core_distances,
@@ -12,6 +12,7 @@ from benchmark_pipeline.hdbscan_reference import (
     sklearn_brute_mutual_reachability_matrix,
     sklearn_brute_select_clusters,
     sklearn_brute_single_linkage_tree,
+    validate_hdbscan_reference_key,
     validate_min_samples,
     validate_stage_key,
     write_hdbscan_distance_stage_metrics,
@@ -133,6 +134,7 @@ def append_custom_args(cmd, args):
     cmd.extend(["--N", str(args.N)])
     cmd.extend(["--K", str(args.K)])
     cmd.extend(["--stage", args.stage])
+    cmd.extend(["--reference", args.reference])
     cmd.extend(["--min-samples", str(args.min_samples)])
     cmd.extend(["--metrics-file", args.metrics_file])
 
@@ -148,6 +150,7 @@ def main() -> None:
     runner.argparser.add_argument("--N", type=int, required=True)
     runner.argparser.add_argument("--K", type=int, required=True)
     runner.argparser.add_argument("--stage", choices=HDBSCAN_STAGE_KEYS, required=True)
+    runner.argparser.add_argument("--reference", default=SKLEARN_BRUTE_REFERENCE)
     runner.argparser.add_argument("--min-samples", type=int, required=True)
     runner.argparser.add_argument("--metrics-file", required=True)
     runner.argparser.add_argument(
@@ -158,18 +161,21 @@ def main() -> None:
 
     args = runner.parse_args()
     validate_stage_key(args.stage)
+    validate_hdbscan_reference_key(args.reference)
     validate_min_samples(args.min_samples, args.N)
 
     if getattr(args, "worker", False):
         import_runtime_deps()
         X = load_dataset(args)
+        if args.reference != SKLEARN_BRUTE_REFERENCE:
+            raise ValueError(f"Unsupported HDBSCAN reference for staged benchmark: {args.reference!r}")
         prepared_input = prepare_stage_input(X, args.stage, args.min_samples)
     else:
         X = None
         prepared_input = None
 
     runner.bench_func(
-        f"hdbscan_{args.stage}_sklearn_brute_py",
+        f"hdbscan_{args.stage}_{args.reference}_py",
         run_prepared_stage,
         args.stage,
         prepared_input,
@@ -179,6 +185,8 @@ def main() -> None:
     if not getattr(args, "worker", False):
         import_runtime_deps()
         X = load_dataset(args)
+        if args.reference != SKLEARN_BRUTE_REFERENCE:
+            raise ValueError(f"Unsupported HDBSCAN reference for staged benchmark: {args.reference!r}")
         prepared_input = prepare_stage_input(X, args.stage, args.min_samples)
         result = run_prepared_stage(args.stage, prepared_input, args.min_samples)
 

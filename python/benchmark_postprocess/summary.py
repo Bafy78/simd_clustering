@@ -6,6 +6,7 @@ from benchmark_metadata import (
     LANGUAGE_PY_KEY,
     NO_PARAMS,
     language_display_name,
+    reference_display_name,
     stage_display_name,
 )
 from benchmark_postprocess.naming import (
@@ -184,11 +185,34 @@ def _parameterization_entry(
     )
 
 
-def _py_reference_records(
+def _reference_identities_for(
     grouped: dict[RecordGroupKey, list[dict[str, Any]]],
     identity: BenchmarkIdentity,
+) -> list[BenchmarkIdentity]:
+    references: list[BenchmarkIdentity] = []
+
+    for candidate in grouped:
+        if not candidate.is_python_reference:
+            continue
+        if candidate.config_key != identity.config_key:
+            continue
+        if candidate.phase_key != identity.phase_key:
+            continue
+        if candidate.stage_key != identity.stage_key:
+            continue
+        if candidate.params_key != identity.params_key:
+            continue
+        references.append(candidate)
+
+    return sorted(references, key=lambda item: item.variant_key)
+
+
+def _reference_records(
+    grouped: dict[RecordGroupKey, list[dict[str, Any]]],
+    identity: BenchmarkIdentity,
+    reference_key: str,
 ) -> list[dict[str, Any]] | None:
-    records = grouped.get(identity.python_reference())
+    records = grouped.get(identity.python_reference(reference_key))
     if records:
         return records
 
@@ -350,8 +374,8 @@ def build_summary(
             summarize_language_records(group)
         )
 
-    # Attach the shared Python reference to every concrete C++ variant and build
-    # speedup/parity per config × phase × variant × parameterization.
+    # Attach every available Python reference to every concrete C++ variant and
+    # build speedup/parity per config × phase × stage × variant × reference.
     for config_key, config_entry in configs.items():
         D, N, K = config_key
 
@@ -378,14 +402,29 @@ def build_summary(
                             params_key=parameterization_entry["params_key"],
                         )
                         cpp_records = grouped.get(identity)
-                        py_records = _py_reference_records(grouped, identity)
+                        if not cpp_records:
+                            continue
 
-                        if py_records:
-                            parameterization_entry["languages"][language_display_name(LANGUAGE_PY_KEY)] = (
-                                summarize_language_records(py_records)
+                        comparisons = parameterization_entry.setdefault("comparisons", {})
+
+                        for reference_identity in _reference_identities_for(grouped, identity):
+                            reference_key = reference_identity.variant_key
+                            py_records = _reference_records(
+                                grouped,
+                                identity,
+                                reference_key,
                             )
+                            if not py_records:
+                                continue
 
-                        if cpp_records and py_records:
+                            comparison_entry: dict[str, Any] = {
+                                "reference_key": reference_key,
+                                "reference": reference_display_name(reference_key),
+                                "language_key": LANGUAGE_PY_KEY,
+                                "language": language_display_name(LANGUAGE_PY_KEY),
+                                "timing": summarize_language_records(py_records),
+                            }
+
                             speedup_seed = stable_child_seed(
                                 bootstrap_seed,
                                 identity.config_id,
@@ -393,9 +432,9 @@ def build_summary(
                                 identity.stage_key,
                                 identity.variant_key,
                                 identity.params_key,
+                                reference_key,
                             )
-
-                            parameterization_entry["speedup"] = build_speedup_block(
+                            comparison_entry["speedup"] = build_speedup_block(
                                 cpp_records,
                                 py_records,
                                 bootstrap_iterations=bootstrap_iterations,
@@ -403,92 +442,98 @@ def build_summary(
                                 seed=speedup_seed,
                             )
 
-                        if identity.phase_key == "lloyd" and cpp_records and py_records:
-                            parity = compute_lloyd_comparison(
-                                lloyd_metrics,
-                                config_id=identity.config_id,
-                                cpp_variant_key=identity.variant_key,
-                                params_key=identity.params_key,
-                                stage_key=identity.stage_key,
-                            )
-
-                            parameterization_entry["languages"].setdefault(language_display_name(LANGUAGE_CPP_KEY), {})[
-                                "inertia"
-                            ] = parity["cpp_inertia"]
-                            parameterization_entry["languages"].setdefault(language_display_name(LANGUAGE_PY_KEY), {})[
-                                "inertia"
-                            ] = parity["python_inertia"]
-
-                            parameterization_entry["parity"] = parity
-                            lloyd_comparison_records.append(parity)
-
-                        if identity.phase_key == "gmm" and gmm_metrics is not None:
-                            cpp_metrics = _metrics_for(gmm_metrics, identity)
-                            py_metrics = _metrics_for(gmm_metrics, identity.python_reference())
-
-                            if cpp_metrics is not None:
+                            if identity.phase_key == "lloyd":
+                                parity = compute_lloyd_comparison(
+                                    lloyd_metrics,
+                                    config_id=identity.config_id,
+                                    cpp_variant_key=identity.variant_key,
+                                    py_variant_key=reference_key,
+                                    params_key=identity.params_key,
+                                    stage_key=identity.stage_key,
+                                )
+                                parity["reference_key"] = reference_key
+                                parity["reference"] = reference_display_name(reference_key)
+                                comparison_entry["parity"] = parity
                                 parameterization_entry["languages"].setdefault(
                                     language_display_name(LANGUAGE_CPP_KEY), {}
-                                ).update(
-                                    {
-                                        "covariance_type": cpp_metrics["covariance_type"],
-                                        "lower_bound": cpp_metrics["lower_bound"],
-                                    }
-                                )
+                                )["inertia"] = parity["cpp_inertia"]
+                                lloyd_comparison_records.append(parity)
 
-                            if py_metrics is not None:
-                                parameterization_entry["languages"].setdefault(
-                                    language_display_name(LANGUAGE_PY_KEY), {}
-                                ).update(
-                                    {
-                                        "covariance_type": py_metrics["covariance_type"],
-                                        "lower_bound": py_metrics["lower_bound"],
-                                    }
-                                )
-
-                            if cpp_records and py_records:
-                                parity = compute_gmm_comparison(
+                            if identity.phase_key == "gmm" and gmm_metrics is not None:
+                                cpp_metrics = _metrics_for(gmm_metrics, identity)
+                                py_metrics = _metrics_for(
                                     gmm_metrics,
-                                    config_id=identity.config_id,
-                                    cpp_variant_key=identity.variant_key,
-                                    params_key=identity.params_key,
-                                    stage_key=identity.stage_key,
+                                    identity.python_reference(reference_key),
                                 )
-                                parameterization_entry["parity"] = parity
-                                gmm_parity_records.append(parity)
 
-                        if identity.phase_key == "hdbscan" and hdbscan_metrics is not None:
-                            cpp_metrics = _metrics_for(hdbscan_metrics, identity)
-                            py_metrics = _metrics_for(hdbscan_metrics, identity.python_reference())
+                                if cpp_metrics is not None:
+                                    parameterization_entry["languages"].setdefault(
+                                        language_display_name(LANGUAGE_CPP_KEY), {}
+                                    ).update(
+                                        {
+                                            "covariance_type": cpp_metrics["covariance_type"],
+                                            "lower_bound": cpp_metrics["lower_bound"],
+                                        }
+                                    )
 
-                            if cpp_metrics is not None:
-                                parameterization_entry["languages"].setdefault(
-                                    language_display_name(LANGUAGE_CPP_KEY), {}
-                                )["stage_metrics"] = {
-                                    "stage": cpp_metrics.get("stage"),
-                                    "dtype": cpp_metrics.get("dtype"),
-                                    "shape": cpp_metrics.get("shape"),
-                                }
+                                if py_metrics is not None:
+                                    comparison_entry["stage_metrics"] = {
+                                        "covariance_type": py_metrics.get("covariance_type"),
+                                        "lower_bound": py_metrics.get("lower_bound"),
+                                    }
 
-                            if py_metrics is not None:
-                                parameterization_entry["languages"].setdefault(
-                                    language_display_name(LANGUAGE_PY_KEY), {}
-                                )["stage_metrics"] = {
-                                    "stage": py_metrics.get("stage"),
-                                    "dtype": py_metrics.get("dtype"),
-                                    "shape": py_metrics.get("shape"),
-                                }
+                                if cpp_metrics is not None and py_metrics is not None:
+                                    parity = compute_gmm_comparison(
+                                        gmm_metrics,
+                                        config_id=identity.config_id,
+                                        cpp_variant_key=identity.variant_key,
+                                        py_variant_key=reference_key,
+                                        params_key=identity.params_key,
+                                        stage_key=identity.stage_key,
+                                    )
+                                    parity["reference_key"] = reference_key
+                                    parity["reference"] = reference_display_name(reference_key)
+                                    comparison_entry["parity"] = parity
+                                    gmm_parity_records.append(parity)
 
-                            if cpp_records and py_records:
-                                parity = compute_hdbscan_comparison(
+                            if identity.phase_key == "hdbscan" and hdbscan_metrics is not None:
+                                cpp_metrics = _metrics_for(hdbscan_metrics, identity)
+                                py_metrics = _metrics_for(
                                     hdbscan_metrics,
-                                    config_id=identity.config_id,
-                                    cpp_variant_key=identity.variant_key,
-                                    params_key=identity.params_key,
-                                    stage_key=identity.stage_key,
+                                    identity.python_reference(reference_key),
                                 )
-                                parameterization_entry["parity"] = parity
-                                hdbscan_parity_records.append(parity)
+
+                                if cpp_metrics is not None:
+                                    parameterization_entry["languages"].setdefault(
+                                        language_display_name(LANGUAGE_CPP_KEY), {}
+                                    )["stage_metrics"] = {
+                                        "stage": cpp_metrics.get("stage"),
+                                        "dtype": cpp_metrics.get("dtype"),
+                                        "shape": cpp_metrics.get("shape"),
+                                    }
+
+                                if py_metrics is not None:
+                                    comparison_entry["stage_metrics"] = {
+                                        "stage": py_metrics.get("stage"),
+                                        "dtype": py_metrics.get("dtype"),
+                                        "shape": py_metrics.get("shape"),
+                                    }
+
+                                if cpp_metrics is not None and py_metrics is not None:
+                                    parity = compute_hdbscan_comparison(
+                                        hdbscan_metrics,
+                                        config_id=identity.config_id,
+                                        cpp_variant_key=identity.variant_key,
+                                        py_variant_key=reference_key,
+                                        params_key=identity.params_key,
+                                        stage_key=identity.stage_key,
+                                    )
+                                    parity["reference_key"] = reference_key
+                                    parity["reference"] = reference_display_name(reference_key)
+                                    comparison_entry["parity"] = parity
+                                    hdbscan_parity_records.append(parity)
+
+                            comparisons[reference_key] = comparison_entry
 
     _append_exclusions(configs, exclusions)
     _attach_cachegrind_records(configs, cachegrind)
@@ -499,13 +544,13 @@ def build_summary(
 
     return {
         "metadata": {
-            "schema_version": 8,
+            "schema_version": 9,
             "description": (
                 "Post-processed benchmark summary. Raw pyperf/nanobench JSON "
                 "values are grouped by timing process/pyperf run before aggregation. "
                 "C++ stages, variants, and algorithm parameterizations are represented explicitly; "
-                "Python reference runs are attached to each comparable C++ variant with "
-                "the same parameterization. Configured exclusions are preserved as "
+                "Reference runs are attached under per-reference comparison blocks for "
+                "each comparable C++ variant with the same parameterization. Configured exclusions are preserved as "
                 "reported-but-not-run D/N/K/phase/stage entries."
             ),
             "time_unit": "seconds",
@@ -513,7 +558,7 @@ def build_summary(
                 "For Lloyd and GMM, total benchmark time divided by algorithm-iteration count. "
                 "For non-iterative phases, identical to total time."
             ),
-            "speedup_definition": "python_time / cpp_time",
+            "speedup_definition": "reference_time / cpp_time",
             "compile_artifacts": {
                 "source": "compile_artifacts.json",
                 "architecture_definition": (
@@ -546,8 +591,8 @@ def build_summary(
                 "lloyd_source": "precomputed lloyd_{stage}_metrics_{variant}_{cpp,py}_*.json files",
                 "gmm_source": "precomputed gmm_{stage}_metrics_{variant}_{covariance_type}_{cpp,py}_*.json files",
                 "parity_note": (
-                    "Lloyd and GMM parity are computed per C++ variant against the "
-                    "shared sklearn reference for the same parameterization using "
+                    "Lloyd, GMM, and HDBSCAN parity are computed per C++ variant against "
+                    "each available reference for the same parameterization using "
                     "the current thresholds in benchmark_postprocess.parity. "
                     "Reporting reads only this summary."
                 ),

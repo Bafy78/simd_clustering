@@ -387,6 +387,30 @@ def _iter_phase_variant_parameterizations(
                 )
 
 
+def _iter_comparisons(
+    parameterization_entry: dict[str, Any],
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    comparisons = parameterization_entry.get("comparisons")
+    if comparisons:
+        for reference_key, comparison_entry in comparisons.items():
+            yield str(reference_key), comparison_entry
+        return
+
+    # Reporting-only support for older summaries. New post-processing emits the
+    # per-reference `comparisons` block instead of these top-level fields.
+    legacy_entry: dict[str, Any] = {}
+    if "speedup" in parameterization_entry:
+        legacy_entry["speedup"] = parameterization_entry["speedup"]
+    if "parity" in parameterization_entry:
+        legacy_entry["parity"] = parameterization_entry["parity"]
+    if legacy_entry:
+        legacy_entry.setdefault("reference_key", "reference")
+        legacy_entry.setdefault("reference", "Reference")
+        yield "reference", legacy_entry
+
+
+def _comparison_reference_name(reference_key: str, comparison_entry: dict[str, Any]) -> str:
+    return str(comparison_entry.get("reference") or reference_key.replace("_", " ").title())
 
 
 def _empty_benchmark_dataframe() -> pd.DataFrame:
@@ -397,6 +421,8 @@ def _empty_benchmark_dataframe() -> pd.DataFrame:
             COL_LANGUAGE,
             COL_VARIANT,
             COL_PARAMS,
+            COL_REFERENCE,
+            COL_REFERENCE_KEY,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
@@ -420,6 +446,8 @@ def _empty_speedup_dataframe() -> pd.DataFrame:
             COL_STAGE,
             COL_VARIANT,
             COL_PARAMS,
+            COL_REFERENCE,
+            COL_REFERENCE_KEY,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
@@ -498,6 +526,8 @@ def load_benchmark_data(
                         COL_LANGUAGE: language_name,
                         COL_VARIANT: variant_name,
                         COL_PARAMS: params_name,
+                        COL_REFERENCE: "-",
+                        COL_REFERENCE_KEY: "",
                         COL_DIMENSIONS: D,
                         COL_SAMPLES: N,
                         COL_CLUSTERS: K,
@@ -525,6 +555,43 @@ def load_benchmark_data(
                         stats=language_entry.get("time_per_algorithm_iteration_s"),
                     )
 
+                    records.append(record)
+
+                for reference_key, comparison_entry in _iter_comparisons(parameterization_entry):
+                    timing_entry = comparison_entry.get("timing")
+                    if not timing_entry:
+                        continue
+
+                    selected_time = _selected_stat(
+                        timing_entry,
+                        time_field=time_field,
+                        statistic=statistic,
+                    )
+                    algorithm_iterations = int(timing_entry.get("algorithm_iterations", 1))
+                    record = {
+                        COL_PHASE: phase_name,
+                        COL_STAGE: stage_name,
+                        COL_LANGUAGE: LANG_PY,
+                        COL_VARIANT: variant_name,
+                        COL_PARAMS: params_name,
+                        COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
+                        COL_REFERENCE_KEY: reference_key,
+                        COL_DIMENSIONS: D,
+                        COL_SAMPLES: N,
+                        COL_CLUSTERS: K,
+                        COL_ALGORITHM_ITERATIONS: algorithm_iterations,
+                        COL_TIME_S: selected_time,
+                        COL_TIME_FIELD: time_field,
+                        COL_TIME_STATISTIC: statistic,
+                        COL_TIMING_PROCESS_COUNT: timing_entry.get("timing_process_count"),
+                        COL_TIMING_VALUE_COUNT: timing_entry.get("timing_value_count"),
+                    }
+                    _copy_stats_with_prefix(record, prefix="time_s", stats=timing_entry.get("time_s"))
+                    _copy_stats_with_prefix(
+                        record,
+                        prefix="time_per_algorithm_iteration_s",
+                        stats=timing_entry.get("time_per_algorithm_iteration_s"),
+                    )
                     records.append(record)
 
     df = pd.DataFrame(records)
@@ -559,7 +626,7 @@ def load_benchmark_data(
     )
 
     return df.sort_values(
-        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, COL_LANGUAGE]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, COL_LANGUAGE]
     ).reset_index(drop=True)
 
 
@@ -603,34 +670,37 @@ def load_speedup_summary(
                     params_key,
                     parameterization_entry.get("params", params_name_from_json),
                 )
-                speedup_entry = (
-                    parameterization_entry.get("speedup", {})
-                    .get(time_field, {})
-                    .get(ratio_statistic)
-                )
+                for reference_key, comparison_entry in _iter_comparisons(parameterization_entry):
+                    speedup_entry = (
+                        comparison_entry.get("speedup", {})
+                        .get(time_field, {})
+                        .get(ratio_statistic)
+                    )
 
-                if not speedup_entry:
-                    continue
+                    if not speedup_entry:
+                        continue
 
-                records.append(
-                    {
-                        COL_PHASE: phase_name,
-                        COL_STAGE: stage_name,
-                        COL_VARIANT: variant_name,
-                        COL_PARAMS: params_name,
-                        COL_DIMENSIONS: D,
-                        COL_SAMPLES: N,
-                        COL_CLUSTERS: K,
-                        COL_TIME_FIELD: time_field,
-                        COL_SPEEDUP_STATISTIC: ratio_statistic,
-                        COL_SPEEDUP: speedup_entry["point"],
-                        COL_SPEEDUP_CI_LOW: speedup_entry["ci_low"],
-                        COL_SPEEDUP_CI_HIGH: speedup_entry["ci_high"],
-                        COL_SPEEDUP_CI_LEVEL: speedup_entry["ci_level"],
-                        COL_CPP_POINT: speedup_entry.get("cpp_point"),
-                        COL_PY_POINT: speedup_entry.get("python_point"),
-                    }
-                )
+                    records.append(
+                        {
+                            COL_PHASE: phase_name,
+                            COL_STAGE: stage_name,
+                            COL_VARIANT: variant_name,
+                            COL_PARAMS: params_name,
+                            COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
+                            COL_REFERENCE_KEY: reference_key,
+                            COL_DIMENSIONS: D,
+                            COL_SAMPLES: N,
+                            COL_CLUSTERS: K,
+                            COL_TIME_FIELD: time_field,
+                            COL_SPEEDUP_STATISTIC: ratio_statistic,
+                            COL_SPEEDUP: speedup_entry["point"],
+                            COL_SPEEDUP_CI_LOW: speedup_entry["ci_low"],
+                            COL_SPEEDUP_CI_HIGH: speedup_entry["ci_high"],
+                            COL_SPEEDUP_CI_LEVEL: speedup_entry["ci_level"],
+                            COL_CPP_POINT: speedup_entry.get("cpp_point"),
+                            COL_PY_POINT: speedup_entry.get("python_point"),
+                        }
+                    )
 
     df = pd.DataFrame(records)
 
@@ -658,7 +728,7 @@ def load_speedup_summary(
     )
 
     return df.sort_values(
-        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
     ).reset_index(drop=True)
 
 
@@ -695,46 +765,50 @@ def load_lloyd_parity_summary(
                     params_key,
                     parameterization_entry.get("params", params_name_from_json),
                 )
-                parity = parameterization_entry.get("parity")
-                if not parity:
-                    continue
 
-                diff_pct = float(parity["inertia_diff_pct"])
-                thresholds = parity.get("thresholds", {})
-                failure_reasons = parity.get("failure_reasons", [])
-                passed = parity.get("status") == "PASS"
+                for reference_key, comparison_entry in _iter_comparisons(parameterization_entry):
+                    parity = comparison_entry.get("parity")
+                    if not parity:
+                        continue
 
-                records.append(
-                    {
-                        COL_STAGE: stage_name,
-                        COL_VARIANT: variant_name,
-                        COL_PARAMS: params_name,
-                        COL_DIMENSIONS: D,
-                        COL_SAMPLES: N,
-                        COL_CLUSTERS: K,
-                        "Diff (%)": diff_pct,
-                        "Status": "✅ PASS" if passed else "❌ FAIL",
-                        "Failure Reasons": ", ".join(failure_reasons),
-                        "Lloyd C++ Algorithm Iterations": parity[
-                            "cpp_algorithm_iterations"
-                        ],
-                        "Lloyd Py Algorithm Iterations": parity[
-                            "python_algorithm_iterations"
-                        ],
-                        "Algorithm Iteration Diff Abs": parity.get(
-                            "algorithm_iteration_diff_abs"
-                        ),
-                        "C++ Inertia": parity["cpp_inertia"],
-                        "Py Inertia": parity["python_inertia"],
-                        "Inertia Diff Abs": parity["inertia_diff_abs"],
-                        "Inertia Diff Threshold (%)": thresholds.get(
-                            "inertia_diff_pct"
-                        ),
-                        "Algorithm Iteration Diff Threshold Abs": thresholds.get(
-                            "algorithm_iteration_diff_abs"
-                        ),
-                    }
-                )
+                    diff_pct = float(parity["inertia_diff_pct"])
+                    thresholds = parity.get("thresholds", {})
+                    failure_reasons = parity.get("failure_reasons", [])
+                    passed = parity.get("status") == "PASS"
+
+                    records.append(
+                        {
+                            COL_STAGE: stage_name,
+                            COL_VARIANT: variant_name,
+                            COL_PARAMS: params_name,
+                            COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
+                            COL_REFERENCE_KEY: reference_key,
+                            COL_DIMENSIONS: D,
+                            COL_SAMPLES: N,
+                            COL_CLUSTERS: K,
+                            "Diff (%)": diff_pct,
+                            "Status": "✅ PASS" if passed else "❌ FAIL",
+                            "Failure Reasons": ", ".join(failure_reasons),
+                            "Lloyd C++ Algorithm Iterations": parity[
+                                "cpp_algorithm_iterations"
+                            ],
+                            "Lloyd Py Algorithm Iterations": parity[
+                                "python_algorithm_iterations"
+                            ],
+                            "Algorithm Iteration Diff Abs": parity.get(
+                                "algorithm_iteration_diff_abs"
+                            ),
+                            "C++ Inertia": parity["cpp_inertia"],
+                            "Py Inertia": parity["python_inertia"],
+                            "Inertia Diff Abs": parity["inertia_diff_abs"],
+                            "Inertia Diff Threshold (%)": thresholds.get(
+                                "inertia_diff_pct"
+                            ),
+                            "Algorithm Iteration Diff Threshold Abs": thresholds.get(
+                                "algorithm_iteration_diff_abs"
+                            ),
+                        }
+                    )
 
     df = pd.DataFrame(records)
 
@@ -742,7 +816,9 @@ def load_lloyd_parity_summary(
         return df
 
     df = _apply_phase_stage_categories(df)
-    return df.sort_values(by=["Diff (%)", COL_STAGE], ascending=[False, True]).reset_index(drop=True)
+    return df.sort_values(
+        by=["Diff (%)", COL_STAGE, COL_REFERENCE], ascending=[False, True, True]
+    ).reset_index(drop=True)
 
 
 def load_gmm_parity_summary(
@@ -778,57 +854,61 @@ def load_gmm_parity_summary(
                     params_key,
                     parameterization_entry.get("params", params_name_from_json),
                 )
-                parity = parameterization_entry.get("parity")
-                if not parity:
-                    continue
 
-                status = parity.get("status", "FAIL")
-                failure_reasons = parity.get("failure_reasons", [])
+                for reference_key, comparison_entry in _iter_comparisons(parameterization_entry):
+                    parity = comparison_entry.get("parity")
+                    if not parity:
+                        continue
 
-                records.append(
-                    {
-                        COL_STAGE: stage_name,
-                        COL_VARIANT: variant_name,
-                        COL_PARAMS: params_name,
-                        COL_DIMENSIONS: D,
-                        COL_SAMPLES: N,
-                        COL_CLUSTERS: K,
-                        "Status": "✅ PASS" if status == "PASS" else "❌ FAIL",
-                        "Failure Reasons": ", ".join(failure_reasons),
-                        "Covariance Type": parity.get("covariance_type"),
-                        "GMM C++ Algorithm Iterations": parity.get(
-                            "cpp_algorithm_iterations"
-                        ),
-                        "GMM Py Algorithm Iterations": parity.get(
-                            "python_algorithm_iterations"
-                        ),
-                        "Algorithm Iteration Diff Abs": parity.get(
-                            "algorithm_iteration_diff_abs"
-                        ),
-                        "C++ Lower Bound": parity.get("cpp_lower_bound"),
-                        "Py Lower Bound": parity.get("python_lower_bound"),
-                        "Lower Bound Diff Abs": parity.get("lower_bound_diff_abs"),
-                        "Lower Bound Diff (%)": parity.get("lower_bound_diff_pct"),
-                        "Weights Max Abs Diff": parity.get("weights_max_abs_diff"),
-                        "Means Max Abs Diff": parity.get("means_max_abs_diff"),
-                        "Covariances Max Rel Diff": parity.get("covariances_max_rel_diff"),
-                        "Lower Bound Diff Abs Threshold": parity.get("thresholds", {}).get(
-                            "lower_bound_diff_abs"
-                        ),
-                        "Weights Max Abs Diff Threshold": parity.get("thresholds", {}).get(
-                            "weights_max_abs_diff"
-                        ),
-                        "Means Max Abs Diff Threshold": parity.get("thresholds", {}).get(
-                            "means_max_abs_diff"
-                        ),
-                        "Covariances Max Rel Diff Threshold": parity.get("thresholds", {}).get(
-                            "covariances_max_rel_diff"
-                        ),
-                        "Algorithm Iteration Diff Threshold Abs": parity.get(
-                            "thresholds", {}
-                        ).get("algorithm_iteration_diff_abs"),
-                    }
-                )
+                    status = parity.get("status", "FAIL")
+                    failure_reasons = parity.get("failure_reasons", [])
+
+                    records.append(
+                        {
+                            COL_STAGE: stage_name,
+                            COL_VARIANT: variant_name,
+                            COL_PARAMS: params_name,
+                            COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
+                            COL_REFERENCE_KEY: reference_key,
+                            COL_DIMENSIONS: D,
+                            COL_SAMPLES: N,
+                            COL_CLUSTERS: K,
+                            "Status": "✅ PASS" if status == "PASS" else "❌ FAIL",
+                            "Failure Reasons": ", ".join(failure_reasons),
+                            "Covariance Type": parity.get("covariance_type"),
+                            "GMM C++ Algorithm Iterations": parity.get(
+                                "cpp_algorithm_iterations"
+                            ),
+                            "GMM Py Algorithm Iterations": parity.get(
+                                "python_algorithm_iterations"
+                            ),
+                            "Algorithm Iteration Diff Abs": parity.get(
+                                "algorithm_iteration_diff_abs"
+                            ),
+                            "C++ Lower Bound": parity.get("cpp_lower_bound"),
+                            "Py Lower Bound": parity.get("python_lower_bound"),
+                            "Lower Bound Diff Abs": parity.get("lower_bound_diff_abs"),
+                            "Lower Bound Diff (%)": parity.get("lower_bound_diff_pct"),
+                            "Weights Max Abs Diff": parity.get("weights_max_abs_diff"),
+                            "Means Max Abs Diff": parity.get("means_max_abs_diff"),
+                            "Covariances Max Rel Diff": parity.get("covariances_max_rel_diff"),
+                            "Lower Bound Diff Abs Threshold": parity.get("thresholds", {}).get(
+                                "lower_bound_diff_abs"
+                            ),
+                            "Weights Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                                "weights_max_abs_diff"
+                            ),
+                            "Means Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                                "means_max_abs_diff"
+                            ),
+                            "Covariances Max Rel Diff Threshold": parity.get("thresholds", {}).get(
+                                "covariances_max_rel_diff"
+                            ),
+                            "Algorithm Iteration Diff Threshold Abs": parity.get(
+                                "thresholds", {}
+                            ).get("algorithm_iteration_diff_abs"),
+                        }
+                    )
 
     df = pd.DataFrame(records)
 
@@ -843,9 +923,87 @@ def load_gmm_parity_summary(
             COL_STAGE,
             COL_VARIANT,
             COL_PARAMS,
+            COL_REFERENCE,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
         ],
-        ascending=[True, False, True, True, True, True, True, True],
+        ascending=[True, False, True, True, True, True, True, True, True],
+    ).reset_index(drop=True)
+
+
+def load_hdbscan_parity_summary(
+    summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
+) -> pd.DataFrame:
+    """Load HDBSCAN stage parity records from benchmark_summary.json."""
+    summary = load_benchmark_summary(summary_json)
+    records: list[dict[str, Any]] = []
+
+    for config in summary.get("configs", []):
+        D = int(config["dimensions"])
+        N = int(config["samples"])
+        K = int(config["clusters"])
+        for phase_entry in config.get("phases", {}).values():
+            if phase_entry.get("phase_key") != "hdbscan":
+                continue
+
+            for (
+                stage_name,
+                _stage_entry,
+                variant_name_from_json,
+                variant_entry,
+                params_name_from_json,
+                parameterization_entry,
+            ) in _iter_phase_variant_parameterizations(phase_entry):
+                variant_key = variant_entry.get("variant_key")
+                variant_name = _variant_display_name(
+                    variant_key,
+                    variant_entry.get("variant", variant_name_from_json),
+                )
+                params_key = parameterization_entry.get("params_key", NO_PARAMS)
+                params_name = _params_display_name(
+                    params_key,
+                    parameterization_entry.get("params", params_name_from_json),
+                )
+
+                for reference_key, comparison_entry in _iter_comparisons(parameterization_entry):
+                    parity = comparison_entry.get("parity")
+                    if not parity:
+                        continue
+
+                    status = parity.get("status", "FAIL")
+                    failure_reasons = parity.get("failure_reasons", [])
+                    records.append(
+                        {
+                            COL_STAGE: stage_name,
+                            COL_VARIANT: variant_name,
+                            COL_PARAMS: params_name,
+                            COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
+                            COL_REFERENCE_KEY: reference_key,
+                            COL_DIMENSIONS: D,
+                            COL_SAMPLES: N,
+                            COL_CLUSTERS: K,
+                            "Status": "✅ PASS" if status == "PASS" else "❌ FAIL",
+                            "Failure Reasons": ", ".join(failure_reasons),
+                            "Shape": parity.get("cpp_shape"),
+                            "Reference Shape": parity.get("python_shape"),
+                            "Hash Equal": parity.get("hash_equal"),
+                            "Summary Scalar Abs Diff Max": parity.get("summary_scalar_abs_diff_max"),
+                            "Summary Scalar Rel Diff Max": parity.get("summary_scalar_rel_diff_max"),
+                            "Probe Value Max Abs Diff": parity.get("probe_value_max_abs_diff"),
+                            "C++ Diagonal Max Abs": parity.get("cpp_diagonal_max_abs"),
+                            "Reference Diagonal Max Abs": parity.get("python_diagonal_max_abs"),
+                            "C++ Symmetry Max Abs": parity.get("cpp_symmetry_max_abs"),
+                            "Reference Symmetry Max Abs": parity.get("python_symmetry_max_abs"),
+                        }
+                    )
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        return df
+
+    df = _apply_phase_stage_categories(df)
+    return df.sort_values(
+        by=["Status", COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS],
+        ascending=[True, True, True, True, True, True, True, True],
     ).reset_index(drop=True)

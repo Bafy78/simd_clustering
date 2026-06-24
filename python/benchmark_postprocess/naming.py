@@ -8,6 +8,7 @@ from benchmark_metadata import (
     NO_PARAMS,
     REFERENCE_VARIANT,
     format_config_id,
+    is_reference_variant,
     language_display_name,
     params_display_name,
     fallback_phase_display_name,
@@ -112,7 +113,7 @@ class BenchmarkIdentity:
     def is_python_reference(self) -> bool:
         return (
             self.language_key == LANGUAGE_PY_KEY
-            and self.variant_key == REFERENCE_VARIANT
+            and is_reference_variant(self.phase_key, self.variant_key)
         )
 
     def with_language(
@@ -131,8 +132,11 @@ class BenchmarkIdentity:
             params_key=self.params_key,
         )
 
-    def python_reference(self) -> "BenchmarkIdentity":
-        return self.with_language(LANGUAGE_PY_KEY, variant_key=REFERENCE_VARIANT)
+    def python_reference(
+        self,
+        reference_key: str = REFERENCE_VARIANT,
+    ) -> "BenchmarkIdentity":
+        return self.with_language(LANGUAGE_PY_KEY, variant_key=reference_key)
 
     def as_record_fields(self) -> dict[str, Any]:
         return {

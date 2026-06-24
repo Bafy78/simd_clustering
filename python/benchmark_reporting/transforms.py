@@ -16,6 +16,7 @@ def filter_bench(
     language=None,
     variant=None,
     params=None,
+    reference=None,
     dimensions=None,
     samples=None,
     clusters=None,
@@ -28,6 +29,7 @@ def filter_bench(
         COL_LANGUAGE: language,
         COL_VARIANT: variant,
         COL_PARAMS: params,
+        COL_REFERENCE: reference,
         COL_DIMENSIONS: dimensions,
         COL_SAMPLES: samples,
         COL_CLUSTERS: clusters,
@@ -133,6 +135,8 @@ def add_speedup_retention(
             identity_cols.append(COL_VARIANT)
         if COL_PARAMS in result.columns:
             identity_cols.append(COL_PARAMS)
+        if COL_REFERENCE in result.columns:
+            identity_cols.append(COL_REFERENCE)
         group_cols = identity_cols + [COL_DIMENSIONS, COL_SAMPLES]
 
     if base_clusters is None:
@@ -327,6 +331,8 @@ def prepare_speedup_comparison_data(
         sort_cols.append(COL_VARIANT)
     if COL_PARAMS in result.columns:
         sort_cols.append(COL_PARAMS)
+    if COL_REFERENCE in result.columns:
+        sort_cols.append(COL_REFERENCE)
     sort_cols += [COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
 
     return result.sort_values(sort_cols).reset_index(drop=True)
