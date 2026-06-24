@@ -169,7 +169,7 @@ def main() -> None:
     mst_edges = None
 
     if needs_distance:
-        distance_matrix = sklearn_brute_distance_matrix(X)
+        distance_matrix = np.ascontiguousarray(sklearn_brute_distance_matrix(X), dtype=np.float32)
         if args.distance_matrix_out:
             write_float32_array(args.distance_matrix_out, distance_matrix)
 

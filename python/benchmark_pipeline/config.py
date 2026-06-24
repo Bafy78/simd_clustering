@@ -75,7 +75,7 @@ def default_config() -> BenchmarkConfig:
             cpp_hdbscan_cases=("hdbscan_static",),
             run_python_hdbscan=True,
             hdbscan_references=("sklearn_brute",),
-            hdbscan_stages=("distance",),
+            hdbscan_stages=("distance", "core",),
             run_cachegrind=True,
             cachegrind_I1="32768,8,64",
             cachegrind_D1="49152,12,64",

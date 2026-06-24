@@ -412,9 +412,56 @@ def hdbscan_distance_stage_metrics(
     }
 
 
-def write_hdbscan_distance_stage_metrics(
+def hdbscan_core_stage_metrics(
+    core_distances: ArrayLike,
+    *,
+    min_samples: int,
+    language: str,
+) -> dict[str, Any]:
+    core = np.ascontiguousarray(core_distances, dtype=np.float32)
+    if core.ndim != 1:
+        raise ValueError("HDBSCAN core-distance metrics require a 1-D vector")
+
+    return {
+        "schema_version": 1,
+        "phase": "hdbscan",
+        "language": language,
+        "stage": "core",
+        "dtype": "float32",
+        "n_samples": int(core.shape[0]),
+        "min_samples": int(min_samples),
+        "shape": [int(core.shape[0])],
+        "summary": _float32_array_summary(core),
+    }
+
+
+def hdbscan_stage_metrics(
+    stage_key: str,
+    result: ArrayLike,
+    *,
+    min_samples: int,
+    language: str,
+) -> dict[str, Any]:
+    stage_key = validate_stage_key(stage_key)
+    if stage_key == HDBSCAN_DISTANCE_STAGE_KEY:
+        return hdbscan_distance_stage_metrics(
+            result,
+            min_samples=min_samples,
+            language=language,
+        )
+    if stage_key == HDBSCAN_CORE_STAGE_KEY:
+        return hdbscan_core_stage_metrics(
+            result,
+            min_samples=min_samples,
+            language=language,
+        )
+    raise ValueError(f"HDBSCAN compact metrics are not implemented for stage {stage_key!r}")
+
+
+def write_hdbscan_stage_metrics(
     path: str,
-    distance_matrix: ArrayLike,
+    stage_key: str,
+    result: ArrayLike,
     *,
     min_samples: int,
     language: str,
@@ -422,8 +469,9 @@ def write_hdbscan_distance_stage_metrics(
     import json
     from pathlib import Path
 
-    payload = hdbscan_distance_stage_metrics(
-        distance_matrix,
+    payload = hdbscan_stage_metrics(
+        stage_key,
+        result,
         min_samples=min_samples,
         language=language,
     )
@@ -431,6 +479,22 @@ def write_hdbscan_distance_stage_metrics(
     with open(path, "w") as f:
         json.dump(payload, f, indent=2, allow_nan=True)
         f.write("\n")
+
+
+def write_hdbscan_distance_stage_metrics(
+    path: str,
+    distance_matrix: ArrayLike,
+    *,
+    min_samples: int,
+    language: str,
+) -> None:
+    write_hdbscan_stage_metrics(
+        path,
+        HDBSCAN_DISTANCE_STAGE_KEY,
+        distance_matrix,
+        min_samples=min_samples,
+        language=language,
+    )
 
 
 def run_sklearn_brute_stage(

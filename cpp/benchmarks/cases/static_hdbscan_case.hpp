@@ -2,9 +2,11 @@
 
 #include <cstddef>
 #include <stdexcept>
+#include <span>
 #include <string>
 #include <vector>
 
+#include <eve/memory/aligned_allocator.hpp>
 #include <nanobench.h>
 
 #include "../../include/hdbscan/static_d/distance.hpp"
@@ -69,22 +71,36 @@ struct static_hdbscan_case {
 
     void run_once() {
         if (stage_ == "distance") {
-            hdbscan_static_euclidean_distance_matrix<D>(
-                raw_aos_data_,
-                N_,
+            euclidean_distance_matrix<D>(
+                samples_,
                 distance_matrix_
             );
             return;
         }
 
+        if (stage_ == "core") {
+            core_distances(
+                std::span<const float>(distance_matrix_input_.data(), distance_matrix_input_.size()),
+                N_,
+                min_samples_,
+                core_distances_
+            );
+            return;
+        }
+
         throw std::invalid_argument(
-            "static_hdbscan_case only implements stage 'distance' for now"
+            "static_hdbscan_case only implements stages 'distance' and 'core' for now"
         );
     }
 
     void keep_alive() const {
-        ankerl::nanobench::doNotOptimizeAway(distance_matrix_.data());
-        ankerl::nanobench::doNotOptimizeAway(distance_matrix_.size());
+        if (stage_ == "distance") {
+            ankerl::nanobench::doNotOptimizeAway(distance_matrix_.data());
+            ankerl::nanobench::doNotOptimizeAway(distance_matrix_.size());
+        } else if (stage_ == "core") {
+            ankerl::nanobench::doNotOptimizeAway(core_distances_.data());
+            ankerl::nanobench::doNotOptimizeAway(core_distances_.size());
+        }
         ankerl::nanobench::doNotOptimizeAway(min_samples_);
     }
 
@@ -92,10 +108,21 @@ struct static_hdbscan_case {
         if (stage_ == "distance") {
             hdbscan_metrics::write_hdbscan_distance_metrics(
                 metrics_json_out_,
-                distance_matrix_,
+                std::span<const float>(distance_matrix_.data(), distance_matrix_.size()),
                 N_,
                 min_samples_
             );
+            return;
+        }
+
+        if (stage_ == "core") {
+            hdbscan_metrics::write_hdbscan_core_metrics(
+                metrics_json_out_,
+                std::span<const float>(core_distances_.data(), core_distances_.size()),
+                N_,
+                min_samples_
+            );
+            return;
         }
     }
 
@@ -108,21 +135,29 @@ private:
     )
         : stage_(stage),
           N_(N),
-          min_samples_(min_samples) {
-        if (stage_ != "distance") {
+          min_samples_(min_samples),
+          samples_(eve::algo::no_init, stage == "distance" ? N : 0) {
+        if (stage_ != "distance" && stage_ != "core") {
             throw std::invalid_argument(
-                "static_hdbscan_case only implements stage 'distance' for now"
+                "static_hdbscan_case only implements stages 'distance' and 'core' for now"
             );
         }
 
-        raw_aos_data_ = read_aos_f32(input_bin, N_, D);
+        if (stage_ == "distance") {
+            const auto raw_aos_data = read_aos_f32(input_bin, N_, D);
+            copy_aos_to_static_samples<D>(raw_aos_data, N_, samples_);
+        } else if (stage_ == "core") {
+            distance_matrix_input_ = read_binary_f32(input_bin, N_ * N_);
+        }
     }
 
     std::string stage_;
     std::size_t N_ = 0;
     std::size_t min_samples_ = 0;
-    std::vector<float> raw_aos_data_;
-    std::vector<float> distance_matrix_;
+    static_samples_soa_vector<D> samples_;
+    std::vector<float> distance_matrix_input_;
+    std::vector<float, eve::aligned_allocator<float>> distance_matrix_;
+    std::vector<float, eve::aligned_allocator<float>> core_distances_;
 
     std::string metrics_json_out_;
     std::string nanobench_json_out_;

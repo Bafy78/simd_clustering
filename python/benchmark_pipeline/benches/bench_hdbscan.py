@@ -15,7 +15,7 @@ from benchmark_pipeline.hdbscan_reference import (
     validate_hdbscan_reference_key,
     validate_min_samples,
     validate_stage_key,
-    write_hdbscan_distance_stage_metrics,
+    write_hdbscan_stage_metrics,
 )
 
 np = None
@@ -48,7 +48,7 @@ def prepare_stage_input(X, stage_key: str, min_samples: int):
     if stage_key == "full":
         return (X,)
 
-    distance_matrix = sklearn_brute_distance_matrix(X)
+    distance_matrix = np.ascontiguousarray(sklearn_brute_distance_matrix(X), dtype=np.float32)
     if stage_key == "core":
         return (distance_matrix,)
 
@@ -190,9 +190,10 @@ def main() -> None:
         prepared_input = prepare_stage_input(X, args.stage, args.min_samples)
         result = run_prepared_stage(args.stage, prepared_input, args.min_samples)
 
-        if args.stage == "distance":
-            write_hdbscan_distance_stage_metrics(
+        if args.stage in {"distance", "core"}:
+            write_hdbscan_stage_metrics(
                 args.metrics_file,
+                args.stage,
                 result,
                 min_samples=args.min_samples,
                 language="py",

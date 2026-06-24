@@ -192,4 +192,35 @@ inline void write_hdbscan_distance_metrics(
     out << "}\n";
 }
 
+inline void write_hdbscan_core_metrics(
+    const std::string& filename,
+    std::span<const float> core_distances,
+    std::size_t N,
+    std::size_t min_samples
+) {
+    if (core_distances.size() != N) {
+        throw std::runtime_error("HDBSCAN core metrics vector size does not match N");
+    }
+
+    std::ofstream out(filename);
+    if (!out) {
+        throw std::runtime_error("Could not open HDBSCAN metrics output file: " + filename);
+    }
+
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+    out << "{\n";
+    out << "  \"schema_version\": 1,\n";
+    out << "  \"phase\": \"hdbscan\",\n";
+    out << "  \"language\": \"cpp\",\n";
+    out << "  \"stage\": \"core\",\n";
+    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"n_samples\": " << N << ",\n";
+    out << "  \"min_samples\": " << min_samples << ",\n";
+    out << "  \"shape\": [" << N << "],\n";
+    out << "  \"summary\": {\n";
+    write_float_vector_summary_json(out, core_distances, "    ");
+    out << "  }\n";
+    out << "}\n";
+}
+
 } // namespace hdbscan_metrics
