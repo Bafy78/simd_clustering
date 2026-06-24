@@ -15,6 +15,8 @@ from typing import Any, Literal
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from sklearn.cluster._hdbscan.hdbscan import (  # type: ignore[reportPrivateImportUsage]
+    HIERARCHY_dtype,
+    MST_edge_dtype,
     _brute_mst,
     _process_mst,
     mutual_reachability_graph,
@@ -116,6 +118,53 @@ def sklearn_brute_mutual_reachability_matrix(
     return np.asarray(result, dtype=np.float32, order="C")
 
 
+def as_float32_mst_edges(mst_edges: ArrayLike) -> NDArray[Any]:
+    """Return sklearn MST-edge dtype with float32-rounded edge weights."""
+    edges = np.asarray(mst_edges)
+    rounded = np.empty(edges.shape[0], dtype=MST_edge_dtype)
+
+    if edges.dtype.names is not None:
+        left = edges["current_node"]
+        right = edges["next_node"]
+        distance = edges["distance"]
+    else:
+        if edges.ndim != 2 or edges.shape[1] < 3:
+            raise ValueError(f"Expected MST edges with at least 3 columns, got shape {edges.shape}")
+        left = edges[:, 0]
+        right = edges[:, 1]
+        distance = edges[:, 2]
+
+    rounded["current_node"] = np.asarray(left, dtype=np.intp)
+    rounded["next_node"] = np.asarray(right, dtype=np.intp)
+    rounded["distance"] = np.asarray(distance, dtype=np.float32).astype(np.float64)
+    return rounded
+
+
+def as_float32_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDArray[Any]:
+    """Return sklearn hierarchy dtype with float32-rounded merge distances."""
+    tree = np.asarray(single_linkage_tree)
+    rounded = np.empty(tree.shape[0], dtype=HIERARCHY_dtype)
+
+    if tree.dtype.names is not None:
+        left = tree["left_node"]
+        right = tree["right_node"]
+        distance = tree["value"]
+        cluster_size = tree["cluster_size"]
+    else:
+        if tree.ndim != 2 or tree.shape[1] < 4:
+            raise ValueError(f"Expected single linkage tree with at least 4 columns, got shape {tree.shape}")
+        left = tree[:, 0]
+        right = tree[:, 1]
+        distance = tree[:, 2]
+        cluster_size = tree[:, 3]
+
+    rounded["left_node"] = np.asarray(left, dtype=np.intp)
+    rounded["right_node"] = np.asarray(right, dtype=np.intp)
+    rounded["value"] = np.asarray(distance, dtype=np.float32).astype(np.float64)
+    rounded["cluster_size"] = np.asarray(cluster_size, dtype=np.intp)
+    return rounded
+
+
 def sklearn_brute_mst_edges(
     mutual_reachability_matrix: ArrayLike,
     *,
@@ -129,13 +178,15 @@ def sklearn_brute_mst_edges(
     )
     validate_min_samples(min_samples, mutual_reachability.shape[0])
     with threadpool_limits(limits=1):
-        return _brute_mst(mutual_reachability, min_samples=min_samples)
+        mst_edges = _brute_mst(mutual_reachability, min_samples=min_samples)
+    return as_float32_mst_edges(mst_edges)
 
 
 def sklearn_brute_single_linkage_tree(mst_edges: NDArray[Any]) -> NDArray[Any]:
     """linkage: MST edge list -> single linkage tree."""
     with threadpool_limits(limits=1):
-        return _process_mst(np.asarray(mst_edges).copy())
+        tree = _process_mst(as_float32_mst_edges(mst_edges))
+    return as_float32_single_linkage_tree(tree)
 
 
 def sklearn_brute_select_clusters(
@@ -144,9 +195,10 @@ def sklearn_brute_select_clusters(
     min_samples: int,
 ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
     """select: single linkage tree -> labels and probabilities."""
+    tree = as_float32_single_linkage_tree(single_linkage_tree)
     with threadpool_limits(limits=1):
         labels, probabilities = tree_to_labels(
-            single_linkage_tree,
+            tree,
             min_samples,
             "eom",
             False,

@@ -1,7 +1,14 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from benchmark_metadata import FULL_STAGE_KEY, HDBSCAN_DISTANCE_STAGE_KEY, HDBSCAN_MREACH_STAGE_KEY
+from benchmark_metadata import (
+    FULL_STAGE_KEY,
+    HDBSCAN_DISTANCE_STAGE_KEY,
+    HDBSCAN_LINKAGE_STAGE_KEY,
+    HDBSCAN_MREACH_STAGE_KEY,
+    HDBSCAN_MST_STAGE_KEY,
+    HDBSCAN_SELECT_STAGE_KEY,
+)
 from benchmark_pipeline.gmm_covariance import SUPPORTED_GMM_COVARIANCE_TYPES
 from benchmark_pipeline.paths import BIN_DIR, repo_path
 
@@ -142,7 +149,13 @@ CPP_CASES: dict[str, CppCase] = {
         phase_key="hdbscan",
         variant_key="static",
         display_name="HDBSCAN static C++",
-        stage_keys=(HDBSCAN_DISTANCE_STAGE_KEY, HDBSCAN_MREACH_STAGE_KEY,),
+        stage_keys=(
+            HDBSCAN_DISTANCE_STAGE_KEY,
+            HDBSCAN_MREACH_STAGE_KEY,
+            HDBSCAN_MST_STAGE_KEY,
+            HDBSCAN_LINKAGE_STAGE_KEY,
+            HDBSCAN_SELECT_STAGE_KEY,
+        ),
     ),
 }
 

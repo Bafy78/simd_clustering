@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -237,6 +238,156 @@ inline void write_hdbscan_mreach_metrics(
     out << "  },\n";
     out << "  \"diagonal_summary\": {\n";
     write_float_vector_summary_json(out, std::span<const float>(diagonal.data(), diagonal.size()), "    ");
+    out << "  }\n";
+    out << "}\n";
+}
+
+
+inline void write_hdbscan_mst_metrics(
+    const std::string& filename,
+    std::span<const float> flat_edges,
+    std::span<const float> edge_weights,
+    std::size_t N,
+    std::size_t min_samples
+) {
+    const std::size_t expected_edges = N == 0 ? 0 : N - 1;
+    if (edge_weights.size() != expected_edges) {
+        throw std::runtime_error("HDBSCAN MST metrics edge weight count does not match N - 1");
+    }
+    if (flat_edges.size() != expected_edges * 3) {
+        throw std::runtime_error("HDBSCAN MST metrics flat edge size does not match 3 * (N - 1)");
+    }
+
+    std::ofstream out(filename);
+    if (!out) {
+        throw std::runtime_error("Could not open HDBSCAN metrics output file: " + filename);
+    }
+
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+    out << "{\n";
+    out << "  \"schema_version\": 1,\n";
+    out << "  \"phase\": \"hdbscan\",\n";
+    out << "  \"language\": \"cpp\",\n";
+    out << "  \"stage\": \"mst\",\n";
+    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"n_samples\": " << N << ",\n";
+    out << "  \"min_samples\": " << min_samples << ",\n";
+    out << "  \"edge_count\": " << expected_edges << ",\n";
+    out << "  \"shape\": [" << expected_edges << ", 3],\n";
+    out << "  \"summary\": {\n";
+    write_float_vector_summary_json(out, flat_edges, "    ");
+    out << "  },\n";
+    out << "  \"weight_summary\": {\n";
+    write_float_vector_summary_json(out, edge_weights, "    ");
+    out << "  }\n";
+    out << "}\n";
+}
+
+inline void write_hdbscan_linkage_metrics(
+    const std::string& filename,
+    std::span<const float> flat_tree,
+    std::size_t N,
+    std::size_t min_samples
+) {
+    const std::size_t expected_rows = N == 0 ? 0 : N - 1;
+    if (flat_tree.size() != expected_rows * 4) {
+        throw std::runtime_error("HDBSCAN linkage metrics flat tree size does not match 4 * (N - 1)");
+    }
+
+    std::vector<float> distances;
+    std::vector<float> cluster_sizes;
+    distances.reserve(expected_rows);
+    cluster_sizes.reserve(expected_rows);
+    for (std::size_t i = 0; i < expected_rows; ++i) {
+        distances.push_back(flat_tree[i * 4 + 2]);
+        cluster_sizes.push_back(flat_tree[i * 4 + 3]);
+    }
+
+    std::ofstream out(filename);
+    if (!out) {
+        throw std::runtime_error("Could not open HDBSCAN metrics output file: " + filename);
+    }
+
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+    out << "{\n";
+    out << "  \"schema_version\": 1,\n";
+    out << "  \"phase\": \"hdbscan\",\n";
+    out << "  \"language\": \"cpp\",\n";
+    out << "  \"stage\": \"linkage\",\n";
+    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"n_samples\": " << N << ",\n";
+    out << "  \"min_samples\": " << min_samples << ",\n";
+    out << "  \"row_count\": " << expected_rows << ",\n";
+    out << "  \"shape\": [" << expected_rows << ", 4],\n";
+    out << "  \"summary\": {\n";
+    write_float_vector_summary_json(out, flat_tree, "    ");
+    out << "  },\n";
+    out << "  \"distance_summary\": {\n";
+    write_float_vector_summary_json(out, std::span<const float>(distances.data(), distances.size()), "    ");
+    out << "  },\n";
+    out << "  \"cluster_size_summary\": {\n";
+    write_float_vector_summary_json(out, std::span<const float>(cluster_sizes.data(), cluster_sizes.size()), "    ");
+    out << "  }\n";
+    out << "}\n";
+}
+
+
+inline void write_hdbscan_select_metrics(
+    const std::string& filename,
+    std::span<const std::int32_t> labels,
+    std::span<const float> probabilities,
+    std::size_t N,
+    std::size_t min_samples
+) {
+    if (labels.size() != N || probabilities.size() != N) {
+        throw std::runtime_error("HDBSCAN select metrics label/probability size does not match N");
+    }
+
+    std::vector<float> flat;
+    std::vector<float> label_values;
+    flat.reserve(N * 2);
+    label_values.reserve(N);
+
+    std::set<std::int32_t> clusters;
+    std::size_t noise_count = 0;
+    for (std::size_t i = 0; i < N; ++i) {
+        const std::int32_t label = labels[i];
+        const float label_float = static_cast<float>(label);
+        label_values.push_back(label_float);
+        flat.push_back(label_float);
+        flat.push_back(probabilities[i]);
+        if (label < 0) {
+            ++noise_count;
+        } else {
+            clusters.insert(label);
+        }
+    }
+
+    std::ofstream out(filename);
+    if (!out) {
+        throw std::runtime_error("Could not open HDBSCAN metrics output file: " + filename);
+    }
+
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+    out << "{\n";
+    out << "  \"schema_version\": 1,\n";
+    out << "  \"phase\": \"hdbscan\",\n";
+    out << "  \"language\": \"cpp\",\n";
+    out << "  \"stage\": \"select\",\n";
+    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"n_samples\": " << N << ",\n";
+    out << "  \"min_samples\": " << min_samples << ",\n";
+    out << "  \"shape\": [" << N << ", 2],\n";
+    out << "  \"noise_count\": " << noise_count << ",\n";
+    out << "  \"cluster_count\": " << clusters.size() << ",\n";
+    out << "  \"summary\": {\n";
+    write_float_vector_summary_json(out, std::span<const float>(flat.data(), flat.size()), "    ");
+    out << "  },\n";
+    out << "  \"label_summary\": {\n";
+    write_float_vector_summary_json(out, std::span<const float>(label_values.data(), label_values.size()), "    ");
+    out << "  },\n";
+    out << "  \"probability_summary\": {\n";
+    write_float_vector_summary_json(out, probabilities, "    ");
     out << "  }\n";
     out << "}\n";
 }

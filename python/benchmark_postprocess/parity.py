@@ -720,6 +720,10 @@ def compute_hdbscan_comparison(
     summary_checks, summary_details = _summary_comparison(cpp_summary, py_summary)
 
     checks = dict(summary_checks)
+    diagonal_details = None
+    label_details = None
+    probability_details = None
+
     if stage_key == "distance":
         checks.update(
             {
@@ -753,8 +757,23 @@ def compute_hdbscan_comparison(
                 **{f"diagonal_{name}": value for name, value in diagonal_checks.items()},
             }
         )
-    else:
-        diagonal_details = None
+    elif stage_key == "select":
+        label_checks, label_details = _summary_comparison(
+            cpp.get("label_summary", {}),
+            py.get("label_summary", {}),
+        )
+        probability_checks, probability_details = _summary_comparison(
+            cpp.get("probability_summary", {}),
+            py.get("probability_summary", {}),
+        )
+        checks.update(
+            {
+                "noise_count_equal": int(cpp.get("noise_count", -1)) == int(py.get("noise_count", -2)),
+                "cluster_count_equal": int(cpp.get("cluster_count", -1)) == int(py.get("cluster_count", -2)),
+                **{f"label_{name}": value for name, value in label_checks.items()},
+                **{f"probability_{name}": value for name, value in probability_checks.items()},
+            }
+        )
 
     status, failure_reasons = _status_from_checks(checks)
 
@@ -784,8 +803,19 @@ def compute_hdbscan_comparison(
         "cpp_symmetry_max_abs": float(cpp.get("symmetry_max_abs", 0.0)),
         "python_symmetry_max_abs": float(py.get("symmetry_max_abs", 0.0)),
     }
-    if stage_key == "mreach":
+    if stage_key == "mreach" and diagonal_details is not None:
         result["diagonal_summary_scalar_diffs"] = diagonal_details["scalar_diffs"]
         result["diagonal_probe_value_max_abs_diff"] = diagonal_details["probe_value_max_abs_diff"]
         result["diagonal_hash_equal"] = diagonal_details["hash_equal"]
+    if stage_key == "select":
+        result["cpp_noise_count"] = int(cpp.get("noise_count", -1))
+        result["python_noise_count"] = int(py.get("noise_count", -1))
+        result["cpp_cluster_count"] = int(cpp.get("cluster_count", -1))
+        result["python_cluster_count"] = int(py.get("cluster_count", -1))
+        if label_details is not None:
+            result["label_hash_equal"] = label_details["hash_equal"]
+            result["label_probe_value_max_abs_diff"] = label_details["probe_value_max_abs_diff"]
+        if probability_details is not None:
+            result["probability_hash_equal"] = probability_details["hash_equal"]
+            result["probability_probe_value_max_abs_diff"] = probability_details["probe_value_max_abs_diff"]
     return result

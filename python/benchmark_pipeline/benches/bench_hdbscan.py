@@ -164,7 +164,7 @@ def main() -> None:
         prepared_input = prepare_stage_input(X, args.stage, args.min_samples)
         result = run_prepared_stage(args.stage, prepared_input, args.min_samples)
 
-        if args.stage in {"distance", "mreach"}:
+        if args.stage in {"distance", "mreach", "mst", "linkage", "select"}:
             write_hdbscan_stage_metrics(
                 args.metrics_file,
                 args.stage,
