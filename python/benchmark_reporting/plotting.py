@@ -1059,9 +1059,12 @@ def plot_clustered_heatmap_grid(
     heatmap_kwargs: dict[str, Any],
     cbar_kws: dict[str, Any],
     annot_col: str | None = None,
+    annot: bool = True,
     fmt: str = ".1f",
     legend_handles=None,
     post_heatmap: Callable | None = None,
+    cmap: str = "turbo",
+    show: bool = True,
 ):
     fig, axes = create_subplot_grid(
         len(clusters),
@@ -1081,7 +1084,9 @@ def plot_clustered_heatmap_grid(
             value_col,
         )
 
-        if annot_col is None:
+        if not annot:
+            annot_arg = False
+        elif annot_col is None:
             annot_arg = True
         else:
             annot_arg, _ = make_cluster_pivot(
@@ -1090,14 +1095,14 @@ def plot_clustered_heatmap_grid(
                 reference_pivot=heat_raw,
             )
 
-        show_cbar = i % 2 == 1
+        show_cbar = i % 2 == 1 or len(clusters) == 1
         cbar_ax = ax.inset_axes([1.04, 0, 0.05, 1]) if show_cbar else None
 
         sns.heatmap(
             heat,
             annot=annot_arg,
             fmt=fmt,
-            cmap="turbo",
+            cmap=cmap,
             ax=ax,
             cbar=show_cbar,
             cbar_ax=cbar_ax,
@@ -1139,7 +1144,9 @@ def plot_clustered_heatmap_grid(
     )
 
     plt.tight_layout()
-    plt.show()
+    if show:
+        plt.show()
+    return fig
 
 
 def add_facet_suptitle(

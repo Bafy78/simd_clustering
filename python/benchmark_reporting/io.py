@@ -48,27 +48,24 @@ def load_exclusion_summary(
 
     for exclusion in summary.get("exclusions", []):
         phase_key = exclusion.get("phase_key")
-        stage_key = exclusion["stage_key"]
-        records.append(
-            {
-                COL_PHASE: _phase_display_name(
-                    phase_key,
-                    exclusion.get("phase", phase_key),
-                ),
-                COL_STAGE: _stage_display_name(
-                    stage_key,
-                    exclusion.get("stage"),
-                ),
-                COL_DIMENSIONS: int(exclusion["dimensions"]),
-                COL_SAMPLES: int(exclusion["samples"]),
-                COL_CLUSTERS: int(exclusion["clusters"]),
-                COL_EXCLUSION_REASON: exclusion.get("reason", ""),
-                COL_EXCLUSION_RULES: ", ".join(
-                    str(rule.get("rule_index"))
-                    for rule in exclusion.get("matched_rules", [])
-                ),
-            }
-        )
+        for _stage_key, stage_name in _record_stage_entries(exclusion):
+            records.append(
+                {
+                    COL_PHASE: _phase_display_name(
+                        phase_key,
+                        exclusion.get("phase", phase_key),
+                    ),
+                    COL_STAGE: stage_name,
+                    COL_DIMENSIONS: int(exclusion["dimensions"]),
+                    COL_SAMPLES: int(exclusion["samples"]),
+                    COL_CLUSTERS: int(exclusion["clusters"]),
+                    COL_EXCLUSION_REASON: exclusion.get("reason", ""),
+                    COL_EXCLUSION_RULES: ", ".join(
+                        str(rule.get("rule_index"))
+                        for rule in exclusion.get("matched_rules", [])
+                    ),
+                }
+            )
 
     df = pd.DataFrame(records)
     if df.empty:
@@ -108,6 +105,27 @@ def _cpp_case_phase_variant(cpp_case: str | None) -> tuple[str | None, str | Non
     return None, None
 
 
+def _record_stage_entries(record: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return display-ready stage entries for summary records.
+
+    Current summaries usually store ``stage_key`` plus optional ``stage``.
+    Some compile-artifact records may store ``stage_keys`` because one binary
+    can serve several stages. Legacy summaries had no stage metadata at all;
+    reporting treats those records as belonging to the synthetic Full stage.
+    """
+    if "stage_key" in record:
+        stage_key = str(record.get("stage_key") or FULL_STAGE_KEY)
+        return [(stage_key, _stage_display_name(stage_key, record.get("stage")))]
+
+    stage_keys = record.get("stage_keys")
+    if isinstance(stage_keys, list) and stage_keys:
+        return [
+            (str(stage_key), _stage_display_name(str(stage_key)))
+            for stage_key in stage_keys
+        ]
+
+    return [(FULL_STAGE_KEY, _stage_display_name(FULL_STAGE_KEY))]
+
 
 def load_compile_artifact_summary(
     summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
@@ -120,25 +138,25 @@ def load_compile_artifact_summary(
     for result in compile_artifacts.get("records", []):
         phase_key = result.get("phase_key")
         variant_key = result.get("variant_key")
-        stage_key = result["stage_key"]
         executable_size_bytes = int(result["executable_size_bytes"])
 
-        rows.append(
-            {
-                COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
-                COL_STAGE: _stage_display_name(stage_key, result.get("stage")),
-                COL_VARIANT: _variant_display_name(variant_key),
-                COL_DIMENSIONS: int(result["D"]),
-                COL_CPP_CASE: result.get("cpp_case"),
-                COL_COMPILER_EXECUTABLE: result.get("compiler_executable"),
-                COL_COMPILER_VERSION: result.get("compiler_version"),
-                COL_ARCHITECTURE: result.get("architecture"),
-                COL_ARCHITECTURE_FLAG: result.get("architecture_flag"),
-                COL_EXECUTABLE_SIZE_BYTES: executable_size_bytes,
-                COL_EXECUTABLE_SIZE_MIB: executable_size_bytes / (1024 ** 2),
-                "Binary": _file_link(result.get("binary_path")),
-            }
-        )
+        for _stage_key, stage_name in _record_stage_entries(result):
+            rows.append(
+                {
+                    COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
+                    COL_STAGE: stage_name,
+                    COL_VARIANT: _variant_display_name(variant_key),
+                    COL_DIMENSIONS: int(result["D"]),
+                    COL_CPP_CASE: result.get("cpp_case"),
+                    COL_COMPILER_EXECUTABLE: result.get("compiler_executable"),
+                    COL_COMPILER_VERSION: result.get("compiler_version"),
+                    COL_ARCHITECTURE: result.get("architecture"),
+                    COL_ARCHITECTURE_FLAG: result.get("architecture_flag"),
+                    COL_EXECUTABLE_SIZE_BYTES: executable_size_bytes,
+                    COL_EXECUTABLE_SIZE_MIB: executable_size_bytes / (1024 ** 2),
+                    "Binary": _file_link(result.get("binary_path")),
+                }
+            )
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -149,6 +167,7 @@ def load_compile_artifact_summary(
     return df.sort_values(
         [COL_PHASE, COL_STAGE, COL_VARIANT, COL_DIMENSIONS]
     ).reset_index(drop=True)
+
 
 def load_spill_detection_summary(
     summary_json: str | Path = DEFAULT_BENCHMARK_SUMMARY_JSON,
@@ -199,48 +218,48 @@ def load_cachegrind_summary(
     for result in cachegrind.get("records", []):
         phase_key = result.get("phase_key")
         variant_key = result.get("variant_key")
-        stage_key = result["stage_key"]
         params_key = result.get("params_key", NO_PARAMS)
         events = result.get("events", {})
         derived = result.get("derived", {})
         cache_model = result.get("cache_model", {})
         files = result.get("files", {})
 
-        rows.append(
-            {
-                COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
-                COL_STAGE: _stage_display_name(stage_key, result.get("stage")),
-                COL_VARIANT: _variant_display_name(variant_key),
-                COL_PARAMS: _params_display_name(params_key),
-                COL_CPP_CASE: result.get("cpp_case"),
-                COL_DIMENSIONS: int(result["D"]),
-                COL_SAMPLES: int(result["N"]),
-                COL_CLUSTERS: int(result["K"]),
-                COL_CACHEGRIND_I1: cache_model.get("I1"),
-                COL_CACHEGRIND_D1: cache_model.get("D1"),
-                COL_CACHEGRIND_LL: cache_model.get("LL"),
-                COL_CACHEGRIND_IR: int(events.get("Ir", 0)),
-                COL_CACHEGRIND_I1MR: int(events.get("I1mr", 0)),
-                COL_CACHEGRIND_ILMR: int(events.get("ILmr", 0)),
-                COL_CACHEGRIND_DR: int(events.get("Dr", 0)),
-                COL_CACHEGRIND_D1MR: int(events.get("D1mr", 0)),
-                COL_CACHEGRIND_DLMR: int(events.get("DLmr", 0)),
-                COL_CACHEGRIND_DW: int(events.get("Dw", 0)),
-                COL_CACHEGRIND_D1MW: int(events.get("D1mw", 0)),
-                COL_CACHEGRIND_DLMW: int(events.get("DLmw", 0)),
-                COL_CACHEGRIND_DATA_REFS: derived.get("data_refs"),
-                COL_CACHEGRIND_D1_DATA_MISSES: derived.get("d1_data_misses"),
-                COL_CACHEGRIND_LL_DATA_MISSES: derived.get("ll_data_misses"),
-                COL_CACHEGRIND_D1_DATA_MISS_RATE: derived.get("d1_data_miss_rate"),
-                COL_CACHEGRIND_LL_DATA_MISS_RATE: derived.get("ll_data_miss_rate"),
-                COL_CACHEGRIND_I1_MISS_RATE: derived.get("instruction_l1_miss_rate"),
-                COL_CACHEGRIND_ILL_MISS_RATE: derived.get("instruction_ll_miss_rate"),
-                "Raw Cachegrind": _file_link(files.get("raw")),
-                "Annotated Cachegrind": _file_link(files.get("annotated")),
-                "Valgrind stderr": _file_link(files.get("stderr")),
-                "Metrics": _file_link(files.get("metrics")),
-            }
-        )
+        for _stage_key, stage_name in _record_stage_entries(result):
+            rows.append(
+                {
+                    COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
+                    COL_STAGE: stage_name,
+                    COL_VARIANT: _variant_display_name(variant_key),
+                    COL_PARAMS: _params_display_name(params_key),
+                    COL_CPP_CASE: result.get("cpp_case"),
+                    COL_DIMENSIONS: int(result["D"]),
+                    COL_SAMPLES: int(result["N"]),
+                    COL_CLUSTERS: int(result["K"]),
+                    COL_CACHEGRIND_I1: cache_model.get("I1"),
+                    COL_CACHEGRIND_D1: cache_model.get("D1"),
+                    COL_CACHEGRIND_LL: cache_model.get("LL"),
+                    COL_CACHEGRIND_IR: int(events.get("Ir", 0)),
+                    COL_CACHEGRIND_I1MR: int(events.get("I1mr", 0)),
+                    COL_CACHEGRIND_ILMR: int(events.get("ILmr", 0)),
+                    COL_CACHEGRIND_DR: int(events.get("Dr", 0)),
+                    COL_CACHEGRIND_D1MR: int(events.get("D1mr", 0)),
+                    COL_CACHEGRIND_DLMR: int(events.get("DLmr", 0)),
+                    COL_CACHEGRIND_DW: int(events.get("Dw", 0)),
+                    COL_CACHEGRIND_D1MW: int(events.get("D1mw", 0)),
+                    COL_CACHEGRIND_DLMW: int(events.get("DLmw", 0)),
+                    COL_CACHEGRIND_DATA_REFS: derived.get("data_refs"),
+                    COL_CACHEGRIND_D1_DATA_MISSES: derived.get("d1_data_misses"),
+                    COL_CACHEGRIND_LL_DATA_MISSES: derived.get("ll_data_misses"),
+                    COL_CACHEGRIND_D1_DATA_MISS_RATE: derived.get("d1_data_miss_rate"),
+                    COL_CACHEGRIND_LL_DATA_MISS_RATE: derived.get("ll_data_miss_rate"),
+                    COL_CACHEGRIND_I1_MISS_RATE: derived.get("instruction_l1_miss_rate"),
+                    COL_CACHEGRIND_ILL_MISS_RATE: derived.get("instruction_ll_miss_rate"),
+                    "Raw Cachegrind": _file_link(files.get("raw")),
+                    "Annotated Cachegrind": _file_link(files.get("annotated")),
+                    "Valgrind stderr": _file_link(files.get("stderr")),
+                    "Metrics": _file_link(files.get("metrics")),
+                }
+            )
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -249,7 +268,15 @@ def load_cachegrind_summary(
     df = _apply_phase_stage_categories(df)
 
     return df.sort_values(
-        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+        [
+            COL_PHASE,
+            COL_STAGE,
+            COL_VARIANT,
+            COL_PARAMS,
+            COL_DIMENSIONS,
+            COL_SAMPLES,
+            COL_CLUSTERS,
+        ]
     ).reset_index(drop=True)
 
 
