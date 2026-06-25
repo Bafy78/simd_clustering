@@ -89,6 +89,26 @@ def _clang_resolved_native_architecture(compiler: str) -> str | None:
     return value
 
 
+def compiler_version(compiler: str) -> str | None:
+    result = subprocess.run(
+        [compiler, "--version"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+
+    if result.returncode != 0:
+        return None
+
+    output = "\n".join(
+        line.rstrip()
+        for stream in (result.stdout, result.stderr)
+        for line in stream.splitlines()
+    ).strip()
+
+    return output or None
+
+
 def resolved_compiled_architecture(command: list[str]) -> str:
     architecture_option = _architecture_option(command)
     if architecture_option is None:
@@ -129,6 +149,7 @@ def compile_artifact_record(
     if not binary.exists():
         raise FileNotFoundError(f"Compiled binary not found: {binary}")
 
+    compiler_executable = command[0]
     architecture = resolved_compiled_architecture(command)
     architecture_option = _architecture_option(command)
     if architecture_option is None:
@@ -143,6 +164,8 @@ def compile_artifact_record(
         "phase_key": case.phase_key,
         "stage_keys": list(case.stage_keys),
         "variant_key": case.variant_key,
+        "compiler_executable": compiler_executable,
+        "compiler_version": compiler_version(compiler_executable),
         "architecture": architecture,
         "architecture_flag": f"{option}={value}",
         "executable_size_bytes": int(binary.stat().st_size),

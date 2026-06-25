@@ -561,6 +561,14 @@ def build_summary(
             "speedup_definition": "reference_time / cpp_time",
             "compile_artifacts": {
                 "source": "compile_artifacts.json",
+                "compiler_executable_definition": (
+                    "The first executable in the C++ compile command captured for the "
+                    "nanobench binary, for example g++-14 or clang++-18."
+                ),
+                "compiler_version_definition": (
+                    "The complete --version banner reported by compiler_executable "
+                    "when the binary was compiled."
+                ),
                 "architecture_definition": (
                     "Resolved value of the architecture selection flag used by the C++ "
                     "compile command, so -march=native is reported as the compiler's "

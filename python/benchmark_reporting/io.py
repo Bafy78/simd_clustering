@@ -130,6 +130,8 @@ def load_compile_artifact_summary(
                 COL_VARIANT: _variant_display_name(variant_key),
                 COL_DIMENSIONS: int(result["D"]),
                 COL_CPP_CASE: result.get("cpp_case"),
+                COL_COMPILER_EXECUTABLE: result.get("compiler_executable"),
+                COL_COMPILER_VERSION: result.get("compiler_version"),
                 COL_ARCHITECTURE: result.get("architecture"),
                 COL_ARCHITECTURE_FLAG: result.get("architecture_flag"),
                 COL_EXECUTABLE_SIZE_BYTES: executable_size_bytes,

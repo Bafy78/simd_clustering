@@ -42,6 +42,8 @@ COL_EXCLUSION_REASON = "Exclusion Reason"
 COL_EXCLUSION_RULES = "Exclusion Rules"
 
 COL_CPP_CASE = "C++ Case"
+COL_COMPILER_EXECUTABLE = "Compiler Executable"
+COL_COMPILER_VERSION = "Compiler Version"
 COL_ARCHITECTURE = "Architecture"
 COL_ARCHITECTURE_FLAG = "Architecture Flag"
 COL_EXECUTABLE_SIZE_BYTES = "Executable Size Bytes"
