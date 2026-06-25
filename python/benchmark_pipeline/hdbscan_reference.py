@@ -1,10 +1,10 @@
-"""scikit-learn HDBSCAN brute-path stage wrappers.
+"""HDBSCAN reference-stage wrappers.
 
-The wrappers in this module intentionally call scikit-learn's private HDBSCAN
-helpers instead of reimplementing those stages in Python. The public reference
-contract is float32 at dense stage boundaries: input data, distance matrices,
-and mutual-reachability matrices are float32. Some scikit-learn private helpers
-still require float64 internally; those wrappers promote only at the call site.
+The wrappers in this module intentionally call implementation internals rather
+than reimplementing HDBSCAN stages in Python. The public reference contract is
+float32 at dense stage boundaries: input data, distance matrices, and mutual-
+reachability matrices are float32. Some private helpers require float64
+internally; those wrappers promote only at the call site.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from threadpoolctl import threadpool_limits
 
 from benchmark_metadata import (
     FULL_STAGE_KEY,
+    HDBSCAN_CONTRIB_REFERENCE,
     HDBSCAN_DISTANCE_STAGE_KEY,
     HDBSCAN_LINKAGE_STAGE_KEY,
     HDBSCAN_MREACH_STAGE_KEY,
@@ -37,7 +38,10 @@ from benchmark_metadata import (
 )
 
 
-SUPPORTED_HDBSCAN_REFERENCE_KEYS = (SKLEARN_BRUTE_REFERENCE,)
+SUPPORTED_HDBSCAN_REFERENCE_KEYS = (
+    SKLEARN_BRUTE_REFERENCE,
+    HDBSCAN_CONTRIB_REFERENCE,
+)
 
 
 HdbscanStageKey = Literal[
@@ -81,6 +85,11 @@ def validate_stage_key(stage_key: str) -> HdbscanStageKey:
         valid = ", ".join(HDBSCAN_STAGE_KEYS)
         raise ValueError(f"Unknown HDBSCAN stage {stage_key!r}. Valid stages: {valid}")
     return stage_key  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# scikit-learn brute reference
+# ---------------------------------------------------------------------------
 
 
 def as_sklearn_brute_input(X: ArrayLike) -> NDArray[np.float32]:
@@ -234,6 +243,231 @@ def sklearn_brute_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# scikit-learn-contrib/hdbscan adapter
+# ---------------------------------------------------------------------------
+
+
+def _contrib_hdbscan_module() -> Any:
+    """Import hdbscan lazily so sklearn-only workflows can still import this module."""
+    try:
+        import hdbscan.hdbscan_ as hdbscan_contrib  # type: ignore[import-not-found]
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "The hdbscan_contrib reference requires the `hdbscan` package. "
+            "Install the project requirements or remove `hdbscan_contrib` from "
+            "hdbscan_references."
+        ) from exc
+    return hdbscan_contrib
+
+
+def contrib_internal_min_samples(min_samples: int) -> int:
+    """Map this project's self-inclusive min_samples to contrib internals.
+
+    The project and sklearn-brute contract count the sample itself. The contrib
+    generic internals use the number of non-self neighbors, so we subtract one.
+    """
+    validate_min_samples(min_samples)
+    return max(1, int(min_samples) - 1)
+
+
+def as_hdbscan_contrib_input(X: ArrayLike) -> NDArray[np.float32]:
+    """Return the float32 dense input used by the hdbscan-contrib adapter."""
+    return np.asarray(X, dtype=np.float32, order="C")
+
+
+def hdbscan_contrib_distance_matrix(X: ArrayLike) -> NDArray[np.float32]:
+    """distance: X -> dense Euclidean distance matrix for contrib/generic."""
+    X32 = as_hdbscan_contrib_input(X)
+    with threadpool_limits(limits=1):
+        distances = pairwise_distances(X32, metric="euclidean", n_jobs=1)
+    return np.asarray(distances, dtype=np.float32, order="C")
+
+
+def hdbscan_contrib_mutual_reachability_matrix(
+    distance_matrix: ArrayLike,
+    *,
+    min_samples: int,
+) -> NDArray[np.float32]:
+    """mreach: distance matrix -> hdbscan-contrib mutual reachability matrix."""
+    distances = np.asarray(distance_matrix, dtype=np.float64, order="C")
+    validate_min_samples(min_samples, distances.shape[0])
+    hdbscan_contrib = _contrib_hdbscan_module()
+    with threadpool_limits(limits=1):
+        result = hdbscan_contrib.mutual_reachability(
+            distances,
+            min_points=contrib_internal_min_samples(min_samples),
+            alpha=1.0,
+        )
+    return np.asarray(result, dtype=np.float32, order="C")
+
+
+def as_float32_plain_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float32]:
+    """Return an hdbscan-contrib-style MST array with float32 values.
+
+    The plain contrib representation is shape (n_edges, 3): left, right, weight.
+    """
+    edges = np.asarray(mst_edges)
+
+    if edges.dtype.names is not None:
+        left = edges["current_node"]
+        right = edges["next_node"]
+        distance = edges["distance"]
+    else:
+        if edges.ndim != 2 or edges.shape[1] < 3:
+            raise ValueError(f"Expected MST edges with at least 3 columns, got shape {edges.shape}")
+        left = edges[:, 0]
+        right = edges[:, 1]
+        distance = edges[:, 2]
+
+    plain = np.empty((edges.shape[0], 3), dtype=np.float32)
+    plain[:, 0] = np.asarray(left, dtype=np.float32)
+    plain[:, 1] = np.asarray(right, dtype=np.float32)
+    plain[:, 2] = np.asarray(distance, dtype=np.float32)
+    return np.ascontiguousarray(plain)
+
+
+def as_float32_plain_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDArray[np.float32]:
+    """Return a contrib-style single linkage tree with float32 values.
+
+    The plain contrib representation is shape (n_merges, 4): left, right,
+    distance, cluster_size.
+    """
+    tree = np.asarray(single_linkage_tree)
+
+    if tree.dtype.names is not None:
+        left = tree["left_node"]
+        right = tree["right_node"]
+        distance = tree["value"]
+        cluster_size = tree["cluster_size"]
+    else:
+        if tree.ndim != 2 or tree.shape[1] < 4:
+            raise ValueError(f"Expected single linkage tree with at least 4 columns, got shape {tree.shape}")
+        left = tree[:, 0]
+        right = tree[:, 1]
+        distance = tree[:, 2]
+        cluster_size = tree[:, 3]
+
+    plain = np.empty((tree.shape[0], 4), dtype=np.float32)
+    plain[:, 0] = np.asarray(left, dtype=np.float32)
+    plain[:, 1] = np.asarray(right, dtype=np.float32)
+    plain[:, 2] = np.asarray(distance, dtype=np.float32)
+    plain[:, 3] = np.asarray(cluster_size, dtype=np.float32)
+    return np.ascontiguousarray(plain)
+
+
+def hdbscan_contrib_mst_edges(
+    mutual_reachability_matrix: ArrayLike,
+    *,
+    min_samples: int,
+) -> NDArray[np.float32]:
+    """mst: mutual reachability matrix -> hdbscan-contrib MST edge list."""
+    mutual_reachability = np.asarray(
+        mutual_reachability_matrix,
+        dtype=np.float64,
+        order="C",
+    )
+    validate_min_samples(min_samples, mutual_reachability.shape[0])
+    hdbscan_contrib = _contrib_hdbscan_module()
+    with threadpool_limits(limits=1):
+        mst_edges = hdbscan_contrib.mst_linkage_core(mutual_reachability)
+    return as_float32_plain_mst_edges(mst_edges)
+
+
+def hdbscan_contrib_single_linkage_tree(mst_edges: ArrayLike) -> NDArray[np.float32]:
+    """linkage: contrib MST edge list -> contrib single linkage tree."""
+    hdbscan_contrib = _contrib_hdbscan_module()
+    edges = np.asarray(as_float32_plain_mst_edges(mst_edges), dtype=np.float64, order="C")
+    row_order = np.argsort(edges[:, 2])
+    with threadpool_limits(limits=1):
+        tree = hdbscan_contrib.label(edges[row_order, :])
+    return as_float32_plain_single_linkage_tree(tree)
+
+
+def hdbscan_contrib_select_clusters(
+    single_linkage_tree: ArrayLike,
+    *,
+    min_samples: int,
+) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+    """select: contrib single linkage tree -> labels and probabilities."""
+    tree = np.asarray(
+        as_float32_plain_single_linkage_tree(single_linkage_tree),
+        dtype=np.float64,
+        order="C",
+    )
+    validate_min_samples(min_samples, tree.shape[0] + 1)
+    # _tree_to_labels only uses X for its sample count in current contrib. Keep a
+    # dummy dense array instead of threading the original X into this isolated
+    # stage.
+    dummy_X = np.empty((tree.shape[0] + 1, 0), dtype=np.float64)
+    hdbscan_contrib = _contrib_hdbscan_module()
+    with threadpool_limits(limits=1):
+        labels, probabilities, *_ = hdbscan_contrib._tree_to_labels(
+            dummy_X,
+            tree,
+            min_cluster_size=min_samples,
+            cluster_selection_method="eom",
+            allow_single_cluster=False,
+            match_reference_implementation=False,
+            cluster_selection_epsilon=0.0,
+            cluster_selection_persistence=0.0,
+            max_cluster_size=0,
+            cluster_selection_epsilon_max=float("inf"),
+        )
+    return (
+        np.asarray(labels, dtype=np.int32, order="C"),
+        np.asarray(probabilities, dtype=np.float32, order="C"),
+    )
+
+
+def hdbscan_contrib_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult:
+    """full: X -> labels and probabilities through hdbscan-contrib/generic."""
+    X32 = as_hdbscan_contrib_input(X)
+    validate_min_samples(min_samples, X32.shape[0])
+    # hdbscan-contrib's generic Cython MST path expects double buffers. The
+    # adapter keeps float32 stage boundaries, but promotes at this call site.
+    X64 = np.asarray(X32, dtype=np.float64, order="C")
+    hdbscan_contrib = _contrib_hdbscan_module()
+    with threadpool_limits(limits=1):
+        (
+            labels,
+            probabilities,
+            _stabilities,
+            _condensed_tree,
+            single_linkage_tree,
+            _minimum_spanning_tree,
+        ) = hdbscan_contrib.hdbscan(
+            X64,
+            min_cluster_size=min_samples,
+            min_samples=contrib_internal_min_samples(min_samples),
+            alpha=1.0,
+            cluster_selection_epsilon=0.0,
+            cluster_selection_persistence=0.0,
+            max_cluster_size=0,
+            metric="euclidean",
+            p=2,
+            leaf_size=40,
+            algorithm="generic",
+            approx_min_span_tree=False,
+            gen_min_span_tree=False,
+            core_dist_n_jobs=1,
+            cluster_selection_method="eom",
+            allow_single_cluster=False,
+            match_reference_implementation=False,
+            cluster_selection_epsilon_max=float("inf"),
+        )
+    return HdbscanFullResult(
+        labels=np.asarray(labels, dtype=np.int32, order="C"),
+        probabilities=np.asarray(probabilities, dtype=np.float32, order="C"),
+        single_linkage_tree=as_float32_plain_single_linkage_tree(single_linkage_tree),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Generic reference dispatch used by benchmarks.
+# ---------------------------------------------------------------------------
+
+
 def run_sklearn_brute_stage(
     stage_key: str,
     X: ArrayLike,
@@ -284,6 +518,56 @@ def run_sklearn_brute_stage(
     raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
 
 
+def run_hdbscan_contrib_stage(
+    stage_key: str,
+    X: ArrayLike,
+    *,
+    min_samples: int,
+) -> object:
+    """Run one named hdbscan-contrib stage, including predecessors as setup."""
+    stage_key = validate_stage_key(stage_key)
+
+    if stage_key == HDBSCAN_DISTANCE_STAGE_KEY:
+        return hdbscan_contrib_distance_matrix(X)
+
+    if stage_key == FULL_STAGE_KEY:
+        return hdbscan_contrib_full(X, min_samples=min_samples)
+
+    distance_matrix = hdbscan_contrib_distance_matrix(X)
+
+    if stage_key == HDBSCAN_MREACH_STAGE_KEY:
+        return hdbscan_contrib_mutual_reachability_matrix(
+            distance_matrix,
+            min_samples=min_samples,
+        )
+
+    mutual_reachability_matrix = hdbscan_contrib_mutual_reachability_matrix(
+        distance_matrix,
+        min_samples=min_samples,
+    )
+
+    if stage_key == HDBSCAN_MST_STAGE_KEY:
+        return hdbscan_contrib_mst_edges(
+            mutual_reachability_matrix,
+            min_samples=min_samples,
+        )
+
+    mst_edges = hdbscan_contrib_mst_edges(
+        mutual_reachability_matrix,
+        min_samples=min_samples,
+    )
+
+    if stage_key == HDBSCAN_LINKAGE_STAGE_KEY:
+        return hdbscan_contrib_single_linkage_tree(mst_edges)
+
+    single_linkage_tree = hdbscan_contrib_single_linkage_tree(mst_edges)
+
+    if stage_key == HDBSCAN_SELECT_STAGE_KEY:
+        return hdbscan_contrib_select_clusters(single_linkage_tree, min_samples=min_samples)
+
+    raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
+
+
 def run_hdbscan_reference_stage(
     reference_key: str,
     stage_key: str,
@@ -295,4 +579,192 @@ def run_hdbscan_reference_stage(
     reference_key = validate_hdbscan_reference_key(reference_key)
     if reference_key == SKLEARN_BRUTE_REFERENCE:
         return run_sklearn_brute_stage(stage_key, X, min_samples=min_samples)
+    if reference_key == HDBSCAN_CONTRIB_REFERENCE:
+        return run_hdbscan_contrib_stage(stage_key, X, min_samples=min_samples)
+    raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")
+
+
+def prepare_hdbscan_reference_stage_input(
+    reference_key: str,
+    stage_key: str,
+    X: ArrayLike,
+    *,
+    min_samples: int,
+) -> tuple[object, ...]:
+    """Build predecessor artifacts outside a measured reference-stage function."""
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    stage_key = validate_stage_key(stage_key)
+
+    if stage_key in {HDBSCAN_DISTANCE_STAGE_KEY, FULL_STAGE_KEY}:
+        return (X,)
+
+    distance_matrix = reference_distance_matrix(reference_key, X)
+    if stage_key == HDBSCAN_MREACH_STAGE_KEY:
+        return (distance_matrix,)
+
+    mutual_reachability_matrix = reference_mutual_reachability_matrix(
+        reference_key,
+        distance_matrix,
+        min_samples=min_samples,
+    )
+    if stage_key == HDBSCAN_MST_STAGE_KEY:
+        return (mutual_reachability_matrix,)
+
+    mst_edges = reference_mst_edges(
+        reference_key,
+        mutual_reachability_matrix,
+        min_samples=min_samples,
+    )
+    if stage_key == HDBSCAN_LINKAGE_STAGE_KEY:
+        return (mst_edges,)
+
+    single_linkage_tree = reference_single_linkage_tree(reference_key, mst_edges)
+    if stage_key == HDBSCAN_SELECT_STAGE_KEY:
+        return (single_linkage_tree,)
+
+    raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
+
+
+def run_prepared_hdbscan_reference_stage(
+    reference_key: str,
+    stage_key: str,
+    prepared_input: tuple[object, ...],
+    *,
+    min_samples: int,
+) -> object:
+    """Run one prepared reference stage without recomputing predecessors."""
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    stage_key = validate_stage_key(stage_key)
+
+    if stage_key == HDBSCAN_DISTANCE_STAGE_KEY:
+        (X,) = prepared_input
+        return reference_distance_matrix(reference_key, X)
+
+    if stage_key == HDBSCAN_MREACH_STAGE_KEY:
+        (distance_matrix,) = prepared_input
+        return reference_mutual_reachability_matrix(
+            reference_key,
+            distance_matrix,
+            min_samples=min_samples,
+        )
+
+    if stage_key == HDBSCAN_MST_STAGE_KEY:
+        (mutual_reachability_matrix,) = prepared_input
+        return reference_mst_edges(
+            reference_key,
+            mutual_reachability_matrix,
+            min_samples=min_samples,
+        )
+
+    if stage_key == HDBSCAN_LINKAGE_STAGE_KEY:
+        (mst_edges,) = prepared_input
+        return reference_single_linkage_tree(reference_key, mst_edges)
+
+    if stage_key == HDBSCAN_SELECT_STAGE_KEY:
+        (single_linkage_tree,) = prepared_input
+        return reference_select_clusters(
+            reference_key,
+            single_linkage_tree,
+            min_samples=min_samples,
+        )
+
+    if stage_key == FULL_STAGE_KEY:
+        (X,) = prepared_input
+        return reference_full(reference_key, X, min_samples=min_samples)
+
+    raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
+
+
+def reference_distance_matrix(reference_key: str, X: ArrayLike) -> NDArray[np.float32]:
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    if reference_key == SKLEARN_BRUTE_REFERENCE:
+        return sklearn_brute_distance_matrix(X)
+    if reference_key == HDBSCAN_CONTRIB_REFERENCE:
+        return hdbscan_contrib_distance_matrix(X)
+    raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")
+
+
+def reference_mutual_reachability_matrix(
+    reference_key: str,
+    distance_matrix: ArrayLike,
+    *,
+    min_samples: int,
+) -> NDArray[np.float32]:
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    if reference_key == SKLEARN_BRUTE_REFERENCE:
+        return sklearn_brute_mutual_reachability_matrix(
+            distance_matrix,
+            min_samples=min_samples,
+        )
+    if reference_key == HDBSCAN_CONTRIB_REFERENCE:
+        return hdbscan_contrib_mutual_reachability_matrix(
+            distance_matrix,
+            min_samples=min_samples,
+        )
+    raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")
+
+
+def reference_mst_edges(
+    reference_key: str,
+    mutual_reachability_matrix: ArrayLike,
+    *,
+    min_samples: int,
+) -> NDArray[Any]:
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    if reference_key == SKLEARN_BRUTE_REFERENCE:
+        return sklearn_brute_mst_edges(
+            mutual_reachability_matrix,
+            min_samples=min_samples,
+        )
+    if reference_key == HDBSCAN_CONTRIB_REFERENCE:
+        return hdbscan_contrib_mst_edges(
+            mutual_reachability_matrix,
+            min_samples=min_samples,
+        )
+    raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")
+
+
+def reference_single_linkage_tree(
+    reference_key: str,
+    mst_edges: ArrayLike,
+) -> NDArray[Any]:
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    if reference_key == SKLEARN_BRUTE_REFERENCE:
+        return sklearn_brute_single_linkage_tree(mst_edges)
+    if reference_key == HDBSCAN_CONTRIB_REFERENCE:
+        return hdbscan_contrib_single_linkage_tree(mst_edges)
+    raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")
+
+
+def reference_select_clusters(
+    reference_key: str,
+    single_linkage_tree: ArrayLike,
+    *,
+    min_samples: int,
+) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    if reference_key == SKLEARN_BRUTE_REFERENCE:
+        return sklearn_brute_select_clusters(
+            single_linkage_tree,
+            min_samples=min_samples,
+        )
+    if reference_key == HDBSCAN_CONTRIB_REFERENCE:
+        return hdbscan_contrib_select_clusters(
+            single_linkage_tree,
+            min_samples=min_samples,
+        )
+    raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")
+
+
+def reference_full(
+    reference_key: str,
+    X: ArrayLike,
+    *,
+    min_samples: int,
+) -> HdbscanFullResult:
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    if reference_key == SKLEARN_BRUTE_REFERENCE:
+        return sklearn_brute_full(X, min_samples=min_samples)
+    if reference_key == HDBSCAN_CONTRIB_REFERENCE:
+        return hdbscan_contrib_full(X, min_samples=min_samples)
     raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")

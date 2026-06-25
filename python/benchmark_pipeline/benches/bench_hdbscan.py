@@ -4,12 +4,8 @@ import pyperf
 
 from benchmark_metadata import HDBSCAN_STAGE_KEYS, SKLEARN_BRUTE_REFERENCE
 from benchmark_pipeline.hdbscan_reference import (
-    sklearn_brute_distance_matrix,
-    sklearn_brute_full,
-    sklearn_brute_mst_edges,
-    sklearn_brute_mutual_reachability_matrix,
-    sklearn_brute_select_clusters,
-    sklearn_brute_single_linkage_tree,
+    prepare_hdbscan_reference_stage_input,
+    run_prepared_hdbscan_reference_stage,
     validate_hdbscan_reference_key,
     validate_min_samples,
     validate_stage_key,
@@ -36,76 +32,28 @@ def load_dataset(args):
     )
 
 
-def prepare_stage_input(X, stage_key: str, min_samples: int):
+def prepare_stage_input(X, stage_key: str, reference_key: str, min_samples: int):
     """Build predecessor artifacts outside the measured pyperf function."""
-    stage_key = validate_stage_key(stage_key)
-
-    if stage_key == "distance":
-        return (X,)
-
-    if stage_key == "full":
-        return (X,)
-
-    distance_matrix = np.ascontiguousarray(sklearn_brute_distance_matrix(X), dtype=np.float32)
-    if stage_key == "mreach":
-        return (distance_matrix,)
-
-    mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
-        distance_matrix,
+    return prepare_hdbscan_reference_stage_input(
+        reference_key,
+        stage_key,
+        X,
         min_samples=min_samples,
     )
-    if stage_key == "mst":
-        return (mutual_reachability_matrix,)
 
-    mst_edges = sklearn_brute_mst_edges(
-        mutual_reachability_matrix,
+
+def run_prepared_stage(
+    stage_key: str,
+    reference_key: str,
+    prepared_input,
+    min_samples: int,
+):
+    return run_prepared_hdbscan_reference_stage(
+        reference_key,
+        stage_key,
+        prepared_input,
         min_samples=min_samples,
     )
-    if stage_key == "linkage":
-        return (mst_edges,)
-
-    single_linkage_tree = sklearn_brute_single_linkage_tree(mst_edges)
-    if stage_key == "select":
-        return (single_linkage_tree,)
-
-    raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
-
-
-def run_prepared_stage(stage_key: str, prepared_input, min_samples: int):
-    if stage_key == "distance":
-        (X,) = prepared_input
-        return sklearn_brute_distance_matrix(X)
-
-    if stage_key == "mreach":
-        (distance_matrix,) = prepared_input
-        return sklearn_brute_mutual_reachability_matrix(
-            distance_matrix,
-            min_samples=min_samples,
-        )
-
-    if stage_key == "mst":
-        (mutual_reachability_matrix,) = prepared_input
-        return sklearn_brute_mst_edges(
-            mutual_reachability_matrix,
-            min_samples=min_samples,
-        )
-
-    if stage_key == "linkage":
-        (mst_edges,) = prepared_input
-        return sklearn_brute_single_linkage_tree(mst_edges)
-
-    if stage_key == "select":
-        (single_linkage_tree,) = prepared_input
-        return sklearn_brute_select_clusters(
-            single_linkage_tree,
-            min_samples=min_samples,
-        )
-
-    if stage_key == "full":
-        (X,) = prepared_input
-        return sklearn_brute_full(X, min_samples=min_samples)
-
-    raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
 
 
 def append_custom_args(cmd, args):
@@ -141,9 +89,12 @@ def main() -> None:
     if getattr(args, "worker", False):
         import_runtime_deps()
         X = load_dataset(args)
-        if args.reference != SKLEARN_BRUTE_REFERENCE:
-            raise ValueError(f"Unsupported HDBSCAN reference for staged benchmark: {args.reference!r}")
-        prepared_input = prepare_stage_input(X, args.stage, args.min_samples)
+        prepared_input = prepare_stage_input(
+            X,
+            args.stage,
+            args.reference,
+            args.min_samples,
+        )
     else:
         X = None
         prepared_input = None
@@ -152,6 +103,7 @@ def main() -> None:
         f"hdbscan_{args.stage}_{args.reference}_py",
         run_prepared_stage,
         args.stage,
+        args.reference,
         prepared_input,
         args.min_samples,
     )
@@ -159,10 +111,18 @@ def main() -> None:
     if not getattr(args, "worker", False):
         import_runtime_deps()
         X = load_dataset(args)
-        if args.reference != SKLEARN_BRUTE_REFERENCE:
-            raise ValueError(f"Unsupported HDBSCAN reference for staged benchmark: {args.reference!r}")
-        prepared_input = prepare_stage_input(X, args.stage, args.min_samples)
-        result = run_prepared_stage(args.stage, prepared_input, args.min_samples)
+        prepared_input = prepare_stage_input(
+            X,
+            args.stage,
+            args.reference,
+            args.min_samples,
+        )
+        result = run_prepared_stage(
+            args.stage,
+            args.reference,
+            prepared_input,
+            args.min_samples,
+        )
 
         if args.stage in {"distance", "mreach", "mst", "linkage", "select", "full"}:
             write_hdbscan_stage_metrics(

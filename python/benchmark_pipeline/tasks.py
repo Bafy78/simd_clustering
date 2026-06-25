@@ -26,7 +26,6 @@ from benchmark_metadata import (
     LANGUAGE_PY_KEY,
     NO_PARAMS,
     REFERENCE_VARIANT,
-    SKLEARN_BRUTE_REFERENCE,
     reference_display_name,
     reference_keys_for_phase,
     stage_display_name,
@@ -1306,12 +1305,6 @@ def build_pipeline(
 
         if options.run_python_hdbscan:
             for reference_key in options.hdbscan_references:
-                if reference_key != SKLEARN_BRUTE_REFERENCE:
-                    raise ValueError(
-                        f"HDBSCAN reference {reference_key!r} is registered but not "
-                        "implemented as a benchmark task yet."
-                    )
-
                 for stage_key in options.hdbscan_stages:
                     if not stage_is_active("hdbscan", stage_key):
                         continue
