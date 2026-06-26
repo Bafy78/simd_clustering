@@ -1325,6 +1325,11 @@ def _format_path(cols: Iterable[str], values: Iterable) -> str:
 
 
 def _format_scalar(value) -> str:
+    if isinstance(value, (list, tuple, set, frozenset)):
+        ordered = list(value)
+        if isinstance(value, (set, frozenset)):
+            ordered = sorted(ordered, key=repr)
+        return _format_value_list([_format_scalar(item) for item in ordered])
     if value == "":
         return "<empty>"
     if isinstance(value, (int, np.integer)):
@@ -1797,7 +1802,8 @@ def _cartesian_missing_rows(
         ]
 
     rows: list[dict] = []
-    for value, sub_df in df.groupby(split_col, observed=True, dropna=False, sort=False):
+    remaining_cols = [col for col in residual_cols if col != split_col]
+    for values, sub_df in _partition_by_projection(df, split_col, remaining_cols):
         rows.extend(
             _cartesian_missing_rows(
                 point_set=point_set,
@@ -1805,7 +1811,7 @@ def _cartesian_missing_rows(
                 df=sub_df,
                 key_cols=key_cols,
                 path_cols=path_cols + [split_col],
-                path_values=path_values + (_normalize_key_value(value),),
+                path_values=path_values + (_compact_path_value(values),),
             )
         )
     return rows
@@ -1828,6 +1834,11 @@ def _missing_summary_row(
     path_value_by_col = dict(zip(path_cols, path_values))
     path = _format_path(path_cols, path_values) if path_cols else "<all>"
 
+    if missing_pattern == "complete cartesian product":
+        next_detail = "complete across listed values"
+    else:
+        next_detail = _compact_next_detail(group_df, key_cols, path_cols)
+
     return {
         COL_POINT_SET: point_set,
         COL_DIRECTION: direction,
@@ -1838,7 +1849,7 @@ def _missing_summary_row(
         COL_STRUCTURAL_SUMMARY: _structural_summary(group_df, key_cols, path_value_by_col),
         COL_GRID_SUMMARY: _grid_summary(group_df),
         COL_MISSING_PATTERN: missing_pattern,
-        COL_NEXT_DETAIL: _compact_next_detail(group_df, key_cols, path_cols),
+        COL_NEXT_DETAIL: next_detail,
     }
 
 
@@ -1878,18 +1889,114 @@ def _is_cartesian_product(df: pd.DataFrame, cols: list[str]) -> bool:
 
 def _choose_cartesian_split_column(df: pd.DataFrame, residual_cols: list[str]) -> str | None:
     candidates = []
+    cost_memo: dict[tuple, int] = {}
+
     for index, col in enumerate(residual_cols):
         values = _ordered_unique_values(df[col])
         if len(values) <= 1:
             continue
-        # Keep hierarchy readable by preferring earlier non-grid columns, but do
-        # not strongly penalize grid columns because splitting N/K is often the
-        # clearest way to describe a partial rectangular slice.
-        is_grid = col in CONFIG_COLS
-        candidates.append((len(values), int(is_grid), index, col))
+
+        remaining_cols = [candidate_col for candidate_col in residual_cols if candidate_col != col]
+        partitions = _partition_by_projection(df, col, remaining_cols)
+        if len(partitions) <= 1:
+            continue
+
+        cost = sum(
+            _cartesian_cover_cost(partition_df, remaining_cols, memo=cost_memo)
+            for _, partition_df in partitions
+        )
+
+        candidates.append((cost, len(partitions), _cartesian_split_priority(col), index, col))
+
     if not candidates:
         return None
     return min(candidates)[-1]
+
+
+def _cartesian_cover_cost(
+    df: pd.DataFrame,
+    residual_cols: list[str],
+    *,
+    memo: dict[tuple, int],
+) -> int:
+    distinct = _distinct_keys(df, residual_cols)
+    key = (
+        tuple(residual_cols),
+        tuple(sorted((_row_tuple(row, residual_cols) for _, row in distinct.iterrows()), key=repr)),
+    )
+    if key in memo:
+        return memo[key]
+
+    if distinct.empty or _is_cartesian_product(distinct, residual_cols):
+        memo[key] = 1
+        return 1
+
+    costs = []
+    for col in residual_cols:
+        if len(_ordered_unique_values(distinct[col])) <= 1:
+            continue
+        remaining_cols = [candidate_col for candidate_col in residual_cols if candidate_col != col]
+        partitions = _partition_by_projection(distinct, col, remaining_cols)
+        if len(partitions) <= 1:
+            continue
+        costs.append(
+            sum(
+                _cartesian_cover_cost(partition_df, remaining_cols, memo=memo)
+                for _, partition_df in partitions
+            )
+        )
+
+    cost = min(costs) if costs else 1
+    memo[key] = cost
+    return cost
+
+
+def _partition_by_projection(
+    df: pd.DataFrame,
+    split_col: str,
+    remaining_cols: list[str],
+) -> list[tuple[tuple, pd.DataFrame]]:
+    buckets: dict[frozenset, list[object]] = {}
+    first_value_order: dict[frozenset, int] = {}
+
+    normalized_split = df[split_col].map(_normalize_key_value)
+    ordered_values = _ordered_unique_values(normalized_split)
+
+    for order, value in enumerate(ordered_values):
+        value_df = df[normalized_split == value]
+        projection = frozenset(
+            _row_tuple(row, remaining_cols)
+            for _, row in _distinct_keys(value_df, remaining_cols).iterrows()
+        )
+        buckets.setdefault(projection, []).append(value)
+        first_value_order.setdefault(projection, order)
+
+    partitions = []
+    for projection in sorted(buckets, key=lambda key: first_value_order[key]):
+        values = tuple(buckets[projection])
+        value_set = set(values)
+        sub_df = df[normalized_split.isin(value_set)].copy()
+        partitions.append((values, sub_df))
+    return partitions
+
+
+def _compact_path_value(values: tuple):
+    if len(values) == 1:
+        return values[0]
+    return values
+
+
+def _cartesian_split_priority(col: str) -> int:
+    grid_priority = {
+        COL_SAMPLES: 0,
+        COL_CLUSTERS: 1,
+        COL_DIMENSIONS: 2,
+    }
+    if col in grid_priority:
+        return grid_priority[col]
+    if col in CONFIG_COLS:
+        return 10
+    return 20
 
 
 def _missing_pattern_level(df: pd.DataFrame, residual_cols: list[str]) -> str:

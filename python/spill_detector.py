@@ -4,9 +4,10 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from benchmark_pipeline.config import default_config
 from benchmark_pipeline.gmm_covariance import (
@@ -22,19 +23,40 @@ from benchmark_pipeline.paths import REPO_ROOT, repo_path, repo_relative_path
 
 SPILL_DETECTOR_PATTERN = (
     r"(?m)(?="
-    r"(?P<pair>"
+    r"(?:"
+    # GCC-style Intel syntax
     r"^\s*v(?:mov[au]ps|movdqa|movdqu)\s+"
-    r"(?:YMMWORD PTR\s+)?(?P<slot>[+-]?\d+\[(?:rbp|rsp)\])\s*,\s*ymm[0-9]+\s*$\n"
+    r"(?:YMMWORD PTR\s+)?(?P<gcc_slot>[+-]?\d+\[(?:rbp|rsp)\])\s*,\s*ymm[0-9]+\s*$\n"
     r"(?:(?!^\s*\.L[.$A-Za-z0-9_]+:)[^\n]*\n){0,300}?"
     r"^\s*(?:"
     r"v(?:mov[au]ps|movdqa|movdqu)\s+ymm[0-9]+\s*,\s*"
-    r"(?:YMMWORD PTR\s+)?(?P=slot)\s*"
+    r"(?:YMMWORD PTR\s+)?(?P=gcc_slot)\s*"
     r"|"
     r"v(?:"
     r"addps|subps|mulps|divps|minps|maxps|"
     r"fmadd(?:132|213|231)ps|"
     r"fnmadd(?:132|213|231)ps"
-    r")\b\s+.*(?:YMMWORD PTR\s+)?(?P=slot)\s*"
+    r")\b\s+.*(?:YMMWORD PTR\s+)?(?P=gcc_slot)\s*"
+    r")$"
+    r"|"
+    # Clang-style Intel syntax
+    r"^\s*v(?:mov[au]ps|movdqa|movdqu)\s+"
+    r"(?:(?i:ymmword\s+ptr)\s+)?"
+    r"(?P<clang_slot>\[(?:rbp|rsp)(?:\s*[+-]\s*\d+)?\])"
+    r"\s*,\s*ymm[0-9]+\s*(?:#.*)?$\n"
+    r"(?:(?!^\s*\.L[.$A-Za-z0-9_]+:)[^\n]*\n){0,300}?"
+    r"^\s*(?:"
+    r"v(?:mov[au]ps|movdqa|movdqu)\s+ymm[0-9]+\s*,\s*"
+    r"(?:(?i:ymmword\s+ptr)\s+)?"
+    r"(?P=clang_slot)\s*(?:#.*)?"
+    r"|"
+    r"v(?:"
+    r"addps|subps|mulps|divps|minps|maxps|"
+    r"fmadd(?:132|213|231)ps|"
+    r"fnmadd(?:132|213|231)ps"
+    r")\b\s+.*"
+    r"(?:[Yy][Mm][Mm][Ww][Oo][Rr][Dd]\s+[Pp][Tt][Rr]\s+)?"
+    r"(?P=clang_slot)\s*(?:#.*)?"
     r")$"
     r")"
     r")"
@@ -63,6 +85,16 @@ class SpillScanResult:
     assembly_file: str
     rg_output_file: str
     rg_returncode: int
+    compiler_executable: str | None
+    assembly_compile_command: list[str] | None
+    compile_command_source: str | None
+
+
+@dataclass(frozen=True)
+class AssemblyCompileResult:
+    assembly_file: Path
+    compile_command: list[str]
+    command_source: str
 
 
 @dataclass(frozen=True)
@@ -152,37 +184,132 @@ def parse_compile_include_dirs(cmd: Iterable[str]) -> list[Path]:
     return include_dirs
 
 
-def compile_command_source(cmd: Iterable[str]) -> Path:
-    sources = [
-        Path(token) for token in cmd if Path(token).suffix in {".cc", ".cpp", ".cxx"}
+CPP_SOURCE_SUFFIXES = {".cc", ".cpp", ".cxx"}
+SPILL_DETECTOR_SOURCE = (
+    REPO_ROOT / "cpp" / "benchmarks" / "spill_detector_main.cpp"
+)
+
+
+def compile_command_source_index(cmd: Iterable[str]) -> int:
+    cmd_list = list(cmd)
+    source_indexes = [
+        index
+        for index, token in enumerate(cmd_list)
+        if Path(token).suffix in CPP_SOURCE_SUFFIXES
     ]
-    if len(sources) != 1:
+    if len(source_indexes) != 1:
+        sources = [cmd_list[index] for index in source_indexes]
         raise RuntimeError(
             "Expected exactly one C++ source in compile command, got: "
-            + ", ".join(str(source) for source in sources)
+            + ", ".join(sources)
         )
+    return source_indexes[0]
 
-    source = sources[0]
+
+def compile_command_source(cmd: Iterable[str]) -> Path:
+    cmd_list = list(cmd)
+    source = Path(cmd_list[compile_command_source_index(cmd_list)])
     if not source.is_absolute():
         source = REPO_ROOT / source
     return source.resolve()
 
 
 def replace_compile_source(cmd: list[str], replacement_source: Path) -> list[str]:
+    replaced = list(cmd)
+    replaced[compile_command_source_index(replaced)] = str(replacement_source)
+    return replaced
+
+
+def replace_compile_output(cmd: list[str], output: Path) -> list[str]:
     replaced: list[str] = []
-    replacement_done = False
+    output_done = False
+    index = 0
 
-    for token in cmd:
-        if Path(token).suffix in {".cc", ".cpp", ".cxx"}:
-            replaced.append(str(replacement_source))
-            replacement_done = True
-        else:
-            replaced.append(token)
+    while index < len(cmd):
+        token = cmd[index]
 
-    if not replacement_done:
-        raise RuntimeError("Could not find a C++ source path in compile command")
+        if token == "-o":
+            replaced.extend(["-o", str(output)])
+            output_done = True
+            index += 2
+            continue
+
+        if token.startswith("-o") and len(token) > 2:
+            replaced.append("-o" + str(output))
+            output_done = True
+            index += 1
+            continue
+
+        replaced.append(token)
+        index += 1
+
+    if not output_done:
+        replaced.extend(["-o", str(output)])
 
     return replaced
+
+
+def command_with_args_before_source(cmd: list[str], args: Iterable[str]) -> list[str]:
+    args_to_insert = [arg for arg in args if arg not in cmd]
+    if not args_to_insert:
+        return list(cmd)
+
+    source_index = compile_command_source_index(cmd)
+    return [*cmd[:source_index], *args_to_insert, *cmd[source_index:]]
+
+
+def assembly_command_from_benchmark_command(
+    benchmark_command: list[str],
+    *,
+    assembly: Path,
+    gmm_covariance_type: str | None = None,
+) -> list[str]:
+    cmd = replace_compile_source(list(benchmark_command), SPILL_DETECTOR_SOURCE)
+    cmd = replace_compile_output(cmd, assembly)
+    cmd = command_with_args_before_source(
+        cmd,
+        [
+            "-S",
+            "-masm=intel",
+            *spill_detector_define(gmm_covariance_type),
+        ],
+    )
+    return cmd
+
+
+def compile_command_map_from_artifacts(
+    compile_artifacts: Mapping[str, Any],
+) -> dict[tuple[int, str], list[str]]:
+    if not compile_artifacts.get("enabled"):
+        raise SpillDetectorError(
+            "Spill detection during postprocessing requires compile_artifacts from "
+            "the benchmark run so assembly is compiled with the recorded compiler."
+        )
+
+    command_by_case: dict[tuple[int, str], list[str]] = {}
+    for record in compile_artifacts.get("records", []):
+        if not isinstance(record, dict):
+            continue
+
+        key = (int(record["D"]), str(record["cpp_case"]))
+        command = record.get("compile_command")
+        if not isinstance(command, list) or not all(
+            isinstance(token, str) for token in command
+        ):
+            raise SpillDetectorError(
+                "Compile artifact record is missing a string-list compile_command "
+                f"for D={key[0]} cpp_case={key[1]!r}."
+            )
+
+        existing = command_by_case.get(key)
+        if existing is not None and existing != command:
+            raise SpillDetectorError(
+                "Conflicting compile commands in compile_artifacts for "
+                f"D={key[0]} cpp_case={key[1]!r}."
+            )
+        command_by_case[key] = list(command)
+
+    return command_by_case
 
 
 def define_lines(defines: dict[str, str]) -> list[str]:
@@ -311,7 +438,11 @@ def flatten_local_includes(
 
 
 RUN_ONCE_DEFINITION_RE = re.compile(
-    r"^(?P<indent>\s*)(?P<decl>(?:[A-Za-z_:<>~*&]+\s+)+run_once\s*\([^;]*\).*)$"
+    r"^(?P<indent>\s*)"
+    r"(?P<decl>"
+    r"(?:[A-Za-z_:<>~*&]+\s+)+"
+    r"run_once(?:_[A-Za-z0-9]+)?\s*\([^;]*\).*"
+    r")$"
 )
 
 
@@ -335,21 +466,12 @@ def flattened_source_lines_for_compile(
     *,
     cpp_case: str,
     D: int,
-    out_dir: Path,
+    compile_command: list[str],
     gmm_covariance_type: str | None = None,
 ) -> list[str]:
-    assembly = spill_detector_assembly_path(cpp_case, D, out_dir, gmm_covariance_type)
-    cmd = cpp_compile_command(
-        D=D,
-        cpp_case=cpp_case,
-        mode="assembly",
-        output=assembly,
-        extra_defines=spill_detector_define(gmm_covariance_type),
-    )
-
-    source = compile_command_source(cmd)
-    defines = parse_compile_defines(cmd)
-    include_dirs = parse_compile_include_dirs(cmd)
+    source = compile_command_source(compile_command)
+    defines = parse_compile_defines(compile_command)
+    include_dirs = parse_compile_include_dirs(compile_command)
 
     body = add_noinline_to_run_once(
         flatten_local_includes(
@@ -364,7 +486,7 @@ def flattened_source_lines_for_compile(
         "// Generated by spill_detector.py.",
         f"// C++ case: {cpp_case}{covariance_label} {D}D",
         "// Local project includes are expanded; standard/library includes are left intact.",
-        "// The function named run_once() is marked __attribute__((noinline)) in this generated copy only.",
+        "// Functions named run_once() or run_once_*() are marked __attribute__((noinline)) in this generated copy only.",
         "",
         *define_lines(defines),
         "",
@@ -378,6 +500,7 @@ def write_instrumented_source(
     cpp_case: str,
     D: int,
     out_dir: Path,
+    compile_command: list[str],
     gmm_covariance_type: str | None = None,
     output_path: Path | None = None,
 ) -> Path:
@@ -395,7 +518,7 @@ def write_instrumented_source(
             flattened_source_lines_for_compile(
                 cpp_case=cpp_case,
                 D=D,
-                out_dir=out_dir,
+                compile_command=compile_command,
                 gmm_covariance_type=gmm_covariance_type,
             )
         )
@@ -409,21 +532,33 @@ def compile_assembly(
     D: int,
     out_dir: Path,
     gmm_covariance_type: str | None = None,
-) -> Path:
+    benchmark_compile_command: list[str] | None = None,
+) -> AssemblyCompileResult:
     assembly = spill_detector_assembly_path(cpp_case, D, out_dir, gmm_covariance_type)
     assembly.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = cpp_compile_command(
-        D=D,
-        cpp_case=cpp_case,
-        mode="assembly",
-        output=assembly,
-        extra_defines=spill_detector_define(gmm_covariance_type),
-    )
+    if benchmark_compile_command is None:
+        cmd = cpp_compile_command(
+            D=D,
+            cpp_case=cpp_case,
+            mode="assembly",
+            output=assembly,
+            extra_defines=spill_detector_define(gmm_covariance_type),
+        )
+        command_source = "cpp_cases"
+    else:
+        cmd = assembly_command_from_benchmark_command(
+            benchmark_compile_command,
+            assembly=assembly,
+            gmm_covariance_type=gmm_covariance_type,
+        )
+        command_source = "compile_artifacts"
+
     source = write_instrumented_source(
         cpp_case=cpp_case,
         D=D,
         out_dir=out_dir,
+        compile_command=cmd,
         gmm_covariance_type=gmm_covariance_type,
     )
     cmd = replace_compile_source(cmd, source)
@@ -443,7 +578,11 @@ def compile_assembly(
             lines.extend(["", "stderr:", result.stderr])
         raise SpillDetectorError("\n".join(lines), exit_code=result.returncode)
 
-    return assembly
+    return AssemblyCompileResult(
+        assembly_file=assembly,
+        compile_command=cmd,
+        command_source=command_source,
+    )
 
 
 def clear_output_dir(out_dir: Path) -> None:
@@ -472,7 +611,7 @@ def normalize_asm_branch_target(raw_target: str) -> str | None:
     return target
 
 
-RUN_ONCE_SYMBOL_RE = re.compile(r"(?<![0-9])\d+run_once[A-Za-z0-9_]*")
+RUN_ONCE_SYMBOL_RE = re.compile(r"(?<![0-9])\d+run_once(?:_[A-Za-z0-9]+)?[A-Za-z0-9_]*")
 
 
 def parse_asm_functions(assembly: Path) -> list[AsmFunction]:
@@ -555,8 +694,8 @@ def select_run_once_reachable_functions(
 
     if not roots:
         raise RuntimeError(
-            "No emitted assembly function matching mangled component '8run_once' was found. "
-            "Check that the generated source successfully marked run_once noinline."
+            "No emitted assembly function matching a run_once/run_once_* mangled component was found. "
+            "Check that the generated source successfully marked the called run_once variant noinline."
         )
 
     selected: set[str] = set()
@@ -787,6 +926,7 @@ def scan_targets(
     rg: str = "rg",
     pattern: str = SPILL_DETECTOR_PATTERN,
     clear_outputs: bool = True,
+    benchmark_compile_commands: Mapping[tuple[int, str], list[str]] | None = None,
 ) -> list[SpillScanResult]:
     require_tool(rg)
 
@@ -805,6 +945,8 @@ def scan_targets(
         D = target.D
         gmm_covariance_type = target.gmm_covariance_type
 
+        compile_result: AssemblyCompileResult | None = None
+
         if skip_compile:
             assembly = spill_detector_assembly_path(
                 cpp_case,
@@ -821,7 +963,25 @@ def scan_targets(
                     f"{D}D: {assembly}"
                 )
         else:
-            assembly = compile_assembly(cpp_case, D, out_dir, gmm_covariance_type)
+            benchmark_compile_command = None
+            if benchmark_compile_commands is not None:
+                benchmark_compile_command = benchmark_compile_commands.get(
+                    (D, cpp_case)
+                )
+                if benchmark_compile_command is None:
+                    raise SpillDetectorError(
+                        "Missing benchmark compile command for spill target "
+                        f"D={D} cpp_case={cpp_case!r}."
+                    )
+
+            compile_result = compile_assembly(
+                cpp_case,
+                D,
+                out_dir,
+                gmm_covariance_type,
+                benchmark_compile_command=benchmark_compile_command,
+            )
+            assembly = compile_result.assembly_file
 
         scan_assembly = write_run_once_assembly(
             cpp_case=cpp_case,
@@ -852,6 +1012,21 @@ def scan_targets(
                 assembly_file=str(assembly),
                 rg_output_file=str(rg_output),
                 rg_returncode=rg_returncode,
+                compiler_executable=(
+                    compile_result.compile_command[0]
+                    if compile_result is not None
+                    else None
+                ),
+                assembly_compile_command=(
+                    compile_result.compile_command
+                    if compile_result is not None
+                    else None
+                ),
+                compile_command_source=(
+                    compile_result.command_source
+                    if compile_result is not None
+                    else None
+                ),
             )
         )
 

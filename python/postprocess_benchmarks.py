@@ -21,6 +21,7 @@ from spill_detector import (
     SPILL_DETECTOR_PATTERN,
     SpillDetectorError,
     benchmark_record_scan_targets,
+    compile_command_map_from_artifacts,
     scan_targets,
     spill_detection_status,
     summary_payload as spill_summary_payload,
@@ -30,8 +31,8 @@ from spill_detector import (
 def build_spill_detection_summary(
     records: list[dict[str, object]],
     *,
+    compile_artifacts: dict[str, object],
     out_dir: Path,
-    skip_compile: bool,
     rg: str,
     pattern: str,
 ) -> dict[str, object]:
@@ -48,16 +49,19 @@ def build_spill_detection_summary(
             for target in targets
         ],
         "out_dir": str(out_dir),
-        "skip_compile": bool(skip_compile),
+        "compile_command_source": "compile_artifacts",
     }
 
     try:
+        benchmark_compile_commands = compile_command_map_from_artifacts(
+            compile_artifacts
+        )
         results = scan_targets(
             targets,
             out_dir=out_dir,
-            skip_compile=skip_compile,
             rg=rg,
             pattern=pattern,
+            benchmark_compile_commands=benchmark_compile_commands,
         )
     except Exception as exc:
         error: dict[str, object] = {
@@ -100,11 +104,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=repo_path("spill_detector_results"),
         help="Directory for spill detector assembly and rg outputs.",
-    )
-    parser.add_argument(
-        "--spill-detection-skip-compile",
-        action="store_true",
-        help="Reuse existing spill detector assembly files instead of compiling them.",
     )
     parser.add_argument(
         "--spill-detection-rg",
@@ -195,8 +194,8 @@ def main() -> None:
         print("Running spill detector for benchmarked C++ cases...")
         summary["spill_detection"] = build_spill_detection_summary(
             records,
+            compile_artifacts=compile_artifacts,
             out_dir=args.spill_detection_out_dir,
-            skip_compile=args.spill_detection_skip_compile,
             rg=args.spill_detection_rg,
             pattern=args.spill_detection_pattern,
         )

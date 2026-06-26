@@ -80,6 +80,8 @@ struct auto_lloyd_case {
             + selected_impl
             + ", threshold="
             + std::to_string(threshold_)
+            + ", max_static_D="
+            + std::to_string(kmeans::lloyd_dispatch::max_static_lloyd_d)
             + ")";
     }
 
@@ -158,25 +160,53 @@ private:
         );
 
         if (impl_ == kmeans::lloyd_dispatch::lloyd_impl::dynamic_d_micro_gemm) {
-            dynamic_samples_storage_ = make_dynamic_samples_from_aos<D>(
-                raw_samples,
-                N_
-            );
-
-            dynamic_initial_centroids_ = make_dynamic_centroids_from_aos<D>(
-                raw_initial_centroids,
-                static_cast<std::size_t>(K_)
-            );
+            initialize_dynamic_inputs(raw_samples, raw_initial_centroids);
         } else {
-            static_initial_centroids_ = make_static_centroids_from_aos<D>(
-                raw_initial_centroids,
-                static_cast<std::size_t>(K_)
-            );
+            initialize_static_inputs(raw_initial_centroids);
         }
     }
 
-    void run_static() {
-        std::vector<SampleType> current_centroids = static_initial_centroids_;
+    void initialize_dynamic_inputs(
+        const std::vector<float>& raw_samples,
+        const std::vector<float>& raw_initial_centroids
+    ) {
+        dynamic_samples_storage_ = make_dynamic_samples_from_aos<D>(
+            raw_samples,
+            N_
+        );
+
+        dynamic_initial_centroids_ = make_dynamic_centroids_from_aos<D>(
+            raw_initial_centroids,
+            static_cast<std::size_t>(K_)
+        );
+    }
+
+    template<std::size_t Dim = D>
+    void initialize_static_inputs(const std::vector<float>& raw_initial_centroids)
+        requires(kmeans::lloyd_dispatch::static_lloyd_enabled_v<Dim>)
+    {
+        static_assert(Dim == D);
+
+        static_initial_centroids_ = make_static_centroids_from_aos<Dim>(
+            raw_initial_centroids,
+            static_cast<std::size_t>(K_)
+        );
+    }
+
+    template<std::size_t Dim = D>
+    void initialize_static_inputs(const std::vector<float>&)
+        requires(!kmeans::lloyd_dispatch::static_lloyd_enabled_v<Dim>)
+    {
+        throw std::runtime_error("static Lloyd is disabled for D > 50");
+    }
+
+    template<std::size_t Dim = D>
+    void run_static()
+        requires(kmeans::lloyd_dispatch::static_lloyd_enabled_v<Dim>)
+    {
+        static_assert(Dim == D);
+
+        std::vector<static_sample_type<Dim>> current_centroids = static_initial_centroids_;
 
         auto assignments = k_means(
             static_samples_for_metrics_,
@@ -186,6 +216,13 @@ private:
 
         final_centroids_ = std::move(current_centroids);
         final_assignments_ = std::move(assignments);
+    }
+
+    template<std::size_t Dim = D>
+    void run_static()
+        requires(!kmeans::lloyd_dispatch::static_lloyd_enabled_v<Dim>)
+    {
+        throw std::runtime_error("static Lloyd is disabled for D > 50");
     }
 
     void run_dynamic_micro_gemm() {

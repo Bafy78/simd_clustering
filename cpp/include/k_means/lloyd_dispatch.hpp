@@ -20,8 +20,9 @@ namespace kmeans::lloyd_dispatch {
 // scale differently on other CPUs.
 //
 // Current rule:
-//   * use static-D when D < dynamic_micro_gemm_threshold(K, N)
-//   * use dynamic-D micro-GEMM when D >= dynamic_micro_gemm_threshold(K, N)
+//   * never compile or run static-D Lloyd above max_static_lloyd_d
+//   * otherwise use static-D when D < dynamic_micro_gemm_threshold(K, N)
+//   * otherwise use dynamic-D micro-GEMM
 //
 // Future multi-machine benchmark sweeps may either retune these constants
 // toward a machine-independent middle ground, or introduce architecture-
@@ -31,6 +32,11 @@ enum class lloyd_impl {
     static_d,
     dynamic_d_micro_gemm
 };
+
+inline constexpr std::size_t max_static_lloyd_d = 50;
+
+template<std::size_t D>
+inline constexpr bool static_lloyd_enabled_v = D <= max_static_lloyd_d;
 
 // Rounded D threshold at which the dynamic-D micro-GEMM path is expected to
 // beat the static-D path for the given cluster count and sample count.
@@ -63,7 +69,8 @@ inline bool use_dynamic_micro_gemm(
     std::size_t N,
     std::size_t D
 ) {
-    return static_cast<int>(D) >= dynamic_micro_gemm_threshold(K, N);
+    return D > max_static_lloyd_d
+        || static_cast<int>(D) >= dynamic_micro_gemm_threshold(K, N);
 }
 
 inline lloyd_impl choose_lloyd_impl(

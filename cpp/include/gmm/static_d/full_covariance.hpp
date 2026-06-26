@@ -352,7 +352,7 @@ struct full_covariance_model {
             }
         }
 
-        eve::algo::for_each(
+        eve::algo::for_each[eve::algo::force_cardinal<cardinal{}()>](
             samples,
             [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
                 const auto sample = eve::load[ignore](it);
