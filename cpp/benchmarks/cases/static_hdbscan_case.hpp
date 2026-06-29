@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include <eve/arch/expected_cardinal.hpp>
 #include <eve/memory/aligned_allocator.hpp>
 #include <nanobench.h>
 

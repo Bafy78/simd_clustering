@@ -74,9 +74,9 @@ def default_config() -> BenchmarkConfig:
             run_python_gmm=False,
             cpp_hdbscan_cases=("hdbscan_static",),
             run_python_hdbscan=True,
-            hdbscan_references=("sklearn_brute",),
-            hdbscan_stages=("distance", "mreach",),
-            run_cachegrind=True,
+            hdbscan_references=("sklearn_brute", "hdbscan_contrib"),
+            hdbscan_stages=("distance", "mreach", "mst", "linkage", "select", "full",),
+            run_cachegrind=False,
             cachegrind_I1="32768,8,64",
             cachegrind_D1="49152,12,64",
             cachegrind_LL="100663296,24,64",
@@ -87,6 +87,12 @@ def default_config() -> BenchmarkConfig:
                         "Excluded cuz we don't care about them."
                     ),
                 ),
+                CachegrindExclusionRule(
+                    min_samples=500_000,
+                    min_dimensions=50,
+                    reason=("Too slow and we can infer from the rest of the data well enough"),
+                )
+            ),
             ),
         ),
         exclusion_rules=(
@@ -110,7 +116,7 @@ def default_config() -> BenchmarkConfig:
             BenchmarkExclusionRule(
                 phase_keys=("gmm",),
                 dimensions=(90,),
-                samples=(4_000,),
+                max_samples=4_600,
                 clusters=(50,),
                 reason=(
                     "Excluded because full-covariance estimation is underdetermined: "

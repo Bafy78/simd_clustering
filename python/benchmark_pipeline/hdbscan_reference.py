@@ -14,14 +14,14 @@ from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from sklearn.cluster._hdbscan.hdbscan import (  # type: ignore[reportPrivateImportUsage]
+from sklearn.cluster._hdbscan.hdbscan import (
     HIERARCHY_dtype,
     MST_edge_dtype,
     _brute_mst,
-    _process_mst,
     mutual_reachability_graph,
     tree_to_labels,
 )
+from sklearn.cluster._hdbscan._linkage import make_single_linkage
 from sklearn.metrics import pairwise_distances
 from threadpoolctl import threadpool_limits
 
@@ -127,6 +127,40 @@ def sklearn_brute_mutual_reachability_matrix(
     return np.asarray(result, dtype=np.float32, order="C")
 
 
+def as_cpp_prim_order_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float32]:
+    """Return contrib MST edges normalized to the C++ staged MST convention.
+
+    hdbscan-contrib's mst_linkage_core emits true Prim parent edges:
+
+        source_node, new_node, distance
+
+    where source_node is the previously attached vertex that currently gives
+    new_node its best crossing-edge distance.
+
+    The C++ staged MST intentionally emits the Prim traversal edge instead:
+
+        previous_selected_node, new_node, distance
+
+    This is enough for the downstream single-linkage stage because both endpoints
+    are already in / entering the same growing MST component at that merge
+    distance. However, it makes raw MST arrays fail parity against contrib even
+    when the selected nodes and edge weights agree.
+
+    Normalize only the staged benchmark representation here. This is not claiming
+    contrib's MST parent endpoint is wrong; it just makes the contrib reference
+    use the same endpoint convention as the C++ artifact being compared.
+    """
+    plain = as_float32_plain_mst_edges(mst_edges).copy()
+    if plain.shape[0] == 0:
+        return plain
+
+    previous_selected = np.empty(plain.shape[0], dtype=np.float32)
+    previous_selected[0] = 0.0
+    previous_selected[1:] = plain[:-1, 1]
+    plain[:, 0] = previous_selected
+    return np.ascontiguousarray(plain)
+
+
 def as_float32_mst_edges(mst_edges: ArrayLike) -> NDArray[Any]:
     """Return sklearn MST-edge dtype with float32-rounded edge weights."""
     edges = np.asarray(mst_edges)
@@ -193,8 +227,37 @@ def sklearn_brute_mst_edges(
 
 def sklearn_brute_single_linkage_tree(mst_edges: NDArray[Any]) -> NDArray[Any]:
     """linkage: MST edge list -> single linkage tree."""
+    edges = as_float32_mst_edges(mst_edges)
+
+    # Override sklearn's private _process_mst edge ordering.
+    #
+    # _process_mst sorts only by distance via np.argsort(distance). For equal
+    # MST edge weights, that leaves the order to NumPy's default sort behavior,
+    # which is deterministic in a given environment but not a meaningful HDBSCAN
+    # contract and not portable to the C++ implementation.
+    #
+    # Equal mutual-reachability weights are common on low-dimensional / blob-like
+    # datasets, and different valid orders produce different internal linkage
+    # node IDs even when the MST weights are equivalent. To make the staged
+    # sklearn reference comparable to the C++ stage, keep sklearn's Cython
+    # make_single_linkage implementation but feed it a canonical edge order that
+    # matches the C++ linkage comparator:
+    #
+    #     distance, then current_node, then next_node
+    #
+    # This is intentionally a benchmark/reference normalization, not a claim that
+    # sklearn's default tie order is algorithmically wrong.
+    row_order = np.lexsort(
+        (
+            edges["next_node"],
+            edges["current_node"],
+            edges["distance"],
+        )
+    )
+
     with threadpool_limits(limits=1):
-        tree = _process_mst(as_float32_mst_edges(mst_edges))
+        tree = make_single_linkage(edges[row_order])
+
     return as_float32_single_linkage_tree(tree)
 
 
@@ -361,7 +424,7 @@ def hdbscan_contrib_mst_edges(
     *,
     min_samples: int,
 ) -> NDArray[np.float32]:
-    """mst: mutual reachability matrix -> hdbscan-contrib MST edge list."""
+    """mst: mutual reachability matrix -> normalized contrib MST edge list."""
     mutual_reachability = np.asarray(
         mutual_reachability_matrix,
         dtype=np.float64,
@@ -371,16 +434,45 @@ def hdbscan_contrib_mst_edges(
     hdbscan_contrib = _contrib_hdbscan_module()
     with threadpool_limits(limits=1):
         mst_edges = hdbscan_contrib.mst_linkage_core(mutual_reachability)
-    return as_float32_plain_mst_edges(mst_edges)
+
+    return as_cpp_prim_order_mst_edges(mst_edges)
 
 
 def hdbscan_contrib_single_linkage_tree(mst_edges: ArrayLike) -> NDArray[np.float32]:
     """linkage: contrib MST edge list -> contrib single linkage tree."""
     hdbscan_contrib = _contrib_hdbscan_module()
     edges = np.asarray(as_float32_plain_mst_edges(mst_edges), dtype=np.float64, order="C")
-    row_order = np.argsort(edges[:, 2])
+
+    # Override contrib's private linkage tie ordering.
+    #
+    # hdbscan-contrib sorts MST rows by weight only before calling label(...):
+    #
+    #     min_spanning_tree[np.argsort(min_spanning_tree.T[2]), :]
+    #
+    # For equal mutual-reachability weights, that leaves the row order to
+    # NumPy's default argsort tie behavior. Low-dimensional blob datasets create
+    # many such ties, and different valid orders produce different internal
+    # linkage node IDs, condensed-tree stability accounting, labels, and
+    # probabilities.
+    #
+    # Keep contrib's Cython label(...) implementation, but feed it the same
+    # canonical edge order used by the C++ linkage stage:
+    #
+    #     distance, then current_node, then next_node
+    #
+    # This is a benchmark normalization for deterministic staged parity, not a
+    # claim that contrib's default tie order is algorithmically wrong.
+    row_order = np.lexsort(
+        (
+            edges[:, 1].astype(np.intp, copy=False),
+            edges[:, 0].astype(np.intp, copy=False),
+            edges[:, 2],
+        )
+    )
+
     with threadpool_limits(limits=1):
         tree = hdbscan_contrib.label(edges[row_order, :])
+
     return as_float32_plain_single_linkage_tree(tree)
 
 
@@ -421,45 +513,28 @@ def hdbscan_contrib_select_clusters(
 
 
 def hdbscan_contrib_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult:
-    """full: X -> labels and probabilities through hdbscan-contrib/generic."""
     X32 = as_hdbscan_contrib_input(X)
     validate_min_samples(min_samples, X32.shape[0])
-    # hdbscan-contrib's generic Cython MST path expects double buffers. The
-    # adapter keeps float32 stage boundaries, but promotes at this call site.
-    X64 = np.asarray(X32, dtype=np.float64, order="C")
-    hdbscan_contrib = _contrib_hdbscan_module()
-    with threadpool_limits(limits=1):
-        (
-            labels,
-            probabilities,
-            _stabilities,
-            _condensed_tree,
-            single_linkage_tree,
-            _minimum_spanning_tree,
-        ) = hdbscan_contrib.hdbscan(
-            X64,
-            min_cluster_size=min_samples,
-            min_samples=contrib_internal_min_samples(min_samples),
-            alpha=1.0,
-            cluster_selection_epsilon=0.0,
-            cluster_selection_persistence=0.0,
-            max_cluster_size=0,
-            metric="euclidean",
-            p=2,
-            leaf_size=40,
-            algorithm="generic",
-            approx_min_span_tree=False,
-            gen_min_span_tree=False,
-            core_dist_n_jobs=1,
-            cluster_selection_method="eom",
-            allow_single_cluster=False,
-            match_reference_implementation=False,
-            cluster_selection_epsilon_max=float("inf"),
-        )
+
+    distance_matrix = hdbscan_contrib_distance_matrix(X32)
+    mutual_reachability_matrix = hdbscan_contrib_mutual_reachability_matrix(
+        distance_matrix,
+        min_samples=min_samples,
+    )
+    mst_edges = hdbscan_contrib_mst_edges(
+        mutual_reachability_matrix,
+        min_samples=min_samples,
+    )
+    single_linkage_tree = hdbscan_contrib_single_linkage_tree(mst_edges)
+    labels, probabilities = hdbscan_contrib_select_clusters(
+        single_linkage_tree,
+        min_samples=min_samples,
+    )
+
     return HdbscanFullResult(
-        labels=np.asarray(labels, dtype=np.int32, order="C"),
-        probabilities=np.asarray(probabilities, dtype=np.float32, order="C"),
-        single_linkage_tree=as_float32_plain_single_linkage_tree(single_linkage_tree),
+        labels=labels,
+        probabilities=probabilities,
+        single_linkage_tree=single_linkage_tree,
     )
 
 

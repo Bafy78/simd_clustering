@@ -406,6 +406,12 @@ def add_parity_pressure(df: pd.DataFrame) -> pd.DataFrame:
             },
         )
 
+    hdbscan_full_mask = phase == "HDBSCAN"
+    if COL_STAGE in out.columns:
+        hdbscan_full_mask &= out[COL_STAGE].astype(str) == "Full"
+    if hdbscan_full_mask.any():
+        _assign_hdbscan_full_parity_pressure(out, hdbscan_full_mask)
+
     return out
 
 
@@ -439,6 +445,123 @@ def _assign_parity_pressure(
     valid_ratios = ratios.loc[valid]
     df.loc[valid_ratios.index, COL_PARITY_PRESSURE] = valid_ratios.max(axis=1)
     df.loc[valid_ratios.index, COL_WORST_CHECK] = valid_ratios.idxmax(axis=1)
+
+
+def _assign_hdbscan_full_parity_pressure(df: pd.DataFrame, mask: pd.Series) -> None:
+    index = df.index[mask]
+
+    ratios = pd.DataFrame(
+        {
+            "summary_scalar": _hdbscan_abs_or_rel_pressure(
+                df,
+                index,
+                abs_col="Summary Scalar Abs Diff Max",
+                rel_col="Summary Scalar Rel Diff Max",
+                abs_threshold_col="Summary Scalar Abs Diff Threshold",
+                rel_threshold_col="Summary Scalar Rel Diff Threshold",
+            ),
+            "probe_values": _parity_pressure_ratio(
+                _optional_numeric_column(df, index, "Probe Value Max Abs Diff"),
+                _optional_numeric_column(df, index, "Probe Value Max Abs Diff Threshold"),
+            ),
+            "label_summary_scalar": _hdbscan_abs_or_rel_pressure(
+                df,
+                index,
+                abs_col="Label Summary Scalar Abs Diff Max",
+                rel_col="Label Summary Scalar Rel Diff Max",
+                abs_threshold_col="Label Summary Scalar Abs Diff Threshold",
+                rel_threshold_col="Label Summary Scalar Rel Diff Threshold",
+            ),
+            "label_probe_values": _parity_pressure_ratio(
+                _optional_numeric_column(df, index, "Label Probe Value Max Abs Diff"),
+                _optional_numeric_column(df, index, "Label Probe Value Max Abs Diff Threshold"),
+            ),
+            "probability_summary_scalar": _hdbscan_abs_or_rel_pressure(
+                df,
+                index,
+                abs_col="Probability Summary Scalar Abs Diff Max",
+                rel_col="Probability Summary Scalar Rel Diff Max",
+                abs_threshold_col="Probability Summary Scalar Abs Diff Threshold",
+                rel_threshold_col="Probability Summary Scalar Rel Diff Threshold",
+            ),
+            "probability_probe_values": _parity_pressure_ratio(
+                _optional_numeric_column(df, index, "Probability Probe Value Max Abs Diff"),
+                _optional_numeric_column(df, index, "Probability Probe Value Max Abs Diff Threshold"),
+            ),
+            "noise_count": _count_mismatch_pressure(
+                df,
+                index,
+                "C++ Noise Count",
+                "Reference Noise Count",
+            ),
+            "cluster_count": _count_mismatch_pressure(
+                df,
+                index,
+                "C++ Cluster Count",
+                "Reference Cluster Count",
+            ),
+        },
+        index=index,
+    )
+
+    valid = ratios.notna().any(axis=1)
+    if not valid.any():
+        return
+
+    valid_ratios = ratios.loc[valid]
+    df.loc[valid_ratios.index, COL_PARITY_PRESSURE] = valid_ratios.max(axis=1)
+    df.loc[valid_ratios.index, COL_WORST_CHECK] = valid_ratios.idxmax(axis=1)
+
+
+def _optional_numeric_column(
+    df: pd.DataFrame,
+    index: pd.Index,
+    column: str,
+) -> pd.Series:
+    if column in df.columns:
+        return pd.to_numeric(df.loc[index, column], errors="coerce")
+    return pd.Series(np.nan, index=index, dtype="float64")
+
+
+def _hdbscan_abs_or_rel_pressure(
+    df: pd.DataFrame,
+    index: pd.Index,
+    *,
+    abs_col: str,
+    rel_col: str,
+    abs_threshold_col: str,
+    rel_threshold_col: str,
+) -> pd.Series:
+    """Pressure for checks that pass on either abs or relative tolerance."""
+
+    pressures = pd.concat(
+        [
+            _parity_pressure_ratio(
+                _optional_numeric_column(df, index, abs_col),
+                _optional_numeric_column(df, index, abs_threshold_col),
+            ),
+            _parity_pressure_ratio(
+                _optional_numeric_column(df, index, rel_col),
+                _optional_numeric_column(df, index, rel_threshold_col),
+            ),
+        ],
+        axis=1,
+    )
+    return pressures.min(axis=1, skipna=True)
+
+
+def _count_mismatch_pressure(
+    df: pd.DataFrame,
+    index: pd.Index,
+    left_col: str,
+    right_col: str,
+) -> pd.Series:
+    left = _optional_numeric_column(df, index, left_col)
+    right = _optional_numeric_column(df, index, right_col)
+    valid = left.notna() & right.notna()
+    pressure = pd.Series(np.nan, index=index, dtype="float64")
+    pressure.loc[valid] = np.where(left.loc[valid] == right.loc[valid], 0.0, 1.0)
+    return pressure
 
 
 def _parity_pressure_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:

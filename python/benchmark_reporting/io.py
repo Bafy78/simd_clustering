@@ -1020,10 +1020,67 @@ def load_hdbscan_parity_summary(
                             "Summary Scalar Abs Diff Max": parity.get("summary_scalar_abs_diff_max"),
                             "Summary Scalar Rel Diff Max": parity.get("summary_scalar_rel_diff_max"),
                             "Probe Value Max Abs Diff": parity.get("probe_value_max_abs_diff"),
+                            "Summary Scalar Abs Diff Threshold": parity.get("thresholds", {}).get(
+                                "summary_scalar_abs_diff"
+                            ),
+                            "Summary Scalar Rel Diff Threshold": parity.get("thresholds", {}).get(
+                                "summary_scalar_rel_diff"
+                            ),
+                            "Probe Value Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                                "probe_value_max_abs_diff"
+                            ),
                             "C++ Diagonal Max Abs": parity.get("cpp_diagonal_max_abs"),
                             "Reference Diagonal Max Abs": parity.get("python_diagonal_max_abs"),
                             "C++ Symmetry Max Abs": parity.get("cpp_symmetry_max_abs"),
                             "Reference Symmetry Max Abs": parity.get("python_symmetry_max_abs"),
+                            "Diagonal Max Abs Threshold": parity.get("thresholds", {}).get(
+                                "diagonal_max_abs"
+                            ),
+                            "Symmetry Max Abs Threshold": parity.get("thresholds", {}).get(
+                                "symmetry_max_abs"
+                            ),
+                            "C++ Noise Count": parity.get("cpp_noise_count"),
+                            "Reference Noise Count": parity.get("python_noise_count"),
+                            "C++ Cluster Count": parity.get("cpp_cluster_count"),
+                            "Reference Cluster Count": parity.get("python_cluster_count"),
+                            "Label Hash Equal": parity.get("label_hash_equal"),
+                            "Label Summary Scalar Abs Diff Max": parity.get(
+                                "label_summary_scalar_abs_diff_max"
+                            ),
+                            "Label Summary Scalar Rel Diff Max": parity.get(
+                                "label_summary_scalar_rel_diff_max"
+                            ),
+                            "Label Probe Value Max Abs Diff": parity.get(
+                                "label_probe_value_max_abs_diff"
+                            ),
+                            "Label Summary Scalar Abs Diff Threshold": parity.get("thresholds", {}).get(
+                                "summary_scalar_abs_diff"
+                            ),
+                            "Label Summary Scalar Rel Diff Threshold": parity.get("thresholds", {}).get(
+                                "summary_scalar_rel_diff"
+                            ),
+                            "Label Probe Value Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                                "probe_value_max_abs_diff"
+                            ),
+                            "Probability Hash Equal": parity.get("probability_hash_equal"),
+                            "Probability Summary Scalar Abs Diff Max": parity.get(
+                                "probability_summary_scalar_abs_diff_max"
+                            ),
+                            "Probability Summary Scalar Rel Diff Max": parity.get(
+                                "probability_summary_scalar_rel_diff_max"
+                            ),
+                            "Probability Probe Value Max Abs Diff": parity.get(
+                                "probability_probe_value_max_abs_diff"
+                            ),
+                            "Probability Summary Scalar Abs Diff Threshold": parity.get("thresholds", {}).get(
+                                "summary_scalar_abs_diff"
+                            ),
+                            "Probability Summary Scalar Rel Diff Threshold": parity.get("thresholds", {}).get(
+                                "summary_scalar_rel_diff"
+                            ),
+                            "Probability Probe Value Max Abs Diff Threshold": parity.get("thresholds", {}).get(
+                                "probe_value_max_abs_diff"
+                            ),
                         }
                     )
 

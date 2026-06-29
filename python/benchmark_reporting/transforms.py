@@ -380,11 +380,47 @@ def _safe_ratio(numerator, denominator):
     numerator = pd.to_numeric(numerator, errors="coerce")
     denominator = pd.to_numeric(denominator, errors="coerce")
 
-    return np.where(
+    values = np.where(
         denominator == 0,
         np.where(numerator == 0, 0.0, np.inf),
         numerator / denominator,
     )
+    return pd.Series(values, index=numerator.index, dtype="float64")
+
+
+def _numeric_column(df, column):
+    if column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce")
+    return pd.Series(np.nan, index=df.index, dtype="float64")
+
+
+def _hdbscan_summary_scalar_pressure(
+    df,
+    *,
+    abs_col,
+    rel_col,
+    abs_threshold_col,
+    rel_threshold_col,
+):
+    """Pressure for HDBSCAN scalar checks that pass on abs OR rel tolerance."""
+
+    pressures = pd.concat(
+        [
+            _safe_ratio(_numeric_column(df, abs_col), _numeric_column(df, abs_threshold_col)),
+            _safe_ratio(_numeric_column(df, rel_col), _numeric_column(df, rel_threshold_col)),
+        ],
+        axis=1,
+    )
+    return pressures.min(axis=1, skipna=True)
+
+
+def _hdbscan_count_pressure(df, cpp_col, reference_col):
+    cpp = _numeric_column(df, cpp_col)
+    reference = _numeric_column(df, reference_col)
+    valid = cpp.notna() & reference.notna()
+    values = pd.Series(np.nan, index=df.index, dtype="float64")
+    values.loc[valid] = np.where(cpp.loc[valid] == reference.loc[valid], 0.0, 1.0)
+    return values
 
 
 def _algorithm_iteration_pressure(diff_abs):
@@ -441,5 +477,84 @@ def add_lloyd_parity_pressure(df):
 
     out["Parity Pressure"] = ratios.max(axis=1)
     out["Worst Check"] = ratios.idxmax(axis=1)
+
+    return out
+
+
+def add_hdbscan_full_parity_pressure(df):
+    """Add a HDBSCAN Full-stage parity pressure column.
+
+    HDBSCAN summary scalar checks are accepted when either the absolute or the
+    relative tolerance passes.  The pressure therefore uses the smaller of the
+    two ratios for each scalar-summary check.
+    """
+
+    out = df.copy()
+    if out.empty:
+        return out
+
+    if COL_STAGE in out.columns:
+        out = out[out[COL_STAGE].astype(str) == "Full"].copy()
+    if out.empty:
+        out["Parity Pressure"] = pd.Series(dtype="float64")
+        out["Worst Check"] = pd.Series(dtype="object")
+        return out
+
+    ratios = pd.DataFrame(
+        {
+            "summary_scalar": _hdbscan_summary_scalar_pressure(
+                out,
+                abs_col="Summary Scalar Abs Diff Max",
+                rel_col="Summary Scalar Rel Diff Max",
+                abs_threshold_col="Summary Scalar Abs Diff Threshold",
+                rel_threshold_col="Summary Scalar Rel Diff Threshold",
+            ),
+            "probe_values": _safe_ratio(
+                _numeric_column(out, "Probe Value Max Abs Diff"),
+                _numeric_column(out, "Probe Value Max Abs Diff Threshold"),
+            ),
+            "label_summary_scalar": _hdbscan_summary_scalar_pressure(
+                out,
+                abs_col="Label Summary Scalar Abs Diff Max",
+                rel_col="Label Summary Scalar Rel Diff Max",
+                abs_threshold_col="Label Summary Scalar Abs Diff Threshold",
+                rel_threshold_col="Label Summary Scalar Rel Diff Threshold",
+            ),
+            "label_probe_values": _safe_ratio(
+                _numeric_column(out, "Label Probe Value Max Abs Diff"),
+                _numeric_column(out, "Label Probe Value Max Abs Diff Threshold"),
+            ),
+            "probability_summary_scalar": _hdbscan_summary_scalar_pressure(
+                out,
+                abs_col="Probability Summary Scalar Abs Diff Max",
+                rel_col="Probability Summary Scalar Rel Diff Max",
+                abs_threshold_col="Probability Summary Scalar Abs Diff Threshold",
+                rel_threshold_col="Probability Summary Scalar Rel Diff Threshold",
+            ),
+            "probability_probe_values": _safe_ratio(
+                _numeric_column(out, "Probability Probe Value Max Abs Diff"),
+                _numeric_column(out, "Probability Probe Value Max Abs Diff Threshold"),
+            ),
+            "noise_count": _hdbscan_count_pressure(
+                out,
+                "C++ Noise Count",
+                "Reference Noise Count",
+            ),
+            "cluster_count": _hdbscan_count_pressure(
+                out,
+                "C++ Cluster Count",
+                "Reference Cluster Count",
+            ),
+        },
+        index=out.index,
+    )
+
+    valid = ratios.notna().any(axis=1)
+    out["Parity Pressure"] = np.nan
+    out["Worst Check"] = ""
+    if valid.any():
+        valid_ratios = ratios.loc[valid]
+        out.loc[valid_ratios.index, "Parity Pressure"] = valid_ratios.max(axis=1)
+        out.loc[valid_ratios.index, "Worst Check"] = valid_ratios.idxmax(axis=1)
 
     return out
