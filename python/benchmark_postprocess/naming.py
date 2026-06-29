@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_metadata import (
+    DEFAULT_DATASET_KEY,
     LANGUAGE_PY_KEY,
     NO_PARAMS,
     REFERENCE_VARIANT,
@@ -17,14 +18,15 @@ from benchmark_metadata import (
 )
 MetricsKey = tuple[str, str, str, str, str]
 TOKEN_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_-]*"
-VARIANT_PATTERN = rf"(?P<variant>{TOKEN_PATTERN})"
-STAGE_PATTERN = rf"(?P<stage>{TOKEN_PATTERN})"
+VARIANT_PATTERN = rf"(?P<variant>{TOKEN_PATTERN}?)"
+STAGE_PATTERN = rf"(?P<stage>{TOKEN_PATTERN}?)"
 PARAMS_PATTERN = rf"(?P<params>{TOKEN_PATTERN})"
-CONFIG_ID_PATTERN = r"(?P<D>\d+)D_(?P<N>\d+)N_(?P<K>\d+)K"
+CONFIG_ID_PATTERN = rf"(?:(?P<dataset>{TOKEN_PATTERN})_)?(?P<D>\d+)D_(?P<N>\d+)N_(?P<K>\d+)K"
 
 # Current timing artifacts:
-#   {phase}_{stage}_{variant}_{lang}_{D}D_{N}N_{K}K.json
-#   gmm_{stage}_{variant}_{covariance_type}_{lang}_{D}D_{N}N_{K}K.json
+#   {phase}_{stage}_{variant}_{lang}_{dataset}_{D}D_{N}N_{K}K.json
+#   gmm_{stage}_{variant}_{covariance_type}_{lang}_{dataset}_{D}D_{N}N_{K}K.json
+# Legacy files without a dataset prefix are parsed as dataset="blobs".
 BENCHMARK_JSON_RE = re.compile(
     rf"^(?P<phase>soa|pp|lloyd|hdbscan)_{STAGE_PATTERN}_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
@@ -33,9 +35,9 @@ GMM_BENCHMARK_JSON_RE = re.compile(
 )
 
 # Current metrics artifacts:
-#   lloyd_{stage}_metrics_{variant}_{lang}_{D}D_{N}N_{K}K.json
-#   hdbscan_{stage}_metrics_{variant}_{lang}_{D}D_{N}N_{K}K.json
-#   gmm_{stage}_metrics_{variant}_{covariance_type}_{lang}_{D}D_{N}N_{K}K.json
+#   lloyd_{stage}_metrics_{variant}_{lang}_{dataset}_{D}D_{N}N_{K}K.json
+#   hdbscan_{stage}_metrics_{variant}_{lang}_{dataset}_{D}D_{N}N_{K}K.json
+#   gmm_{stage}_metrics_{variant}_{covariance_type}_{lang}_{dataset}_{D}D_{N}N_{K}K.json
 LLOYD_METRICS_JSON_RE = re.compile(
     rf"^lloyd_{STAGE_PATTERN}_metrics_{VARIANT_PATTERN}_(?P<lang>cpp|py)_{CONFIG_ID_PATTERN}\.json$"
 )
@@ -57,6 +59,7 @@ class BenchmarkIdentity:
     variant_key: str
     language_key: str
     params_key: str = NO_PARAMS
+    dataset: str = DEFAULT_DATASET_KEY
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> "BenchmarkIdentity":
@@ -64,6 +67,7 @@ class BenchmarkIdentity:
             dimensions=int(record["dimensions"]),
             samples=int(record["samples"]),
             clusters=int(record["clusters"]),
+            dataset=str(record.get("dataset", DEFAULT_DATASET_KEY)),
             phase_key=str(record["phase_key"]),
             stage_key=str(record["stage_key"]),
             variant_key=str(record["variant_key"]),
@@ -73,11 +77,16 @@ class BenchmarkIdentity:
 
     @property
     def config_id(self) -> str:
-        return format_config_id(self.dimensions, self.samples, self.clusters)
+        return format_config_id(
+            self.dimensions,
+            self.samples,
+            self.clusters,
+            dataset=self.dataset,
+        )
 
     @property
-    def config_key(self) -> tuple[int, int, int]:
-        return (self.dimensions, self.samples, self.clusters)
+    def config_key(self) -> tuple[str, int, int, int]:
+        return (self.dataset, self.dimensions, self.samples, self.clusters)
 
     @property
     def metrics_key(self) -> MetricsKey:
@@ -125,6 +134,7 @@ class BenchmarkIdentity:
             dimensions=self.dimensions,
             samples=self.samples,
             clusters=self.clusters,
+            dataset=self.dataset,
             phase_key=self.phase_key,
             stage_key=self.stage_key,
             variant_key=self.variant_key if variant_key is None else variant_key,
@@ -150,6 +160,7 @@ class BenchmarkIdentity:
             "params": self.params,
             "language_key": self.language_key,
             "language": self.language,
+            "dataset": self.dataset,
             "dimensions": self.dimensions,
             "samples": self.samples,
             "clusters": self.clusters,
@@ -157,11 +168,12 @@ class BenchmarkIdentity:
         }
 
 
-def parse_config_match(match: re.Match[str]) -> tuple[int, int, int]:
+def parse_config_match(match: re.Match[str]) -> tuple[str, int, int, int]:
+    dataset = match.group("dataset") or DEFAULT_DATASET_KEY
     D = int(match.group("D"))
     N = int(match.group("N"))
     K = int(match.group("K"))
-    return D, N, K
+    return dataset, D, N, K
 
 
 def _parsed_common(
@@ -169,12 +181,13 @@ def _parsed_common(
     phase_key: str,
     params_key: str = NO_PARAMS,
 ) -> BenchmarkIdentity:
-    D, N, K = parse_config_match(match)
+    dataset, D, N, K = parse_config_match(match)
 
     return BenchmarkIdentity(
         dimensions=D,
         samples=N,
         clusters=K,
+        dataset=dataset,
         phase_key=phase_key,
         stage_key=match.group("stage"),
         variant_key=match.group("variant"),

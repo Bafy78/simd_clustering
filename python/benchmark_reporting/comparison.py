@@ -89,6 +89,7 @@ SPEEDUP_MATCH_COLS = [
     COL_VARIANT,
     COL_PARAMS,
     COL_REFERENCE_KEY,
+    COL_DATASET,
     COL_DIMENSIONS,
     COL_SAMPLES,
     COL_CLUSTERS,
@@ -99,6 +100,7 @@ CACHEGRIND_MATCH_COLS = [
     COL_STAGE,
     COL_VARIANT,
     COL_PARAMS,
+    COL_DATASET,
     COL_DIMENSIONS,
     COL_SAMPLES,
     COL_CLUSTERS,
@@ -133,6 +135,7 @@ SPEEDUP_COMPARISON_DISPLAY_COLS = [
     COL_VARIANT,
     COL_PARAMS,
     COL_REFERENCE_KEY,
+    COL_DATASET,
     COL_DIMENSIONS,
     COL_SAMPLES,
     COL_CLUSTERS,
@@ -151,6 +154,7 @@ CACHEGRIND_COMPARISON_DISPLAY_COUNTERS = [
 ]
 
 SPEEDUP_SUMMARY_GROUPS = {
+    "by_dataset": [COL_DATASET],
     "by_phase": [COL_PHASE],
     "by_phase_stage": [COL_PHASE, COL_STAGE],
     "by_phase_stage_variant": [COL_PHASE, COL_STAGE, COL_VARIANT],
@@ -759,7 +763,7 @@ def make_speedup_comparison(
 def speedup_comparison_display_columns(df: pd.DataFrame) -> list[str]:
     """Return the preferred strict-speedup comparison columns."""
 
-    return list(SPEEDUP_COMPARISON_DISPLAY_COLS)
+    return _existing_columns(df, SPEEDUP_COMPARISON_DISPLAY_COLS)
 
 
 def summarize_speedup_comparison(
@@ -781,7 +785,7 @@ def summarize_speedup_comparison(
     if speedup_comparison.empty:
         return pd.DataFrame(columns=output_cols)
 
-    df = speedup_comparison.copy()
+    df = _ensure_compat_columns(speedup_comparison, group_cols)
     df[COL_SPEEDUP_RATIO] = pd.to_numeric(df[COL_SPEEDUP_RATIO], errors="coerce")
     df[COL_SPEEDUP_DELTA_PCT] = pd.to_numeric(
         df[COL_SPEEDUP_DELTA_PCT],
@@ -895,9 +899,9 @@ def _prepare_clustered_delta_heatmap_data(
 ) -> pd.DataFrame:
     """Aggregate duplicate strict rows without changing the plotted grid shape."""
 
-    df = comparison_df.copy()
+    df = _ensure_compat_columns(comparison_df, group_cols)
     df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
-    for col in CONFIG_COLS:
+    for col in NUMERIC_CONFIG_COLS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=[COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, value_col])
     if df.empty:
@@ -906,6 +910,7 @@ def _prepare_clustered_delta_heatmap_data(
     grouping = list(dict.fromkeys(
         list(group_cols) + [COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
     ))
+    grouping = [col for col in grouping if col in df.columns]
 
     return (
         df.groupby(grouping, observed=True, dropna=False, as_index=False)[value_col]
@@ -1042,7 +1047,7 @@ def cachegrind_comparison_display_columns(
                 cachegrind_counter_delta_pct_col(counter),
             ]
         )
-    return columns
+    return _existing_columns(cachegrind_comparison, columns)
 
 
 def cachegrind_comparison_long(cachegrind_comparison: pd.DataFrame) -> pd.DataFrame:
@@ -1614,16 +1619,29 @@ def _prepare_for_join(df: pd.DataFrame, key_cols: list[str]) -> pd.DataFrame:
     result = df.copy()
     for col in key_cols:
         if col not in result.columns:
-            if not result.empty:
+            if col == COL_DATASET:
+                result[col] = DEFAULT_DATASET
+            elif not result.empty:
                 raise KeyError(f"missing comparison key column: {col}")
-            result[col] = pd.NA
-        if col in CONFIG_COLS:
+            else:
+                result[col] = pd.NA
+        if col == COL_DATASET:
+            result[col] = result[col].where(result[col].notna(), DEFAULT_DATASET)
+            result[col] = result[col].astype(str).replace({"": DEFAULT_DATASET})
+        elif col in NUMERIC_CONFIG_COLS:
             result[col] = pd.to_numeric(result[col], errors="coerce").astype("Int64")
         else:
             result[col] = result[col].astype("object").where(result[col].notna(), "")
             result[col] = result[col].astype(str)
     return result
 
+
+
+def _ensure_compat_columns(df: pd.DataFrame, cols: Iterable[str]) -> pd.DataFrame:
+    result = df.copy()
+    if COL_DATASET in cols and COL_DATASET not in result.columns:
+        result[COL_DATASET] = DEFAULT_DATASET
+    return result
 
 def _existing_columns(df: pd.DataFrame, columns: Iterable[str]) -> list[str]:
     return [col for col in columns if col in df.columns]
@@ -1633,7 +1651,10 @@ def _sort_if_possible(df: pd.DataFrame, cols: Iterable[str]) -> pd.DataFrame:
     cols = list(cols)
     if df.empty:
         return df.reset_index(drop=True)
-    return df.sort_values(cols).reset_index(drop=True)
+    existing_cols = [col for col in cols if col in df.columns]
+    if not existing_cols:
+        return df.reset_index(drop=True)
+    return df.sort_values(existing_cols).reset_index(drop=True)
 
 
 def _safe_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:

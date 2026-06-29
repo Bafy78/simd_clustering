@@ -27,6 +27,8 @@ from typing import Any, Callable, Iterable, TypeVar
 JsonDict = dict[str, Any]
 T = TypeVar("T")
 
+from benchmark_metadata import DEFAULT_DATASET_KEY
+
 
 @dataclass
 class MergeStats:
@@ -102,17 +104,18 @@ def _required_int(entry: JsonDict, field_name: str, context: str) -> int:
         ) from exc
 
 
-def config_key(config: JsonDict) -> tuple[int, int, int]:
+def config_key(config: JsonDict) -> tuple[str, int, int, int]:
     return (
+        str(config.get("dataset", DEFAULT_DATASET_KEY)),
         _required_int(config, "dimensions", "config"),
         _required_int(config, "samples", "config"),
         _required_int(config, "clusters", "config"),
     )
 
 
-def config_id_for_key(key: tuple[int, int, int]) -> str:
-    dimensions, samples, clusters = key
-    return f"{dimensions}D_{samples}N_{clusters}K"
+def config_id_for_key(key: tuple[str, int, int, int]) -> str:
+    dataset, dimensions, samples, clusters = key
+    return f"{dataset}_{dimensions}D_{samples}N_{clusters}K"
 
 
 def phase_entry_key(mapping_key: str, phase: JsonDict) -> str:
@@ -131,8 +134,9 @@ def parameterization_entry_key(mapping_key: str, parameterization: JsonDict) -> 
     return str(parameterization.get("params_key", mapping_key))
 
 
-def exclusion_key(exclusion: JsonDict) -> tuple[int, int, int, str, str]:
+def exclusion_key(exclusion: JsonDict) -> tuple[str, int, int, int, str, str]:
     return (
+        str(exclusion.get("dataset", DEFAULT_DATASET_KEY)),
         _required_int(exclusion, "dimensions", "exclusion"),
         _required_int(exclusion, "samples", "exclusion"),
         _required_int(exclusion, "clusters", "exclusion"),
@@ -351,26 +355,29 @@ def merge_config(low: JsonDict, high: JsonDict, stats: MergeStats) -> JsonDict:
     return merged
 
 
-def index_configs(configs: Any, context: str) -> dict[tuple[int, int, int], JsonDict]:
+def index_configs(configs: Any, context: str) -> dict[tuple[str, int, int, int], JsonDict]:
     if configs is None:
         return {}
     if not isinstance(configs, list):
         raise ValueError(f"Expected {context} to be a list, got {type(configs)}")
 
-    indexed: dict[tuple[int, int, int], JsonDict] = {}
+    indexed: dict[tuple[str, int, int, int], JsonDict] = {}
     for config in configs:
         if not isinstance(config, dict):
             raise ValueError(f"Expected entries in {context} to be objects, got {type(config)}")
         key = config_key(config)
         if key in indexed:
             raise ValueError(f"Duplicate config key {key!r} found in {context}")
-        indexed[key] = copy.deepcopy(config)
+        normalized = copy.deepcopy(config)
+        normalized["dataset"] = key[0]
+        normalized["config_id"] = config_id_for_key(key)
+        indexed[key] = normalized
 
     return indexed
 
 
-def concrete_phase_stage_keys(configs: Iterable[JsonDict]) -> set[tuple[int, int, int, str, str]]:
-    keys: set[tuple[int, int, int, str, str]] = set()
+def concrete_phase_stage_keys(configs: Iterable[JsonDict]) -> set[tuple[str, int, int, int, str, str]]:
+    keys: set[tuple[str, int, int, int, str, str]] = set()
     for config in configs:
         cfg_key = config_key(config)
         phases = config.get("phases", {})
@@ -390,7 +397,7 @@ def concrete_phase_stage_keys(configs: Iterable[JsonDict]) -> set[tuple[int, int
 
 def collect_exclusions(summary: JsonDict) -> list[JsonDict]:
     """Collect top-level exclusions."""
-    collected: dict[tuple[int, int, int, str, str], JsonDict] = {}
+    collected: dict[tuple[str, int, int, int, str, str], JsonDict] = {}
 
     for exclusion in summary.get("exclusions", []) or []:
         if not isinstance(exclusion, dict):
@@ -403,10 +410,10 @@ def collect_exclusions(summary: JsonDict) -> list[JsonDict]:
 def merge_exclusions(
     low: JsonDict,
     high: JsonDict,
-    configs: dict[tuple[int, int, int], JsonDict],
+    configs: dict[tuple[str, int, int, int], JsonDict],
     stats: MergeStats,
 ) -> list[JsonDict]:
-    merged_by_key: dict[tuple[int, int, int, str, str], JsonDict] = {}
+    merged_by_key: dict[tuple[str, int, int, int, str, str], JsonDict] = {}
 
     for exclusion in collect_exclusions(low):
         merged_by_key[exclusion_key(exclusion)] = copy.deepcopy(exclusion)
@@ -476,8 +483,9 @@ def merge_compile_artifacts(
 
 
 
-def cachegrind_record_key(record: JsonDict) -> tuple[int, int, int, str, str, str]:
+def cachegrind_record_key(record: JsonDict) -> tuple[str, int, int, int, str, str, str]:
     return (
+        str(record.get("dataset", DEFAULT_DATASET_KEY)),
         _required_int(record, "D", "Cachegrind record"),
         _required_int(record, "N", "Cachegrind record"),
         _required_int(record, "K", "Cachegrind record"),
@@ -487,8 +495,9 @@ def cachegrind_record_key(record: JsonDict) -> tuple[int, int, int, str, str, st
     )
 
 
-def cachegrind_target_key(record: JsonDict) -> tuple[int, int, int, str, str, str]:
+def cachegrind_target_key(record: JsonDict) -> tuple[str, int, int, int, str, str, str]:
     return (
+        str(record.get("dataset", DEFAULT_DATASET_KEY)),
         _required_int(record, "D", "Cachegrind planned record"),
         _required_int(record, "N", "Cachegrind planned record"),
         _required_int(record, "K", "Cachegrind planned record"),
@@ -498,8 +507,9 @@ def cachegrind_target_key(record: JsonDict) -> tuple[int, int, int, str, str, st
     )
 
 
-def cachegrind_exclusion_key(exclusion: JsonDict) -> tuple[int, int, int, str, str, str]:
+def cachegrind_exclusion_key(exclusion: JsonDict) -> tuple[str, int, int, int, str, str, str]:
     return (
+        str(exclusion.get("dataset", DEFAULT_DATASET_KEY)),
         _required_int(exclusion, "dimensions", "Cachegrind exclusion"),
         _required_int(exclusion, "samples", "Cachegrind exclusion"),
         _required_int(exclusion, "clusters", "Cachegrind exclusion"),
@@ -546,19 +556,19 @@ def merge_cachegrind_summaries(
         }
     )
 
-    records_by_key: dict[tuple[int, int, int, str, str, str], JsonDict] = {}
+    records_by_key: dict[tuple[str, int, int, int, str, str, str], JsonDict] = {}
     for record in low_cachegrind.get("records", []) or []:
         records_by_key[cachegrind_record_key(record)] = copy.deepcopy(record)
     for record in high_cachegrind.get("records", []) or []:
         records_by_key[cachegrind_record_key(record)] = copy.deepcopy(record)
 
-    planned_by_key: dict[tuple[int, int, int, str, str, str], JsonDict] = {}
+    planned_by_key: dict[tuple[str, int, int, int, str, str, str], JsonDict] = {}
     for record in low_cachegrind.get("planned_records", []) or []:
         planned_by_key[cachegrind_target_key(record)] = copy.deepcopy(record)
     for record in high_cachegrind.get("planned_records", []) or []:
         planned_by_key[cachegrind_target_key(record)] = copy.deepcopy(record)
 
-    exclusions_by_key: dict[tuple[int, int, int, str, str, str], JsonDict] = {}
+    exclusions_by_key: dict[tuple[str, int, int, int, str, str, str], JsonDict] = {}
     for exclusion in low_cachegrind.get("exclusions", []) or []:
         exclusions_by_key[cachegrind_exclusion_key(exclusion)] = copy.deepcopy(exclusion)
     for exclusion in high_cachegrind.get("exclusions", []) or []:
@@ -589,14 +599,15 @@ def merge_cachegrind_summaries(
     return merged
 
 def ensure_config_for_exclusion(
-    configs: dict[tuple[int, int, int], JsonDict], exclusion: JsonDict
+    configs: dict[tuple[str, int, int, int], JsonDict], exclusion: JsonDict
 ) -> JsonDict:
-    cfg_key = exclusion_key(exclusion)[:3]
+    cfg_key = exclusion_key(exclusion)[:4]
     if cfg_key not in configs:
         configs[cfg_key] = {
-            "dimensions": cfg_key[0],
-            "samples": cfg_key[1],
-            "clusters": cfg_key[2],
+            "dataset": cfg_key[0],
+            "dimensions": cfg_key[1],
+            "samples": cfg_key[2],
+            "clusters": cfg_key[3],
             "config_id": exclusion.get("config_id", config_id_for_key(cfg_key)),
             "phases": {},
             "excluded_phases": {},
@@ -605,7 +616,7 @@ def ensure_config_for_exclusion(
 
 
 def rebuild_config_excluded_phases(
-    configs: dict[tuple[int, int, int], JsonDict], exclusions: list[JsonDict]
+    configs: dict[tuple[str, int, int, int], JsonDict], exclusions: list[JsonDict]
 ) -> None:
     for config in configs.values():
         config["excluded_phases"] = {}
@@ -646,7 +657,7 @@ def rebuild_config_excluded_phases(
         )
 
 
-def sorted_configs(configs: dict[tuple[int, int, int], JsonDict]) -> list[JsonDict]:
+def sorted_configs(configs: dict[tuple[str, int, int, int], JsonDict]) -> list[JsonDict]:
     return [configs[key] for key in sorted(configs)]
 
 

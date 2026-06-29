@@ -87,8 +87,16 @@ VARIANT_DISPLAY_NAMES = {
 }
 
 
-def format_config_id(D: int, N: int, K: int) -> str:
-    return f"{D}D_{N}N_{K}K"
+DEFAULT_DATASET_KEY = "blobs"
+
+
+def format_config_id(
+    D: int,
+    N: int,
+    K: int,
+    dataset: str = DEFAULT_DATASET_KEY,
+) -> str:
+    return f"{dataset}_{D}D_{N}N_{K}K"
 
 
 def display_name(key: str) -> str:

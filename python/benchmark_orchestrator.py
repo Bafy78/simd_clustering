@@ -34,45 +34,83 @@ from benchmark_pipeline.tasks import (
 )
 
 
-def _targets_for_dimension(
-    config: BenchmarkConfig,
-    D: int,
-    target_builder,
-) -> set[CppTarget]:
-    targets: set[CppTarget] = set()
-
-    for N in config.test_Ns:
-        for K in config.test_Ks:
-            targets.update(
-                target_builder(
-                    BenchmarkCase(D, N, K),
-                    config.pipeline,
-                    config.exclusion_rules,
-                )
-            )
-
-    return targets
-
-
-def cpp_cases_for_dimension(config: BenchmarkConfig, D: int) -> set[str]:
-    return {
-        target.cpp_case
-        for target in _targets_for_dimension(config, D, active_cpp_targets_for_case)
-    }
-
-
-def cachegrind_cpp_cases_for_dimension(config: BenchmarkConfig, D: int) -> set[str]:
-    return {
-        target.cpp_case
-        for target in _targets_for_dimension(config, D, active_cachegrind_targets_for_case)
-    }
-
-
 def _iter_config_cases(config: BenchmarkConfig) -> Iterable[BenchmarkCase]:
     for D in config.test_Ds:
         for N in config.test_Ns:
             for K in config.test_Ks:
                 yield BenchmarkCase(D, N, K)
+
+    for dataset in config.real_datasets:
+        yield BenchmarkCase(
+            D=dataset.D,
+            N=dataset.N,
+            K=dataset.K,
+            dataset=dataset.key,
+            dataset_source_kind=dataset.source,
+            dataset_source_path=dataset.path,
+            dataset_source_url=dataset.url,
+            dataset_source_format=dataset.format,
+            downloads_dir=config.downloads_dir,
+            openml_data_id=dataset.data_id,
+            openml_name=dataset.name,
+            openml_version=dataset.version,
+            uci_dataset_id=dataset.dataset_id,
+            hf_repo=dataset.repo,
+            hf_config=dataset.hf_config,
+            hf_split=dataset.split,
+            hf_feature_column=dataset.feature_column,
+            feature_columns=dataset.feature_columns,
+        )
+
+
+def _cases_for_dimension(
+    cases: Iterable[BenchmarkCase],
+    D: int,
+) -> list[BenchmarkCase]:
+    return [case for case in cases if case.D == D]
+
+
+def _targets_for_dimension(
+    config: BenchmarkConfig,
+    D: int,
+    cases: Iterable[BenchmarkCase] | None,
+    target_builder,
+) -> set[CppTarget]:
+    targets: set[CppTarget] = set()
+    cases = list(_iter_config_cases(config)) if cases is None else cases
+
+    for case in _cases_for_dimension(cases, D):
+        targets.update(
+            target_builder(
+                case,
+                config.pipeline,
+                config.exclusion_rules,
+            )
+        )
+
+    return targets
+
+
+def cpp_cases_for_dimension(
+    config: BenchmarkConfig,
+    D: int,
+    cases: Iterable[BenchmarkCase] | None = None,
+) -> set[str]:
+    return {
+        target.cpp_case
+        for target in _targets_for_dimension(config, D, cases, active_cpp_targets_for_case)
+    }
+
+
+def cachegrind_cpp_cases_for_dimension(
+    config: BenchmarkConfig,
+    D: int,
+    cases: Iterable[BenchmarkCase] | None = None,
+) -> set[str]:
+    return {
+        target.cpp_case
+        for target in _targets_for_dimension(config, D, cases, active_cachegrind_targets_for_case)
+    }
 
 
 def build_cachegrind_manifest_for_config(config: BenchmarkConfig) -> dict[str, Any]:
@@ -89,6 +127,7 @@ def build_cachegrind_manifest_for_config(config: BenchmarkConfig) -> dict[str, A
                 config.exclusion_rules,
             ):
                 exclusion = build_cachegrind_exclusion_record(
+                    dataset=case.dataset,
                     D=case.D,
                     N=case.N,
                     K=case.K,
@@ -103,6 +142,7 @@ def build_cachegrind_manifest_for_config(config: BenchmarkConfig) -> dict[str, A
 
                 planned_records.append(
                     {
+                        "dataset": case.dataset,
                         "D": int(case.D),
                         "N": int(case.N),
                         "K": int(case.K),
@@ -129,9 +169,7 @@ def write_benchmark_exclusion_manifest(
     datasets_dir: Path,
 ) -> None:
     manifest = build_exclusion_manifest(
-        test_Ds=config.test_Ds,
-        test_Ns=config.test_Ns,
-        test_Ks=config.test_Ks,
+        cases=_iter_config_cases(config),
         rules=config.exclusion_rules,
         phase_keys=enabled_phase_keys_for_options(config.pipeline),
         stage_keys_by_phase=enabled_stage_keys_by_phase_for_options(config.pipeline),
@@ -168,28 +206,31 @@ def run_benchmark_suite(config: BenchmarkConfig) -> None:
     datasets_dir = prepare_datasets_dir(config.datasets_dir)
     write_benchmark_exclusion_manifest(config, datasets_dir)
 
-    for D in config.test_Ds:
+    cases = list(_iter_config_cases(config))
+
+    for D in sorted({case.D for case in cases}):
+        cases_for_D = _cases_for_dimension(cases, D)
+
         compile_cpp_binaries(
             D,
-            cpp_cases_for_dimension(config, D),
+            cpp_cases_for_dimension(config, D, cases_for_D),
             datasets_dir=datasets_dir,
         )
 
         if config.pipeline.run_cachegrind:
             compile_callgrind_binaries(
                 D,
-                cachegrind_cpp_cases_for_dimension(config, D),
+                cachegrind_cpp_cases_for_dimension(config, D, cases_for_D),
             )
 
-        for N in config.test_Ns:
-            for K in config.test_Ks:
-                execute_pipeline(
-                    BenchmarkCase(D, N, K),
-                    config.pipeline,
-                    datasets_dir=datasets_dir,
-                    keep_inputs=config.keep_inputs,
-                    exclusion_rules=config.exclusion_rules,
-                )
+        for case in sorted(cases_for_D):
+            execute_pipeline(
+                case,
+                config.pipeline,
+                datasets_dir=datasets_dir,
+                keep_inputs=config.keep_inputs,
+                exclusion_rules=config.exclusion_rules,
+            )
 
     print("\nAll benchmarking finished successfully!")
 

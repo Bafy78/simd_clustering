@@ -8,6 +8,7 @@ bin/
 docs/
 notes/
 datasets*/
+downloads/
 **/__pycache__/
 callgrind_results/
 diagnostics_results/

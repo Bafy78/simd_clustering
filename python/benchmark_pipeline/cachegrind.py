@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_pipeline.cpp_cases import get_cpp_case
-from benchmark_metadata import stage_display_name
+from benchmark_metadata import DEFAULT_DATASET_KEY, format_config_id, stage_display_name
 from benchmark_pipeline.exclusions import CachegrindExclusionRule, phase_display_name
 from benchmark_pipeline.paths import REPO_ROOT, repo_relative_path
 
@@ -242,6 +242,7 @@ def build_cachegrind_record(
     *,
     cpp_case: str,
     stage_key: str,
+    dataset: str = DEFAULT_DATASET_KEY,
     D: int,
     N: int,
     K: int,
@@ -279,10 +280,11 @@ def build_cachegrind_record(
         "variant_key": case.variant_key,
         "variant": case.variant_key.replace("_", " ").title(),
         "params_key": params_key,
+        "dataset": dataset,
         "D": int(D),
         "N": int(N),
         "K": int(K),
-        "config_id": f"{int(D)}D_{int(N)}N_{int(K)}K",
+        "config_id": format_config_id(int(D), int(N), int(K), dataset=dataset),
         "cache_model": cache_model,
         "events": {event: int(events[event]) for event in PROFILE_EVENTS},
         "derived": derived_cache_metrics(events),
@@ -292,6 +294,7 @@ def build_cachegrind_record(
 
 def build_cachegrind_exclusion_record(
     *,
+    dataset: str = DEFAULT_DATASET_KEY,
     D: int,
     N: int,
     K: int,
@@ -308,6 +311,7 @@ def build_cachegrind_exclusion_record(
         }
         for rule_index, rule in enumerate(rules)
         if rule.matches(
+            dataset=dataset,
             D=D,
             N=N,
             K=K,
@@ -323,7 +327,8 @@ def build_cachegrind_exclusion_record(
 
     reasons = list(dict.fromkeys(record["reason"] for record in matched_rules))
     return {
-        "config_id": f"{D}D_{N}N_{K}K",
+        "config_id": format_config_id(D, N, K, dataset=dataset),
+        "dataset": dataset,
         "dimensions": int(D),
         "samples": int(N),
         "clusters": int(K),
@@ -362,6 +367,7 @@ def build_cachegrind_manifest(
         "planned_records": sorted(
             planned_records,
             key=lambda item: (
+                str(item.get("dataset", DEFAULT_DATASET_KEY)),
                 int(item["D"]),
                 int(item["N"]),
                 int(item["K"]),
@@ -373,6 +379,7 @@ def build_cachegrind_manifest(
         "exclusions": sorted(
             exclusions,
             key=lambda item: (
+                str(item.get("dataset", DEFAULT_DATASET_KEY)),
                 int(item["dimensions"]),
                 int(item["samples"]),
                 int(item["clusters"]),

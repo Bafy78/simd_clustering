@@ -5,6 +5,8 @@ scikit-learn==1.8.0
 hdbscan==0.8.44
 pyperf
 threadpoolctl
+ucimlrepo
+datasets
 
 # Postprocessing and reporting
 pandas

@@ -1,3 +1,4 @@
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,7 @@ from benchmark_metadata import (
     LANGUAGE_PY_KEY,
     NO_PARAMS,
     REFERENCE_VARIANT,
+    DEFAULT_DATASET_KEY,
     reference_display_name,
     reference_keys_for_phase,
     stage_display_name,
@@ -46,26 +48,180 @@ from benchmark_pipeline.stages import (
 )
 
 
+DATASET_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+SUPPORTED_DATASET_SOURCE_KINDS = {
+    "blobs",
+    "local",
+    "url",
+    "openml",
+    "uci",
+    "huggingface",
+    # Backwards-compatible local aliases.
+    "npy",
+    "binary_f32",
+}
+SUPPORTED_LOCAL_DATASET_FORMATS = {"npy", "binary_f32"}
+
+
+def validate_dataset_key(dataset: str) -> str:
+    if not DATASET_KEY_RE.fullmatch(dataset):
+        raise ValueError(
+            "Dataset keys must match [A-Za-z0-9][A-Za-z0-9_-]*; "
+            f"got {dataset!r}."
+        )
+    return dataset
+
+
 @dataclass(frozen=True, order=True)
 class BenchmarkCase:
     D: int
     N: int
     K: int
+    dataset: str = DEFAULT_DATASET_KEY
+    dataset_source_kind: str = "blobs"
+    dataset_source_path: str | None = None
+    dataset_source_url: str | None = None
+    dataset_source_format: str | None = None
+    downloads_dir: str | None = None
+    openml_data_id: int | None = None
+    openml_name: str | None = None
+    openml_version: int | str | None = None
+    uci_dataset_id: int | None = None
+    hf_repo: str | None = None
+    hf_config: str | None = None
+    hf_split: str | None = None
+    hf_feature_column: str | None = None
+    feature_columns: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        validate_dataset_key(self.dataset)
+        if self.dataset_source_kind not in SUPPORTED_DATASET_SOURCE_KINDS:
+            raise ValueError(
+                f"Unsupported dataset source kind {self.dataset_source_kind!r}; "
+                f"expected one of {sorted(SUPPORTED_DATASET_SOURCE_KINDS)}."
+            )
+
+        source_kind = self.dataset_source_kind
+        source_format = self._effective_source_format()
+
+        if source_kind == "local":
+            if not self.dataset_source_path:
+                raise ValueError(
+                    f"Dataset {self.dataset!r} uses local source kind "
+                    f"{source_kind!r} but has no source path."
+                )
+            if source_format not in SUPPORTED_LOCAL_DATASET_FORMATS:
+                raise ValueError(
+                    f"Unsupported local dataset format {source_format!r}; "
+                    f"expected one of {sorted(SUPPORTED_LOCAL_DATASET_FORMATS)}."
+                )
+        elif source_kind == "url":
+            if not self.dataset_source_url:
+                raise ValueError(
+                    f"Dataset {self.dataset!r} uses URL source but has no URL."
+                )
+            if source_format not in SUPPORTED_LOCAL_DATASET_FORMATS:
+                raise ValueError(
+                    f"Unsupported URL dataset format {source_format!r}; "
+                    f"expected one of {sorted(SUPPORTED_LOCAL_DATASET_FORMATS)}."
+                )
+        elif source_kind == "openml":
+            if self.openml_data_id is None and not self.openml_name:
+                raise ValueError(
+                    f"Dataset {self.dataset!r} uses OpenML but has neither "
+                    "data_id nor name."
+                )
+        elif source_kind == "uci":
+            if self.uci_dataset_id is None:
+                raise ValueError(
+                    f"Dataset {self.dataset!r} uses UCI but has no dataset_id."
+                )
+        elif source_kind == "huggingface":
+            if not self.hf_repo:
+                raise ValueError(
+                    f"Dataset {self.dataset!r} uses Hugging Face but has no repo."
+                )
+            if not self.hf_feature_column and not self.feature_columns:
+                raise ValueError(
+                    f"Dataset {self.dataset!r} uses Hugging Face but has no "
+                    "feature column selection."
+                )
+
+    def _effective_source_format(self) -> str | None:
+        if self.dataset_source_kind in SUPPORTED_LOCAL_DATASET_FORMATS:
+            return self.dataset_source_kind
+        return self.dataset_source_format
 
     @property
     def case_id(self) -> str:
-        return f"{self.D}D_{self.N}N_{self.K}K"
+        return f"{self.dataset}_{self.D}D_{self.N}N_{self.K}K"
 
     @property
     def label(self) -> str:
-        return f"{self.D}D | {self.N}N | {self.K}K"
+        return f"{self.dataset} | {self.D}D | {self.N}N | {self.K}K"
 
     def dimension_args(self) -> list[str]:
         return ["--D", str(self.D), "--N", str(self.N), "--K", str(self.K)]
 
+    def source_args(self) -> list[str]:
+        args = ["--dataset", self.dataset, "--source-kind", self.dataset_source_kind]
 
-def benchmark_case(D: int, N: int, K: int) -> BenchmarkCase:
-    return BenchmarkCase(D=D, N=N, K=K)
+        if self.dataset_source_path is not None:
+            args.extend(["--source-path", self.dataset_source_path])
+        if self.dataset_source_url is not None:
+            args.extend(["--source-url", self.dataset_source_url])
+        if (
+            self.dataset_source_kind in {"npy", "binary_f32", "local", "url"}
+            and self._effective_source_format() is not None
+        ):
+            args.extend(["--source-format", self._effective_source_format() or ""])
+        if self.downloads_dir is not None:
+            args.extend(["--downloads-dir", self.downloads_dir])
+
+        if self.openml_data_id is not None:
+            args.extend(["--openml-data-id", str(self.openml_data_id)])
+        if self.openml_name is not None:
+            args.extend(["--openml-name", self.openml_name])
+        if self.openml_version is not None:
+            args.extend(["--openml-version", str(self.openml_version)])
+
+        if self.uci_dataset_id is not None:
+            args.extend(["--uci-dataset-id", str(self.uci_dataset_id)])
+
+        if self.hf_repo is not None:
+            args.extend(["--hf-repo", self.hf_repo])
+        if self.hf_config is not None:
+            args.extend(["--hf-config", self.hf_config])
+        if self.hf_split is not None:
+            args.extend(["--hf-split", self.hf_split])
+        if self.hf_feature_column is not None:
+            args.extend(["--hf-feature-column", self.hf_feature_column])
+        if self.feature_columns:
+            args.extend(["--feature-columns", *self.feature_columns])
+
+        return args
+
+
+def benchmark_case(
+    D: int,
+    N: int,
+    K: int,
+    dataset: str = DEFAULT_DATASET_KEY,
+    dataset_source_kind: str = "blobs",
+    dataset_source_path: str | None = None,
+    dataset_source_url: str | None = None,
+    dataset_source_format: str | None = None,
+) -> BenchmarkCase:
+    return BenchmarkCase(
+        D=D,
+        N=N,
+        K=K,
+        dataset=dataset,
+        dataset_source_kind=dataset_source_kind,
+        dataset_source_path=dataset_source_path,
+        dataset_source_url=dataset_source_url,
+        dataset_source_format=dataset_source_format,
+    )
 
 
 @dataclass
@@ -87,6 +243,7 @@ class Task:
 class CachegrindTaskInfo:
     cpp_case: str
     stage_key: str
+    dataset: str
     D: int
     N: int
     K: int
@@ -101,12 +258,22 @@ class CachegrindTaskInfo:
     metrics_path: str | None = None
 
 
-def config_id(D: int, N: int, K: int) -> str:
-    return benchmark_case(D, N, K).case_id
+def config_id(
+    D: int,
+    N: int,
+    K: int,
+    dataset: str = DEFAULT_DATASET_KEY,
+) -> str:
+    return benchmark_case(D, N, K, dataset=dataset).case_id
 
 
-def configuration_label(D: int, N: int, K: int) -> str:
-    return benchmark_case(D, N, K).label
+def configuration_label(
+    D: int,
+    N: int,
+    K: int,
+    dataset: str = DEFAULT_DATASET_KEY,
+) -> str:
+    return benchmark_case(D, N, K, dataset=dataset).label
 
 
 def dataset_path(filename: str, datasets_dir: str | Path = DATASETS_DIR) -> str:
@@ -441,6 +608,7 @@ def active_cpp_targets_for_case(
     enabled_phase_keys = enabled_phase_keys_for_options(options)
     stage_keys_by_phase = enabled_stage_keys_by_phase_for_options(options)
     excluded_phase_stage_keys = excluded_phase_stage_keys_for_case(
+        dataset=case.dataset,
         D=case.D,
         N=case.N,
         K=case.K,
@@ -499,6 +667,7 @@ def active_cachegrind_targets_for_case(
         target
         for target in active_cpp_targets_for_case(case, options, exclusion_rules)
         if not is_cachegrind_excluded(
+            dataset=case.dataset,
             D=case.D,
             N=case.N,
             K=case.K,
@@ -849,6 +1018,7 @@ def build_cachegrind_task(
         cachegrind=CachegrindTaskInfo(
             cpp_case=cpp_case,
             stage_key=stage_key,
+            dataset=case.dataset,
             D=case.D,
             N=case.N,
             K=case.K,
@@ -877,6 +1047,7 @@ def build_dataset_setup_task(
     setup_command = [
         sys.executable,
         repo_path("python", "benchmark_pipeline", "tools", "dataset_gen.py"),
+        *case.source_args(),
         *case.dimension_args(),
         "--dataset-out",
         artifacts.dataset_bin,
@@ -903,7 +1074,7 @@ def build_dataset_setup_task(
                 ]
             )
 
-    setup_name = "Setup: Generate Dataset & K-Means++ Init"
+    setup_name = f"Setup: Materialize {case.dataset} Dataset & K-Means++ Init"
     if gmm_covariance_types:
         setup_name += " & GMM Init"
 
@@ -1038,6 +1209,7 @@ def build_pipeline(
     enabled_phase_keys = enabled_phase_keys_for_options(options)
     stage_keys_by_phase = enabled_stage_keys_by_phase_for_options(options)
     excluded_phase_keys = excluded_phase_keys_for_case(
+        dataset=case.dataset,
         D=case.D,
         N=case.N,
         K=case.K,
@@ -1046,6 +1218,7 @@ def build_pipeline(
         stage_keys_by_phase=stage_keys_by_phase,
     )
     excluded_phase_stage_keys = excluded_phase_stage_keys_for_case(
+        dataset=case.dataset,
         D=case.D,
         N=case.N,
         K=case.K,

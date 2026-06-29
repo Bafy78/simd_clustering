@@ -2,12 +2,14 @@ from collections import defaultdict
 from typing import Any
 
 from benchmark_metadata import (
+    DEFAULT_DATASET_KEY,
     LANGUAGE_CPP_KEY,
     LANGUAGE_PY_KEY,
     NO_PARAMS,
     language_display_name,
     reference_display_name,
     stage_display_name,
+    format_config_id,
 )
 from benchmark_postprocess.naming import (
     BenchmarkIdentity,
@@ -95,21 +97,23 @@ def summarize_language_records(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _config_entry_for_values(
-    configs: dict[tuple[int, int, int], dict[str, Any]],
+    configs: dict[tuple[str, int, int, int], dict[str, Any]],
     *,
+    dataset: str = DEFAULT_DATASET_KEY,
     D: int,
     N: int,
     K: int,
 ) -> dict[str, Any]:
-    config_key = (int(D), int(N), int(K))
+    config_key = (str(dataset), int(D), int(N), int(K))
 
     if config_key not in configs:
-        D, N, K = config_key
+        dataset, D, N, K = config_key
         configs[config_key] = {
+            "dataset": dataset,
             "dimensions": D,
             "samples": N,
             "clusters": K,
-            "config_id": f"{D}D_{N}N_{K}K",
+            "config_id": format_config_id(D, N, K, dataset=dataset),
             "phases": {},
             "excluded_phases": {},
         }
@@ -118,11 +122,12 @@ def _config_entry_for_values(
 
 
 def _config_entry(
-    configs: dict[tuple[int, int, int], dict[str, Any]],
+    configs: dict[tuple[str, int, int, int], dict[str, Any]],
     identity: BenchmarkIdentity,
 ) -> dict[str, Any]:
     return _config_entry_for_values(
         configs,
+        dataset=identity.dataset,
         D=identity.dimensions,
         N=identity.samples,
         K=identity.clusters,
@@ -251,12 +256,13 @@ def _append_parity_status(records: list[dict[str, Any]], phase_name: str) -> Non
 
 
 def _append_exclusions(
-    configs: dict[tuple[int, int, int], dict[str, Any]],
+    configs: dict[tuple[str, int, int, int], dict[str, Any]],
     exclusions: list[dict[str, Any]],
 ) -> None:
     for exclusion in exclusions:
         config_entry = _config_entry_for_values(
             configs,
+            dataset=str(exclusion.get("dataset", DEFAULT_DATASET_KEY)),
             D=int(exclusion["dimensions"]),
             N=int(exclusion["samples"]),
             K=int(exclusion["clusters"]),
@@ -288,6 +294,7 @@ def _sorted_exclusions(exclusions: list[dict[str, Any]]) -> list[dict[str, Any]]
     return sorted(
         exclusions,
         key=lambda item: (
+            str(item.get("dataset", DEFAULT_DATASET_KEY)),
             int(item["dimensions"]),
             int(item["samples"]),
             int(item["clusters"]),
@@ -298,13 +305,13 @@ def _sorted_exclusions(exclusions: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _sorted_config_entries(
-    configs: dict[tuple[int, int, int], dict[str, Any]]
+    configs: dict[tuple[str, int, int, int], dict[str, Any]]
 ) -> list[dict[str, Any]]:
     return [configs[config_key] for config_key in sorted(configs)]
 
 
 def _attach_cachegrind_records(
-    configs: dict[tuple[int, int, int], dict[str, Any]],
+    configs: dict[tuple[str, int, int, int], dict[str, Any]],
     cachegrind: dict[str, Any] | None,
 ) -> None:
     if not cachegrind:
@@ -315,6 +322,7 @@ def _attach_cachegrind_records(
             dimensions=int(record["D"]),
             samples=int(record["N"]),
             clusters=int(record["K"]),
+            dataset=str(record.get("dataset", DEFAULT_DATASET_KEY)),
             phase_key=str(record["phase_key"]),
             stage_key=str(record["stage_key"]),
             variant_key=str(record["variant_key"]),
@@ -353,7 +361,7 @@ def build_summary(
     grouped = group_records(records)
     exclusions = _sorted_exclusions(exclusions or [])
 
-    configs: dict[tuple[int, int, int], dict[str, Any]] = {}
+    configs: dict[tuple[str, int, int, int], dict[str, Any]] = {}
     lloyd_comparison_records: list[dict[str, Any]] = []
     gmm_parity_records: list[dict[str, Any]] = []
     hdbscan_parity_records: list[dict[str, Any]] = []
@@ -377,7 +385,7 @@ def build_summary(
     # Attach every available Python reference to every concrete C++ variant and
     # build speedup/parity per config × phase × stage × variant × reference.
     for config_key, config_entry in configs.items():
-        D, N, K = config_key
+        dataset, D, N, K = config_key
 
         for phase_entry in config_entry["phases"].values():
             phase_key = phase_entry["phase_key"]
@@ -395,6 +403,7 @@ def build_summary(
                             dimensions=D,
                             samples=N,
                             clusters=K,
+                            dataset=dataset,
                             phase_key=phase_key,
                             stage_key=stage_key,
                             variant_key=variant_key,
@@ -544,14 +553,14 @@ def build_summary(
 
     return {
         "metadata": {
-            "schema_version": 9,
+            "schema_version": 10,
             "description": (
                 "Post-processed benchmark summary. Raw pyperf/nanobench JSON "
                 "values are grouped by timing process/pyperf run before aggregation. "
                 "C++ stages, variants, and algorithm parameterizations are represented explicitly; "
                 "Reference runs are attached under per-reference comparison blocks for "
                 "each comparable C++ variant with the same parameterization. Configured exclusions are preserved as "
-                "reported-but-not-run D/N/K/phase/stage entries."
+                "reported-but-not-run dataset/D/N/K/phase/stage entries."
             ),
             "time_unit": "seconds",
             "time_per_algorithm_iteration_definition": (

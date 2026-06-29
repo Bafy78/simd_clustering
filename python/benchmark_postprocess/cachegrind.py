@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmark_postprocess.io import load_json
+from benchmark_metadata import DEFAULT_DATASET_KEY
 from benchmark_pipeline.cachegrind import (
     CACHEGRIND_MANIFEST_FILENAME,
     CACHEGRIND_PREFIX,
@@ -51,6 +52,7 @@ def load_cachegrind_records(results_dir: str | Path) -> list[dict[str, Any]]:
     return sorted(
         records,
         key=lambda item: (
+            str(item.get("dataset", DEFAULT_DATASET_KEY)),
             int(item["D"]),
             int(item["N"]),
             int(item["K"]),

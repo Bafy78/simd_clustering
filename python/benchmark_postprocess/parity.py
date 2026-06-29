@@ -813,9 +813,15 @@ def compute_hdbscan_comparison(
         result["cpp_cluster_count"] = int(cpp.get("cluster_count", -1))
         result["python_cluster_count"] = int(py.get("cluster_count", -1))
         if label_details is not None:
+            result["label_summary_scalar_diffs"] = label_details["scalar_diffs"]
+            result["label_summary_scalar_abs_diff_max"] = label_details["scalar_abs_diff_max"]
+            result["label_summary_scalar_rel_diff_max"] = label_details["scalar_rel_diff_max"]
             result["label_hash_equal"] = label_details["hash_equal"]
             result["label_probe_value_max_abs_diff"] = label_details["probe_value_max_abs_diff"]
         if probability_details is not None:
+            result["probability_summary_scalar_diffs"] = probability_details["scalar_diffs"]
+            result["probability_summary_scalar_abs_diff_max"] = probability_details["scalar_abs_diff_max"]
+            result["probability_summary_scalar_rel_diff_max"] = probability_details["scalar_rel_diff_max"]
             result["probability_hash_equal"] = probability_details["hash_equal"]
             result["probability_probe_value_max_abs_diff"] = probability_details["probe_value_max_abs_diff"]
     return result

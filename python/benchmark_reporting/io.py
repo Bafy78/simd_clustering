@@ -56,6 +56,7 @@ def load_exclusion_summary(
                         exclusion.get("phase", phase_key),
                     ),
                     COL_STAGE: stage_name,
+                    COL_DATASET: str(exclusion.get("dataset", "blobs")),
                     COL_DIMENSIONS: int(exclusion["dimensions"]),
                     COL_SAMPLES: int(exclusion["samples"]),
                     COL_CLUSTERS: int(exclusion["clusters"]),
@@ -74,7 +75,7 @@ def load_exclusion_summary(
     df = _apply_phase_stage_categories(df)
 
     return df.sort_values(
-        [COL_PHASE, COL_STAGE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+        [COL_PHASE, COL_STAGE, COL_DATASET, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
     ).reset_index(drop=True)
 
 
@@ -146,6 +147,7 @@ def load_compile_artifact_summary(
                     COL_PHASE: _phase_display_name(phase_key, phase_key or "-"),
                     COL_STAGE: stage_name,
                     COL_VARIANT: _variant_display_name(variant_key),
+                    COL_DATASET: str(result.get("dataset", "compile")),
                     COL_DIMENSIONS: int(result["D"]),
                     COL_CPP_CASE: result.get("cpp_case"),
                     COL_COMPILER_EXECUTABLE: result.get("compiler_executable"),
@@ -165,7 +167,7 @@ def load_compile_artifact_summary(
     df = _apply_phase_stage_categories(df)
 
     return df.sort_values(
-        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_DIMENSIONS]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_DATASET, COL_DIMENSIONS]
     ).reset_index(drop=True)
 
 
@@ -189,6 +191,7 @@ def load_spill_detection_summary(
                 COL_VARIANT: _variant_display_name(variant_key),
                 COL_PARAMS: _params_display_name(gmm_covariance_type),
                 "C++ Case": cpp_case_name,
+                COL_DATASET: str(result.get("dataset", "compile")),
                 COL_DIMENSIONS: int(result.get("D")),
                 "Candidate Reload Pairs": int(
                     result.get("candidate_reload_pairs", 0)
@@ -203,7 +206,7 @@ def load_spill_detection_summary(
     df = _apply_phase_stage_categories(df)
 
     return df.sort_values(
-        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DATASET, COL_DIMENSIONS]
     ).reset_index(drop=True)
 
 
@@ -232,6 +235,7 @@ def load_cachegrind_summary(
                     COL_VARIANT: _variant_display_name(variant_key),
                     COL_PARAMS: _params_display_name(params_key),
                     COL_CPP_CASE: result.get("cpp_case"),
+                    COL_DATASET: str(result.get("dataset", "blobs")),
                     COL_DIMENSIONS: int(result["D"]),
                     COL_SAMPLES: int(result["N"]),
                     COL_CLUSTERS: int(result["K"]),
@@ -273,6 +277,7 @@ def load_cachegrind_summary(
             COL_STAGE,
             COL_VARIANT,
             COL_PARAMS,
+            COL_DATASET,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
@@ -452,6 +457,7 @@ def _empty_benchmark_dataframe() -> pd.DataFrame:
             COL_PARAMS,
             COL_REFERENCE,
             COL_REFERENCE_KEY,
+            COL_DATASET,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
@@ -477,6 +483,7 @@ def _empty_speedup_dataframe() -> pd.DataFrame:
             COL_PARAMS,
             COL_REFERENCE,
             COL_REFERENCE_KEY,
+            COL_DATASET,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
@@ -509,6 +516,7 @@ def load_benchmark_data(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
+        dataset = str(config.get("dataset", "blobs"))
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
@@ -557,6 +565,7 @@ def load_benchmark_data(
                         COL_PARAMS: params_name,
                         COL_REFERENCE: "-",
                         COL_REFERENCE_KEY: "",
+                        COL_DATASET: dataset,
                         COL_DIMENSIONS: D,
                         COL_SAMPLES: N,
                         COL_CLUSTERS: K,
@@ -605,6 +614,7 @@ def load_benchmark_data(
                         COL_PARAMS: params_name,
                         COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
                         COL_REFERENCE_KEY: reference_key,
+                        COL_DATASET: dataset,
                         COL_DIMENSIONS: D,
                         COL_SAMPLES: N,
                         COL_CLUSTERS: K,
@@ -655,7 +665,7 @@ def load_benchmark_data(
     )
 
     return df.sort_values(
-        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, COL_LANGUAGE]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DATASET, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS, COL_LANGUAGE]
     ).reset_index(drop=True)
 
 
@@ -674,6 +684,7 @@ def load_speedup_summary(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
+        dataset = str(config.get("dataset", "blobs"))
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
@@ -717,6 +728,7 @@ def load_speedup_summary(
                             COL_PARAMS: params_name,
                             COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
                             COL_REFERENCE_KEY: reference_key,
+                            COL_DATASET: dataset,
                             COL_DIMENSIONS: D,
                             COL_SAMPLES: N,
                             COL_CLUSTERS: K,
@@ -757,7 +769,7 @@ def load_speedup_summary(
     )
 
     return df.sort_values(
-        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
+        [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DATASET, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS]
     ).reset_index(drop=True)
 
 
@@ -769,6 +781,7 @@ def load_lloyd_parity_summary(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
+        dataset = str(config.get("dataset", "blobs"))
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
@@ -812,6 +825,7 @@ def load_lloyd_parity_summary(
                             COL_PARAMS: params_name,
                             COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
                             COL_REFERENCE_KEY: reference_key,
+                            COL_DATASET: dataset,
                             COL_DIMENSIONS: D,
                             COL_SAMPLES: N,
                             COL_CLUSTERS: K,
@@ -846,7 +860,7 @@ def load_lloyd_parity_summary(
 
     df = _apply_phase_stage_categories(df)
     return df.sort_values(
-        by=["Diff (%)", COL_STAGE, COL_REFERENCE], ascending=[False, True, True]
+        by=["Diff (%)", COL_DATASET, COL_STAGE, COL_REFERENCE], ascending=[False, True, True, True]
     ).reset_index(drop=True)
 
 
@@ -858,6 +872,7 @@ def load_gmm_parity_summary(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
+        dataset = str(config.get("dataset", "blobs"))
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
@@ -899,6 +914,7 @@ def load_gmm_parity_summary(
                             COL_PARAMS: params_name,
                             COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
                             COL_REFERENCE_KEY: reference_key,
+                            COL_DATASET: dataset,
                             COL_DIMENSIONS: D,
                             COL_SAMPLES: N,
                             COL_CLUSTERS: K,
@@ -953,11 +969,12 @@ def load_gmm_parity_summary(
             COL_VARIANT,
             COL_PARAMS,
             COL_REFERENCE,
+            COL_DATASET,
             COL_DIMENSIONS,
             COL_SAMPLES,
             COL_CLUSTERS,
         ],
-        ascending=[True, False, True, True, True, True, True, True, True],
+        ascending=[True, False, True, True, True, True, True, True, True, True],
     ).reset_index(drop=True)
 
 
@@ -969,6 +986,7 @@ def load_hdbscan_parity_summary(
     records: list[dict[str, Any]] = []
 
     for config in summary.get("configs", []):
+        dataset = str(config.get("dataset", "blobs"))
         D = int(config["dimensions"])
         N = int(config["samples"])
         K = int(config["clusters"])
@@ -1009,6 +1027,7 @@ def load_hdbscan_parity_summary(
                             COL_PARAMS: params_name,
                             COL_REFERENCE: _comparison_reference_name(reference_key, comparison_entry),
                             COL_REFERENCE_KEY: reference_key,
+                            COL_DATASET: dataset,
                             COL_DIMENSIONS: D,
                             COL_SAMPLES: N,
                             COL_CLUSTERS: K,
@@ -1090,6 +1109,6 @@ def load_hdbscan_parity_summary(
 
     df = _apply_phase_stage_categories(df)
     return df.sort_values(
-        by=["Status", COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS],
-        ascending=[True, True, True, True, True, True, True, True],
+        by=["Status", COL_STAGE, COL_VARIANT, COL_PARAMS, COL_REFERENCE, COL_DATASET, COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS],
+        ascending=[True, True, True, True, True, True, True, True, True],
     ).reset_index(drop=True)

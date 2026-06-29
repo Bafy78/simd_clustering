@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from benchmark_metadata import (
+    DEFAULT_DATASET_KEY,
     FULL_STAGE_KEY,
     NO_PARAMS,
     PHASE_KEYS,
@@ -36,6 +37,7 @@ class BenchmarkExclusionRule:
     reason: str
     phase_keys: PhaseSelector = None
     stage_keys: StageSelector = None
+    datasets: StringSelector = None
     dimensions: IntSelector = None
     samples: IntSelector = None
     clusters: IntSelector = None
@@ -68,9 +70,13 @@ class BenchmarkExclusionRule:
             )
         return stage_keys
 
+    def resolved_datasets(self) -> tuple[str, ...] | None:
+        return _normalize_string_selector(self.datasets)
+
     def matches(
         self,
         *,
+        dataset: str = DEFAULT_DATASET_KEY,
         D: int,
         N: int,
         K: int,
@@ -84,6 +90,10 @@ class BenchmarkExclusionRule:
             return False
         resolved_stage_keys = self.resolved_stage_keys()
         if resolved_stage_keys is not None and stage_key not in resolved_stage_keys:
+            return False
+
+        resolved_datasets = self.resolved_datasets()
+        if resolved_datasets is not None and dataset not in resolved_datasets:
             return False
 
         return (
@@ -108,6 +118,7 @@ class CachegrindExclusionRule:
     phase_keys: PhaseSelector = None
     stage_keys: StageSelector = None
     params_keys: StringSelector = None
+    datasets: StringSelector = None
     dimensions: IntSelector = None
     samples: IntSelector = None
     clusters: IntSelector = None
@@ -146,9 +157,13 @@ class CachegrindExclusionRule:
     def resolved_params_keys(self) -> tuple[str, ...] | None:
         return _normalize_string_selector(self.params_keys)
 
+    def resolved_datasets(self) -> tuple[str, ...] | None:
+        return _normalize_string_selector(self.datasets)
+
     def matches(
         self,
         *,
+        dataset: str = DEFAULT_DATASET_KEY,
         D: int,
         N: int,
         K: int,
@@ -172,6 +187,10 @@ class CachegrindExclusionRule:
 
         params_keys = self.resolved_params_keys()
         if params_keys is not None and params_key not in params_keys:
+            return False
+
+        resolved_datasets = self.resolved_datasets()
+        if resolved_datasets is not None and dataset not in resolved_datasets:
             return False
 
         return (
@@ -235,6 +254,7 @@ def phase_display_name(phase_key: str) -> str:
 
 def exclusion_records_for_case(
     *,
+    dataset: str = DEFAULT_DATASET_KEY,
     D: int,
     N: int,
     K: int,
@@ -259,6 +279,7 @@ def exclusion_records_for_case(
                 }
                 for rule_index, rule in enumerate(rules)
                 if rule.matches(
+                    dataset=dataset,
                     D=D,
                     N=N,
                     K=K,
@@ -273,7 +294,8 @@ def exclusion_records_for_case(
             reasons = list(dict.fromkeys(rule_record["reason"] for rule_record in matched_rules))
             records.append(
                 {
-                    "config_id": f"{D}D_{N}N_{K}K",
+                    "config_id": f"{dataset}_{D}D_{N}N_{K}K",
+                    "dataset": dataset,
                     "dimensions": int(D),
                     "samples": int(N),
                     "clusters": int(K),
@@ -291,6 +313,7 @@ def exclusion_records_for_case(
 
 def excluded_phase_keys_for_case(
     *,
+    dataset: str = DEFAULT_DATASET_KEY,
     D: int,
     N: int,
     K: int,
@@ -310,6 +333,7 @@ def excluded_phase_keys_for_case(
     }
     excluded_stage_keys: dict[str, set[str]] = {}
     for record in exclusion_records_for_case(
+        dataset=dataset,
         D=D,
         N=N,
         K=K,
@@ -330,6 +354,7 @@ def excluded_phase_keys_for_case(
 
 def excluded_phase_stage_keys_for_case(
     *,
+    dataset: str = DEFAULT_DATASET_KEY,
     D: int,
     N: int,
     K: int,
@@ -340,6 +365,7 @@ def excluded_phase_stage_keys_for_case(
     return {
         (record["phase_key"], record["stage_key"])
         for record in exclusion_records_for_case(
+            dataset=dataset,
             D=D,
             N=N,
             K=K,
@@ -352,6 +378,7 @@ def excluded_phase_stage_keys_for_case(
 
 def is_phase_excluded(
     *,
+    dataset: str = DEFAULT_DATASET_KEY,
     D: int,
     N: int,
     K: int,
@@ -361,6 +388,7 @@ def is_phase_excluded(
 ) -> bool:
     return bool(
         exclusion_records_for_case(
+            dataset=dataset,
             D=D,
             N=N,
             K=K,
@@ -373,6 +401,7 @@ def is_phase_excluded(
 
 def is_cachegrind_excluded(
     *,
+    dataset: str = DEFAULT_DATASET_KEY,
     D: int,
     N: int,
     K: int,
@@ -384,6 +413,7 @@ def is_cachegrind_excluded(
 ) -> bool:
     return any(
         rule.matches(
+            dataset=dataset,
             D=D,
             N=N,
             K=K,
@@ -396,11 +426,29 @@ def is_cachegrind_excluded(
     )
 
 
+def _manifest_case_tuple(case: Any) -> tuple[str, int, int, int]:
+    if hasattr(case, "dataset") and hasattr(case, "D") and hasattr(case, "N") and hasattr(case, "K"):
+        return (str(case.dataset), int(case.D), int(case.N), int(case.K))
+
+    if isinstance(case, dict):
+        return (
+            str(case.get("dataset", DEFAULT_DATASET_KEY)),
+            int(case["D"]),
+            int(case["N"]),
+            int(case["K"]),
+        )
+
+    dataset, D, N, K = case
+    return str(dataset), int(D), int(N), int(K)
+
+
 def build_exclusion_manifest(
     *,
-    test_Ds: Iterable[int],
-    test_Ns: Iterable[int],
-    test_Ks: Iterable[int],
+    test_Ds: Iterable[int] | None = None,
+    test_Ns: Iterable[int] | None = None,
+    test_Ks: Iterable[int] | None = None,
+    cases: Iterable[Any] | None = None,
+    dataset: str = DEFAULT_DATASET_KEY,
     rules: Iterable[BenchmarkExclusionRule],
     phase_keys: Iterable[str] = VALID_PHASE_KEYS,
     stage_keys_by_phase: dict[str, Iterable[str]] | None = None,
@@ -408,22 +456,34 @@ def build_exclusion_manifest(
     rules = tuple(rules)
     exclusions: list[dict[str, Any]] = []
 
-    for D in test_Ds:
-        for N in test_Ns:
-            for K in test_Ks:
-                exclusions.extend(
-                    exclusion_records_for_case(
-                        D=int(D),
-                        N=int(N),
-                        K=int(K),
-                        rules=rules,
-                        phase_keys=phase_keys,
-                        stage_keys_by_phase=stage_keys_by_phase,
-                    )
-                )
+    if cases is None:
+        if test_Ds is None or test_Ns is None or test_Ks is None:
+            raise ValueError("Either cases or test_Ds/test_Ns/test_Ks must be provided.")
+        case_tuples = (
+            (dataset, int(D), int(N), int(K))
+            for D in test_Ds
+            for N in test_Ns
+            for K in test_Ks
+        )
+    else:
+        case_tuples = (_manifest_case_tuple(case) for case in cases)
+
+    for dataset_key, D, N, K in case_tuples:
+        exclusions.extend(
+            exclusion_records_for_case(
+                dataset=dataset_key,
+                D=D,
+                N=N,
+                K=K,
+                rules=rules,
+                phase_keys=phase_keys,
+                stage_keys_by_phase=stage_keys_by_phase,
+            )
+        )
 
     exclusions.sort(
         key=lambda item: (
+            str(item.get("dataset", DEFAULT_DATASET_KEY)),
             item["dimensions"],
             item["samples"],
             item["clusters"],
@@ -433,14 +493,13 @@ def build_exclusion_manifest(
     )
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "description": (
             "User-configured benchmark exclusions. Each entry is a "
-            "D/N/K/phase/stage combination that the orchestrator intentionally skipped."
+            "dataset/D/N/K/phase/stage combination that the orchestrator intentionally skipped."
         ),
         "exclusions": exclusions,
     }
-
 
 def write_exclusion_manifest(path: str | Path, manifest: dict[str, Any]) -> None:
     path = Path(path)

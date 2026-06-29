@@ -1,11 +1,16 @@
 import argparse
+import hashlib
+import re
+import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
 from sklearn.cluster import kmeans_plusplus
 from sklearn.datasets import make_blobs
 
 from benchmark_pipeline.gmm_covariance import validate_gmm_covariance_type
+from benchmark_pipeline.tasks import validate_dataset_key
 
 
 def nearest_center_labels(
@@ -196,6 +201,52 @@ def estimate_gmm_precisions(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default="blobs")
+    parser.add_argument(
+        "--source-kind",
+        choices=(
+            "blobs",
+            "local",
+            "url",
+            "openml",
+            "uci",
+            "huggingface",
+        ),
+        default="blobs",
+        help="Input source provider. 'blobs' keeps the current synthetic data path.",
+    )
+    parser.add_argument(
+        "--source-path",
+        help="Path for local curated datasets.",
+    )
+    parser.add_argument(
+        "--source-url",
+        help="Direct dataset URL for --source-kind url.",
+    )
+    parser.add_argument(
+        "--source-format",
+        choices=("npy", "binary_f32"),
+        help="Dense input format for local/url sources.",
+    )
+    parser.add_argument(
+        "--downloads-dir",
+        default="downloads",
+        help="Directory used by remote fetchers and direct URL downloads.",
+    )
+    parser.add_argument("--openml-data-id", type=int)
+    parser.add_argument("--openml-name")
+    parser.add_argument("--openml-version")
+    parser.add_argument("--uci-dataset-id", type=int)
+    parser.add_argument("--hf-repo")
+    parser.add_argument("--hf-config")
+    parser.add_argument("--hf-split", default="train")
+    parser.add_argument("--hf-feature-column")
+    parser.add_argument(
+        "--feature-columns",
+        nargs="+",
+        default=[],
+        help="Scalar numeric columns to stack as features when a source supports columns.",
+    )
     parser.add_argument("--D", type=int, required=True)
     parser.add_argument("--N", type=int, required=True)
     parser.add_argument("--K", type=int, required=True)
@@ -238,20 +289,285 @@ def _parse_gmm_precision_outputs(raw_outputs: list[list[str]]) -> dict[str, str]
     return outputs
 
 
+def _source_format_for_args(args: argparse.Namespace) -> str | None:
+    if args.source_format is not None:
+        return args.source_format
+    if args.source_url:
+        suffix = Path(urlparse(args.source_url).path).suffix.lower()
+        if suffix in {".npy", ".npz"}:
+            return "npy"
+    return None
+
+
+def _safe_download_name(url: str, dataset: str) -> str:
+    parsed_name = Path(urlparse(url).path).name
+    parsed_name = re.sub(r"[^A-Za-z0-9._-]+", "_", parsed_name).strip("._")
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
+    if parsed_name:
+        return f"{dataset}_{digest}_{parsed_name}"
+    return f"{dataset}_{digest}.download"
+
+
+def _download_url(url: str, downloads_dir: str | Path, dataset: str) -> Path:
+    downloads_dir = Path(downloads_dir).expanduser()
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+
+    destination = downloads_dir / _safe_download_name(url, dataset)
+    if destination.exists():
+        return destination
+
+    tmp_destination = destination.with_suffix(destination.suffix + ".tmp")
+    try:
+        urllib.request.urlretrieve(url, tmp_destination)
+        tmp_destination.replace(destination)
+    finally:
+        if tmp_destination.exists():
+            tmp_destination.unlink()
+
+    return destination
+
+
+def _load_blob_dataset(N: int, D: int, K: int) -> np.ndarray:
+    X, _, *_ = make_blobs(
+        n_samples=N,
+        n_features=D,
+        centers=K,
+        random_state=42,
+    )
+    return X
+
+
+def _load_npy_dataset(path: str | Path) -> np.ndarray:
+    data = np.load(Path(path).expanduser(), allow_pickle=False)
+    if isinstance(data, np.lib.npyio.NpzFile):
+        try:
+            keys = list(data.files)
+            if len(keys) != 1:
+                raise ValueError(
+                    "NPZ real dataset inputs must contain exactly one array; "
+                    f"found keys {keys!r}."
+                )
+            return np.asarray(data[keys[0]])
+        finally:
+            data.close()
+    return np.asarray(data)
+
+
+def _load_binary_f32_dataset(path: str | Path, N: int, D: int) -> np.ndarray:
+    values = np.fromfile(Path(path).expanduser(), dtype=np.float32)
+    expected_size = int(N) * int(D)
+    if values.size != expected_size:
+        raise ValueError(
+            f"binary_f32 dataset has {values.size} float32 values, "
+            f"expected {expected_size} for shape ({N}, {D})."
+        )
+    return values.reshape((N, D))
+
+
+def _load_local_dataset(
+    path: str | Path,
+    source_format: str,
+    N: int,
+    D: int,
+) -> np.ndarray:
+    if source_format == "npy":
+        return _load_npy_dataset(path)
+    if source_format == "binary_f32":
+        return _load_binary_f32_dataset(path, N, D)
+    raise ValueError(f"Unsupported local dataset format: {source_format!r}")
+
+
+def _coerce_columnar_matrix(source: object, columns: list[str]) -> np.ndarray:
+    if not columns:
+        raise ValueError("At least one feature column is required.")
+
+    values: list[np.ndarray] = []
+    for column in columns:
+        column_values = np.asarray(source[column])  # type: ignore[index]
+        if column_values.ndim != 1:
+            raise ValueError(
+                f"Feature column {column!r} must be scalar-valued, "
+                f"got shape {column_values.shape!r}."
+            )
+        values.append(column_values)
+
+    return np.column_stack(values)
+
+
+def _coerce_vector_column(source: object, column: str) -> np.ndarray:
+    column_values = source[column]  # type: ignore[index]
+    array = np.asarray(column_values)
+
+    # Some column stores expose list/array values as dtype=object. Materialize
+    # them as rows so validation can enforce dense numeric 2-D data.
+    if array.dtype == object:
+        array = np.asarray(list(column_values))
+
+    return array
+
+
+def _load_openml_dataset(args: argparse.Namespace) -> np.ndarray:
+    try:
+        from sklearn.datasets import fetch_openml
+    except ImportError as exc:
+        raise RuntimeError(
+            "OpenML dataset sources require scikit-learn with fetch_openml available."
+        ) from exc
+
+    if args.openml_data_id is None and not args.openml_name:
+        raise ValueError("OpenML sources require --openml-data-id or --openml-name.")
+
+    kwargs: dict[str, object] = {
+        "as_frame": False,
+        "return_X_y": False,
+        "data_home": str(Path(args.downloads_dir).expanduser() / "openml"),
+    }
+    if args.openml_data_id is not None:
+        kwargs["data_id"] = args.openml_data_id
+    else:
+        kwargs["name"] = args.openml_name
+        if args.openml_version is not None:
+            version: int | str = args.openml_version
+            if isinstance(version, str) and version.isdigit():
+                version = int(version)
+            kwargs["version"] = version
+
+    bunch = fetch_openml(**kwargs)
+    return np.asarray(bunch.data)
+
+
+def _load_uci_dataset(args: argparse.Namespace) -> np.ndarray:
+    if args.uci_dataset_id is None:
+        raise ValueError("UCI sources require --uci-dataset-id.")
+
+    try:
+        from ucimlrepo import fetch_ucirepo
+    except ImportError as exc:
+        raise RuntimeError(
+            "UCI dataset sources require the 'ucimlrepo' package."
+        ) from exc
+
+    dataset = fetch_ucirepo(id=args.uci_dataset_id)
+    features = dataset.data.features
+    if args.feature_columns:
+        return _coerce_columnar_matrix(features, list(args.feature_columns))
+    return np.asarray(features)
+
+
+def _load_huggingface_dataset(args: argparse.Namespace) -> np.ndarray:
+    if not args.hf_repo:
+        raise ValueError("Hugging Face sources require --hf-repo.")
+    if not args.hf_feature_column and not args.feature_columns:
+        raise ValueError(
+            "Hugging Face sources require --hf-feature-column or --feature-columns."
+        )
+
+    try:
+        from datasets import load_dataset
+    except ImportError as exc:
+        raise RuntimeError(
+            "Hugging Face dataset sources require the 'datasets' package."
+        ) from exc
+
+    load_args = [args.hf_repo]
+    if args.hf_config:
+        load_args.append(args.hf_config)
+
+    dataset = load_dataset(
+        *load_args,
+        split=args.hf_split,
+        cache_dir=str(Path(args.downloads_dir).expanduser() / "huggingface"),
+    )
+
+    if args.hf_feature_column:
+        return _coerce_vector_column(dataset, args.hf_feature_column)
+
+    return _coerce_columnar_matrix(dataset, list(args.feature_columns))
+
+
+def _validate_dataset_array(
+    X: np.ndarray,
+    *,
+    dataset: str,
+    N: int,
+    D: int,
+) -> np.ndarray:
+    if X.ndim != 2:
+        raise ValueError(
+            f"Dataset {dataset!r} must be a dense 2-D array, got shape {X.shape!r}."
+        )
+    if X.shape != (N, D):
+        raise ValueError(
+            f"Dataset {dataset!r} has shape {X.shape!r}, expected ({N}, {D})."
+        )
+    if not np.issubdtype(X.dtype, np.number):
+        raise TypeError(
+            f"Dataset {dataset!r} must be numeric, got dtype {X.dtype!r}."
+        )
+
+    X_float32 = np.ascontiguousarray(X, dtype=np.float32)
+    if not np.all(np.isfinite(X_float32)):
+        raise ValueError(f"Dataset {dataset!r} contains NaN or infinite values.")
+
+    return X_float32
+
+
+def load_dataset(args: argparse.Namespace) -> np.ndarray:
+    validate_dataset_key(args.dataset)
+
+    if args.K <= 0:
+        raise ValueError(f"K must be positive, got {args.K}.")
+    if args.K > args.N:
+        raise ValueError(f"K must not exceed N, got K={args.K}, N={args.N}.")
+
+    if args.source_kind == "blobs":
+        raw = _load_blob_dataset(args.N, args.D, args.K)
+    elif args.source_kind in {"local"}:
+        if not args.source_path:
+            raise ValueError(
+                f"--source-path is required for source kind {args.source_kind!r}."
+            )
+        source_format = _source_format_for_args(args)
+        if source_format is None:
+            raise ValueError(
+                "Local dataset sources require --source-format."
+            )
+        raw = _load_local_dataset(args.source_path, source_format, args.N, args.D)
+    elif args.source_kind == "url":
+        if not args.source_url:
+            raise ValueError("--source-url is required for URL dataset sources.")
+        source_format = _source_format_for_args(args)
+        if source_format is None:
+            raise ValueError(
+                "URL dataset sources require --source-format unless the URL "
+                "ends in .npy or .npz."
+            )
+        downloaded_path = _download_url(
+            args.source_url,
+            args.downloads_dir,
+            args.dataset,
+        )
+        raw = _load_local_dataset(downloaded_path, source_format, args.N, args.D)
+    elif args.source_kind == "openml":
+        raw = _load_openml_dataset(args)
+    elif args.source_kind == "uci":
+        raw = _load_uci_dataset(args)
+    elif args.source_kind == "huggingface":
+        raw = _load_huggingface_dataset(args)
+    else:
+        raise ValueError(f"Unsupported source kind: {args.source_kind!r}")
+
+    return _validate_dataset_array(raw, dataset=args.dataset, N=args.N, D=args.D)
+
+
 def main() -> None:
     args = parse_args()
 
     ensure_parent_dir(args.dataset_out)
     ensure_parent_dir(args.centroids_out)
 
-    # 1. Generate Dataset
-    X, _, *_ = make_blobs(
-        n_samples=args.N,
-        n_features=args.D,
-        centers=args.K,
-        random_state=42,
-    )
-    X_float32 = X.astype(np.float32)
+    # 1. Materialize the benchmark dataset in the shared row-major float32 format.
+    X_float32 = load_dataset(args)
     X_float32.tofile(args.dataset_out)
 
     # 2. Generate Initial Centroids

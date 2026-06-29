@@ -5,7 +5,7 @@ from benchmark_pipeline.exclusions import (
     BenchmarkExclusionRule,
     CachegrindExclusionRule,
 )
-from benchmark_pipeline.paths import DATASETS_DIR
+from benchmark_pipeline.paths import DATASETS_DIR, DOWNLOADS_DIR
 
 
 @dataclass(frozen=True)
@@ -34,13 +34,44 @@ class PipelineOptions:
 
 
 @dataclass(frozen=True)
+class RealDatasetConfig:
+    key: str
+    D: int
+    N: int
+    K: int = 10
+    source: str = "local"
+
+    # Local/direct URL dense inputs
+    path: str | None = None
+    url: str | None = None
+    format: str = "npy"
+
+    # OpenML. Prefer data_id when known; otherwise use name/version
+    data_id: int | None = None
+    name: str | None = None
+    version: int | str | None = None
+
+    # UCI ML Repository
+    dataset_id: int | None = None
+
+    # Hugging Face Datasets
+    repo: str | None = None
+    hf_config: str | None = None
+    split: str = "train"
+    feature_column: str | None = None
+    feature_columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class BenchmarkConfig:
     test_Ds: list[int]
     test_Ns: list[int]
     test_Ks: list[int]
     pipeline: PipelineOptions
+    real_datasets: tuple[RealDatasetConfig, ...] = ()
     exclusion_rules: tuple[BenchmarkExclusionRule, ...] = ()
     datasets_dir: str = str(DATASETS_DIR)
+    downloads_dir: str = str(DOWNLOADS_DIR)
     keep_inputs: bool = False
 
 
@@ -93,6 +124,34 @@ def default_config() -> BenchmarkConfig:
                     reason=("Too slow and we can infer from the rest of the data well enough"),
                 )
             ),
+        ),
+        real_datasets=(
+            RealDatasetConfig(
+                key="mnist",
+                source="openml",
+                data_id=554,
+                D=784,
+                N=70000,
+                K=10,
+            ),
+            RealDatasetConfig(
+                key="USCensus1990",
+                source="uci",
+                dataset_id=116,
+                D=68,
+                N=2_458_285,
+                K=10,
+            ),
+            RealDatasetConfig(
+                key="sift1m",
+                source="huggingface",
+                repo="open-vdb/sift-128-euclidean",
+                hf_config="train",
+                split="train",
+                feature_column="emb",
+                D=128,
+                N=1_000_000,
+                K=256,
             ),
         ),
         exclusion_rules=(
