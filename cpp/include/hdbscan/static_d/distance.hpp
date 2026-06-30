@@ -1,6 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <bit>
+#include <cstdint>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -68,11 +71,83 @@ void euclidean_distance_matrix(
     }
 }
 
-inline float kth_smallest_value_partition(
+inline std::uint32_t float32_ordered_bits(float value) {
+    return std::bit_cast<std::uint32_t>(value);
+}
+
+inline float bits_to_float32(std::uint32_t bits) {
+    return std::bit_cast<float>(bits);
+}
+
+inline float find_unique_prefix_value(
+    const float* row,
+    std::uint32_t N,
+    std::uint32_t prefix,
+    std::uint32_t prefix_mask
+) {
+    for (std::uint32_t i = 0; i < N; ++i) {
+        const std::uint32_t bits = float32_ordered_bits(row[i]);
+        if ((bits & prefix_mask) == prefix) {
+            return bits_to_float32(bits);
+        }
+    }
+
+    throw std::runtime_error("Could not find unique HDBSCAN radix-selection prefix");
+}
+
+template<std::uint32_t Width>
+inline std::uint32_t select_radix_group(
+    const float* row,
+    std::uint32_t N,
+    unsigned shift,
+    std::uint32_t& prefix,
+    std::uint32_t& prefix_mask,
+    std::uint32_t& rank
+) {
+    static_assert(Width > 0 && Width <= 12);
+    constexpr std::uint32_t bucket_count = 1u << Width;
+    constexpr std::uint32_t bucket_mask = bucket_count - 1u;
+
+    std::array<std::uint32_t, bucket_count> counts{};
+
+    if (prefix_mask == 0u) {
+        for (std::uint32_t i = 0; i < N; ++i) {
+            const std::uint32_t bits = float32_ordered_bits(row[i]);
+            ++counts[(bits >> shift) & bucket_mask];
+        }
+    } else {
+        for (std::uint32_t i = 0; i < N; ++i) {
+            const std::uint32_t bits = float32_ordered_bits(row[i]);
+            if ((bits & prefix_mask) == prefix) {
+                ++counts[(bits >> shift) & bucket_mask];
+            }
+        }
+    }
+
+    std::uint32_t before = 0u;
+    std::uint32_t selected = 0u;
+    for (; selected < bucket_count; ++selected) {
+        const std::uint32_t count = counts[selected];
+        if (rank < before + count) {
+            rank -= before;
+            break;
+        }
+        before += count;
+    }
+
+    if (selected == bucket_count) {
+        throw std::runtime_error("Could not find HDBSCAN radix-selection bucket");
+    }
+
+    prefix |= selected << shift;
+    prefix_mask |= bucket_mask << shift;
+    return counts[selected];
+}
+
+inline float kth_smallest_value_radix_float32(
     const float* row,
     std::size_t N,
-    std::size_t k_zero_based,
-    std::vector<float, eve::aligned_allocator<float>>& scratch
+    std::size_t k_zero_based
 ) {
     if (N == 0) {
         throw std::runtime_error("Cannot compute HDBSCAN core distances for an empty row");
@@ -80,15 +155,24 @@ inline float kth_smallest_value_partition(
     if (k_zero_based >= N) {
         throw std::runtime_error("HDBSCAN core-distance order statistic is out of range");
     }
-
-    if (scratch.size() != N) {
-        scratch.resize(N);
+    if (N > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        throw std::runtime_error("HDBSCAN radix selection expects N <= UINT32_MAX");
     }
 
-    std::copy_n(row, N, scratch.begin());
-    auto kth = scratch.begin() + static_cast<std::ptrdiff_t>(k_zero_based);
-    std::nth_element(scratch.begin(), kth, scratch.end());
-    return *kth;
+    const auto N_u32 = static_cast<std::uint32_t>(N);
+    std::uint32_t rank = static_cast<std::uint32_t>(k_zero_based);
+    std::uint32_t prefix = 0u;
+    std::uint32_t prefix_mask = 0u;
+
+    if (select_radix_group<12>(row, N_u32, 20, prefix, prefix_mask, rank) == 1u) {
+        return find_unique_prefix_value(row, N_u32, prefix, prefix_mask);
+    }
+    if (select_radix_group<10>(row, N_u32, 10, prefix, prefix_mask, rank) == 1u) {
+        return find_unique_prefix_value(row, N_u32, prefix, prefix_mask);
+    }
+    (void)select_radix_group<10>(row, N_u32, 0, prefix, prefix_mask, rank);
+
+    return bits_to_float32(prefix);
 }
 
 inline void core_distances(
@@ -109,13 +193,11 @@ inline void core_distances(
     }
 
     const std::size_t k_zero_based = min_samples - 1;
-    std::vector<float, eve::aligned_allocator<float>> scratch(N);
     for (std::size_t row = 0; row < N; ++row) {
-        core[row] = kth_smallest_value_partition(
+        core[row] = kth_smallest_value_radix_float32(
             distance_matrix.data() + row * N,
             N,
-            k_zero_based,
-            scratch
+            k_zero_based
         );
     }
 }
@@ -135,7 +217,7 @@ inline void mutual_reachability_matrix(
     if (mutual_reachability.size() != N * N) {
         mutual_reachability.resize(N * N);
     }
-
+    
     for (std::size_t row = 0; row < N; ++row) {
         const wide_f core_i(core[row]);
         const float* row_in = distance_matrix.data() + row * N;
