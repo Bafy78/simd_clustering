@@ -9,7 +9,6 @@
 #include <stdexcept>
 #include <vector>
 
-#include <eve/module/algo.hpp>
 #include <eve/module/core.hpp>
 #include <eve/memory/aligned_allocator.hpp>
 
@@ -21,80 +20,86 @@ struct mst_edge {
     float distance;
 };
 
-inline float reduce_min_wide_f(wide_f values) {
-    float reduced = std::numeric_limits<float>::infinity();
-    for (std::size_t lane = 0; lane < wide_f::size(); ++lane) {
-        reduced = std::min(reduced, values.get(lane));
-    }
-    return reduced;
+struct mst_step_result {
+    std::size_t next;
+    float distance;
+};
+
+inline wide_i mst_lane_offsets() {
+    return wide_i([](auto lane, auto) {
+        return static_cast<int>(lane);
+    });
 }
 
-inline void update_mst_candidates_from_current(
+inline mst_step_result reduce_min_index_wide(wide_f distances, wide_i indices) {
+    float best_distance = std::numeric_limits<float>::infinity();
+    std::size_t best_index = 0;
+
+    for (std::size_t lane = 0; lane < wide_f::size(); ++lane) {
+        const float lane_distance = distances.get(lane);
+        const std::size_t lane_index = static_cast<std::size_t>(indices.get(lane));
+
+        if (lane_distance < best_distance
+            || (lane_distance == best_distance && lane_index < best_index)) {
+            best_distance = lane_distance;
+            best_index = lane_index;
+        }
+    }
+
+    return mst_step_result{best_index, best_distance};
+}
+
+inline mst_step_result update_mst_candidates_and_select_next(
     const float* current_row,
-    std::span<const float> attached,
     std::span<float> best_distance,
     std::size_t current,
     std::size_t N
 ) {
-    auto row_range = eve::algo::as_range(current_row, current_row + N);
-    auto attached_range = eve::algo::as_range(attached.data(), attached.data() + N);
-    auto best_range = eve::algo::as_range(best_distance.data(), best_distance.data() + N);
-    auto zipped = eve::views::zip(row_range, attached_range, best_range);
+    constexpr std::size_t card = wide_f::size();
+    constexpr float selected_sentinel = -1.0f;
+    const float infinity = std::numeric_limits<float>::infinity();
 
-    eve::algo::for_each[eve::algo::force_cardinal<cardinal{}()>](
-        zipped,
-        [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
-            auto [candidate_it, attached_it, best_it] = it;
-            const auto candidate = eve::load[ignore](candidate_it);
-            const auto attached_lanes = eve::load[ignore](attached_it);
-            const auto best = eve::load[ignore](best_it);
+    // Selected vertices are encoded directly in best_distance. Mutual reachability
+    // distances for Euclidean HDBSCAN are non-negative, so a negative value is a
+    // compact active-state sentinel and avoids a separate attached[] stream.
+    best_distance[current] = selected_sentinel;
 
-            const auto active = ignore.mask(eve::as<wide_f>()) && (attached_lanes == wide_zero_f);
-            const auto updated = eve::if_else(active && (candidate < best), candidate, best);
-            eve::store[ignore](updated, best_it);
-        }
-    );
+    const wide_i lane_offsets = mst_lane_offsets();
+    wide_f vector_min_distances(infinity);
+    wide_i vector_min_indices(0);
 
-    // The current vertex is now in the tree and must never be selected again.
-    best_distance[current] = std::numeric_limits<float>::infinity();
-}
+    auto process_block = [&](std::size_t j, auto ignore) {
+        const auto candidates = eve::load[ignore](current_row + j);
+        const auto previous_best = eve::load[ignore](best_distance.data() + j);
 
-inline float vector_min_unattached(
-    std::span<const float> best_distance,
-    std::span<const float> attached,
-    std::size_t N
-) {
-    auto best_range = eve::algo::as_range(best_distance.data(), best_distance.data() + N);
-    auto attached_range = eve::algo::as_range(attached.data(), attached.data() + N);
-    auto zipped = eve::views::zip(best_range, attached_range);
-    wide_f minima(std::numeric_limits<float>::infinity());
+        const auto active = ignore.mask(eve::as<wide_f>()) && (previous_best >= wide_zero_f);
+        const auto updated_best = eve::if_else(
+            active && (candidates < previous_best),
+            candidates,
+            previous_best
+        );
+        eve::store[ignore](updated_best, best_distance.data() + j);
 
-    eve::algo::for_each[eve::algo::force_cardinal<cardinal{}()>](
-        zipped,
-        [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
-            auto [best_it, attached_it] = it;
-            const auto best = eve::load[ignore](best_it);
-            const auto attached_lanes = eve::load[ignore](attached_it);
-            const auto active = ignore.mask(eve::as<wide_f>()) && (attached_lanes == wide_zero_f);
-            minima = eve::min(minima, eve::if_else(active, best, wide_f(std::numeric_limits<float>::infinity())));
-        }
-    );
+        const auto selectable_distance = eve::if_else(active, updated_best, wide_f(infinity));
+        const wide_i candidate_indices = wide_i(static_cast<int>(j)) + lane_offsets;
+        const auto better = selectable_distance < vector_min_distances;
 
-    return reduce_min_wide_f(minima);
-}
+        vector_min_distances = eve::if_else(better, selectable_distance, vector_min_distances);
+        vector_min_indices = eve::if_else(better, candidate_indices, vector_min_indices);
+    };
 
-inline std::size_t first_unattached_index_with_distance(
-    std::span<const float> best_distance,
-    std::span<const float> attached,
-    std::size_t N,
-    float target
-) {
-    for (std::size_t i = 0; i < N; ++i) {
-        if (attached[i] == 0.0f && best_distance[i] == target) {
-            return i;
-        }
+    std::size_t j = 0;
+    for (; j + card <= N; j += card) {
+        process_block(j, eve::ignore_none);
     }
-    throw std::runtime_error("Could not select next HDBSCAN MST vertex");
+
+    if (j < N) {
+        const std::size_t valid_lanes = N - j;
+        const std::size_t ignored_lanes = card - valid_lanes;
+        process_block(j, eve::ignore_last(ignored_lanes));
+    }
+
+    return reduce_min_index_wide(vector_min_distances, vector_min_indices);
 }
 
 inline void minimum_spanning_tree_edges(
@@ -112,7 +117,6 @@ inline void minimum_spanning_tree_edges(
     }
     edges.reserve(N - 1);
 
-    std::vector<float, eve::aligned_allocator<float>> attached(N, 0.0f);
     std::vector<float, eve::aligned_allocator<float>> best_distance(
         N,
         std::numeric_limits<float>::infinity()
@@ -125,38 +129,22 @@ inline void minimum_spanning_tree_edges(
     // the actual parent edge in the complete mutual-reachability graph.
     std::size_t current = 0;
     for (std::size_t edge_index = 0; edge_index + 1 < N; ++edge_index) {
-        attached[current] = 1.0f;
-
-        update_mst_candidates_from_current(
+        const mst_step_result next_step = update_mst_candidates_and_select_next(
             mutual_reachability.data() + current * N,
-            std::span<const float>(attached.data(), attached.size()),
             std::span<float>(best_distance.data(), best_distance.size()),
             current,
             N
         );
 
-        const float next_distance = vector_min_unattached(
-            std::span<const float>(best_distance.data(), best_distance.size()),
-            std::span<const float>(attached.data(), attached.size()),
-            N
-        );
-        if (!std::isfinite(next_distance)) {
+        if (!std::isfinite(next_step.distance)) {
             throw std::runtime_error("HDBSCAN MST graph is disconnected or contains no selectable edge");
         }
 
-        const std::size_t next = first_unattached_index_with_distance(
-            std::span<const float>(best_distance.data(), best_distance.size()),
-            std::span<const float>(attached.data(), attached.size()),
-            N,
-            next_distance
-        );
-
         edges.push_back(mst_edge{
             static_cast<std::int32_t>(current),
-            static_cast<std::int32_t>(next),
-            next_distance,
+            static_cast<std::int32_t>(next_step.next),
+            next_step.distance,
         });
-        current = next;
+        current = next_step.next;
     }
 }
-
