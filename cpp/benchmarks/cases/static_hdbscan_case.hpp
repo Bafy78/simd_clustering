@@ -85,11 +85,15 @@ struct static_hdbscan_case {
         }
 
         if (stage_ == "mreach") {
-            mutual_reachability_matrix(
-                std::span<const float>(distance_matrix_input_.data(), distance_matrix_input_.size()),
+            std::copy(
+                distance_matrix_input_.begin(),
+                distance_matrix_input_.end(),
+                mutual_reachability_matrix_.begin()
+            );
+            mutual_reachability_matrix_inplace(
+                std::span<float>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
                 N_,
-                min_samples_,
-                mutual_reachability_matrix_
+                min_samples_
             );
             return;
         }
@@ -125,14 +129,13 @@ struct static_hdbscan_case {
                 samples_,
                 distance_matrix_
             );
-            mutual_reachability_matrix(
-                std::span<const float>(distance_matrix_.data(), distance_matrix_.size()),
+            mutual_reachability_matrix_inplace(
+                std::span<float>(distance_matrix_.data(), distance_matrix_.size()),
                 N_,
-                min_samples_,
-                mutual_reachability_matrix_
+                min_samples_
             );
             minimum_spanning_tree_edges(
-                std::span<const float>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
+                std::span<const float>(distance_matrix_.data(), distance_matrix_.size()),
                 N_,
                 mst_edges_
             );
@@ -282,6 +285,7 @@ private:
             copy_aos_to_static_samples<D>(raw_aos_data, N_, samples_);
         } else if (stage_ == "mreach") {
             distance_matrix_input_ = read_binary_f32(input_bin, N_ * N_);
+            mutual_reachability_matrix_.resize(N_ * N_);
         } else if (stage_ == "mst") {
             mutual_reachability_matrix_input_ = read_binary_f32(input_bin, N_ * N_);
         } else if (stage_ == "linkage") {

@@ -64,6 +64,8 @@ For K-Means++, `run_once()` performs the initialization procedure itself. Since 
 
 For SoA conversion, the conversion is the thing being measured. The raw AoS data is loaded before timing, and `run_once()` copies it into the native layout. This sample-layout conversion is shared by Lloyd and GMM C++ paths, so the same SoA timing artifacts can be interpreted against either algorithm's iteration baseline.
 
+For the isolated HDBSCAN `mreach` stage, the prepared distance matrix is treated as a reusable predecessor artifact. scikit-learn's dense mutual-reachability helper mutates its input in-place, so the Python reference copies the prepared distance matrix before calling that helper. The C++ isolated stage mirrors that staged contract by copying the prepared distance matrix into a preallocated scratch/output buffer and then running the same in-place mreach kernel used by the full C++ pipeline. The full HDBSCAN pipeline does not pay this preservation copy: after pairwise distances are computed, the distance matrix is overwritten with mutual-reachability values and consumed by the MST stage.
+
 For Python benchmarks, each `bench_*.py` script loads the shared binary inputs before calling `pyperf.Runner.bench_func(...)`. The measured function is the wrapped scikit-learn operation. For Lloyd and GMM, estimator construction and `.fit(...)` are inside the measured function because they are part of the operation being compared.
 
 ### Fixed-cost reporting

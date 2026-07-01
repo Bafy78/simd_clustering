@@ -201,33 +201,30 @@ inline void core_distances(
         );
     }
 }
-inline void mutual_reachability_matrix(
-    std::span<const float> distance_matrix,
+inline void mutual_reachability_matrix_inplace(
+    std::span<float> distance_or_mreach_matrix,
     std::size_t N,
-    std::size_t min_samples,
-    std::vector<float, eve::aligned_allocator<float>>& mutual_reachability
+    std::size_t min_samples
 ) {
-    if (distance_matrix.size() != N * N) {
+    if (distance_or_mreach_matrix.size() != N * N) {
         throw std::runtime_error("HDBSCAN mreach stage expected a dense N x N distance matrix");
     }
 
+// Compute core distances before overwriting the distance matrix. After this
+    // point the input buffer is deliberately reused as the mutual-reachability
+    // matrix, matching the dense scikit-learn full-pipeline contract.
     std::vector<float, eve::aligned_allocator<float>> core;
-    core_distances(distance_matrix, N, min_samples, core);
-
-    if (mutual_reachability.size() != N * N) {
-        mutual_reachability.resize(N * N);
-    }
+    core_distances(distance_or_mreach_matrix, N, min_samples, core);
     
     for (std::size_t row = 0; row < N; ++row) {
         const wide_f core_i(core[row]);
-        const float* row_in = distance_matrix.data() + row * N;
-        float* row_out = mutual_reachability.data() + row * N;
-
-        auto distance_range = eve::algo::as_range(row_in, row_in + N);
+        float* row_data = distance_or_mreach_matrix.data() + row * N;
+        
+        auto distance_range = eve::algo::as_range(row_data, row_data + N);
         auto core_range = eve::algo::as_range(core.data(), core.data() + N);
         auto input_range = eve::views::zip(distance_range, core_range);
-        auto out_range = eve::algo::as_range(row_out, row_out + N);
-
+auto out_range = eve::algo::as_range(row_data, row_data + N);
+        
         eve::algo::transform_to[eve::algo::force_cardinal<cardinal{}()>][eve::algo::no_unrolling](
             input_range,
             out_range,

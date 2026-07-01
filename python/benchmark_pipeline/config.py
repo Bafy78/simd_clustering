@@ -88,7 +88,9 @@ def default_config() -> BenchmarkConfig:
             50_000,
             100_000,
             300_000,
-            800_000
+            800_000,
+            2_000_000,
+            10_000_000,
         ],
         test_Ks=[10, 25, 50],
         pipeline=PipelineOptions(
@@ -156,7 +158,7 @@ def default_config() -> BenchmarkConfig:
         ),
         exclusion_rules=(
             BenchmarkExclusionRule(
-                phase_keys=("lloyd",),
+                phase_keys=("lloyd", "pp", "soa"),
                 dimensions=(90,),
                 samples=(10_000_000,),
                 reason=(

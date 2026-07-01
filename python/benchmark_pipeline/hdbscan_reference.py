@@ -10,7 +10,7 @@ internally; those wrappers promote only at the call site.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -23,7 +23,6 @@ from sklearn.cluster._hdbscan.hdbscan import (
 )
 from sklearn.cluster._hdbscan._linkage import make_single_linkage
 from sklearn.metrics import pairwise_distances
-from threadpoolctl import threadpool_limits
 
 from benchmark_metadata import (
     FULL_STAGE_KEY,
@@ -34,24 +33,9 @@ from benchmark_metadata import (
     HDBSCAN_MST_STAGE_KEY,
     HDBSCAN_SELECT_STAGE_KEY,
     HDBSCAN_STAGE_KEYS,
+    REFERENCE_KEYS_BY_PHASE,
     SKLEARN_BRUTE_REFERENCE,
 )
-
-
-SUPPORTED_HDBSCAN_REFERENCE_KEYS = (
-    SKLEARN_BRUTE_REFERENCE,
-    HDBSCAN_CONTRIB_REFERENCE,
-)
-
-
-HdbscanStageKey = Literal[
-    "distance",
-    "mreach",
-    "mst",
-    "linkage",
-    "select",
-    "full",
-]
 
 
 @dataclass(frozen=True)
@@ -59,6 +43,9 @@ class HdbscanFullResult:
     labels: NDArray[np.int32]
     probabilities: NDArray[np.float32]
     single_linkage_tree: NDArray[Any]
+
+
+SUPPORTED_HDBSCAN_REFERENCE_KEYS = REFERENCE_KEYS_BY_PHASE["hdbscan"]
 
 
 def validate_hdbscan_reference_key(reference_key: str) -> str:
@@ -80,7 +67,7 @@ def validate_min_samples(min_samples: int, n_samples: int | None = None) -> None
         )
 
 
-def validate_stage_key(stage_key: str) -> HdbscanStageKey:
+def validate_stage_key(stage_key: str) -> str:
     if stage_key not in HDBSCAN_STAGE_KEYS:
         valid = ", ".join(HDBSCAN_STAGE_KEYS)
         raise ValueError(f"Unknown HDBSCAN stage {stage_key!r}. Valid stages: {valid}")
@@ -100,8 +87,7 @@ def as_sklearn_brute_input(X: ArrayLike) -> NDArray[np.float32]:
 def sklearn_brute_distance_matrix(X: ArrayLike) -> NDArray[np.float32]:
     """distance: X -> dense Euclidean distance matrix."""
     X32 = as_sklearn_brute_input(X)
-    with threadpool_limits(limits=1):
-        distances = pairwise_distances(X32, metric="euclidean", n_jobs=1)
+    distances = pairwise_distances(X32, metric="euclidean", n_jobs=1)
     return np.asarray(distances, dtype=np.float32, order="C")
 
 
@@ -115,15 +101,39 @@ def sklearn_brute_mutual_reachability_matrix(
     This stage includes scikit-learn's internal core-distance computation. The
     private helper stores those core distances on the diagonal of the returned
     mutual-reachability matrix.
+
+    scikit-learn's dense helper mutates its input in-place. The isolated stage
+    benchmark treats the prepared distance matrix as a reusable predecessor
+    artifact, so the wrapper copies before calling the helper. The full staged
+    reference uses the same helper in-place because the distance matrix is
+    disposable after mreach.
     """
     distances = np.asarray(distance_matrix, dtype=np.float32, order="C").copy()
-    validate_min_samples(min_samples, distances.shape[0])
-    with threadpool_limits(limits=1):
-        result = mutual_reachability_graph(
-            distances,
-            min_samples=min_samples,
-            max_distance=0.0,
+    return sklearn_brute_mutual_reachability_matrix_inplace(
+        distances,
+        min_samples=min_samples,
+    )
+
+
+def sklearn_brute_mutual_reachability_matrix_inplace(
+    distance_or_mreach_matrix: NDArray[np.float32],
+    *,
+    min_samples: int,
+) -> NDArray[np.float32]:
+    """Overwrite a dense distance matrix with sklearn mutual reachability."""
+    if (
+        distance_or_mreach_matrix.dtype != np.float32
+        or not distance_or_mreach_matrix.flags.c_contiguous
+    ):
+        raise ValueError(
+            "Expected a C-contiguous float32 distance matrix for in-place mreach"
         )
+    validate_min_samples(min_samples, distance_or_mreach_matrix.shape[0])
+    result = mutual_reachability_graph(
+        distance_or_mreach_matrix,
+        min_samples=min_samples,
+        max_distance=0.0,
+    )
     return np.asarray(result, dtype=np.float32, order="C")
 
 
@@ -220,8 +230,7 @@ def sklearn_brute_mst_edges(
         order="C",
     )
     validate_min_samples(min_samples, mutual_reachability.shape[0])
-    with threadpool_limits(limits=1):
-        mst_edges = _brute_mst(mutual_reachability, min_samples=min_samples)
+    mst_edges = _brute_mst(mutual_reachability, min_samples=min_samples)
     return as_float32_mst_edges(mst_edges)
 
 
@@ -255,8 +264,7 @@ def sklearn_brute_single_linkage_tree(mst_edges: NDArray[Any]) -> NDArray[Any]:
         )
     )
 
-    with threadpool_limits(limits=1):
-        tree = make_single_linkage(edges[row_order])
+    tree = make_single_linkage(edges[row_order])
 
     return as_float32_single_linkage_tree(tree)
 
@@ -268,15 +276,14 @@ def sklearn_brute_select_clusters(
 ) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
     """select: single linkage tree -> labels and probabilities."""
     tree = as_float32_single_linkage_tree(single_linkage_tree)
-    with threadpool_limits(limits=1):
-        labels, probabilities = tree_to_labels(
-            tree,
-            min_samples,
-            "eom",
-            False,
-            0.0,
-            None,
-        )
+    labels, probabilities = tree_to_labels(
+        tree,
+        min_samples,
+        "eom",
+        False,
+        0.0,
+        None,
+    )
     return (
         np.asarray(labels, dtype=np.int32, order="C"),
         np.asarray(probabilities, dtype=np.float32, order="C"),
@@ -286,7 +293,7 @@ def sklearn_brute_select_clusters(
 def sklearn_brute_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult:
     """full: X -> labels and probabilities via the staged float32 reference."""
     distance_matrix = sklearn_brute_distance_matrix(X)
-    mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
+    mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix_inplace(
         distance_matrix,
         min_samples=min_samples,
     )
@@ -342,8 +349,7 @@ def as_hdbscan_contrib_input(X: ArrayLike) -> NDArray[np.float32]:
 def hdbscan_contrib_distance_matrix(X: ArrayLike) -> NDArray[np.float32]:
     """distance: X -> dense Euclidean distance matrix for contrib/generic."""
     X32 = as_hdbscan_contrib_input(X)
-    with threadpool_limits(limits=1):
-        distances = pairwise_distances(X32, metric="euclidean", n_jobs=1)
+    distances = pairwise_distances(X32, metric="euclidean", n_jobs=1)
     return np.asarray(distances, dtype=np.float32, order="C")
 
 
@@ -356,12 +362,11 @@ def hdbscan_contrib_mutual_reachability_matrix(
     distances = np.asarray(distance_matrix, dtype=np.float64, order="C")
     validate_min_samples(min_samples, distances.shape[0])
     hdbscan_contrib = _contrib_hdbscan_module()
-    with threadpool_limits(limits=1):
-        result = hdbscan_contrib.mutual_reachability(
-            distances,
-            min_points=contrib_internal_min_samples(min_samples),
-            alpha=1.0,
-        )
+    result = hdbscan_contrib.mutual_reachability(
+        distances,
+        min_points=contrib_internal_min_samples(min_samples),
+        alpha=1.0,
+    )
     return np.asarray(result, dtype=np.float32, order="C")
 
 
@@ -432,8 +437,7 @@ def hdbscan_contrib_mst_edges(
     )
     validate_min_samples(min_samples, mutual_reachability.shape[0])
     hdbscan_contrib = _contrib_hdbscan_module()
-    with threadpool_limits(limits=1):
-        mst_edges = hdbscan_contrib.mst_linkage_core(mutual_reachability)
+    mst_edges = hdbscan_contrib.mst_linkage_core(mutual_reachability)
 
     return as_cpp_prim_order_mst_edges(mst_edges)
 
@@ -470,8 +474,7 @@ def hdbscan_contrib_single_linkage_tree(mst_edges: ArrayLike) -> NDArray[np.floa
         )
     )
 
-    with threadpool_limits(limits=1):
-        tree = hdbscan_contrib.label(edges[row_order, :])
+    tree = hdbscan_contrib.label(edges[row_order, :])
 
     return as_float32_plain_single_linkage_tree(tree)
 
@@ -489,23 +492,21 @@ def hdbscan_contrib_select_clusters(
     )
     validate_min_samples(min_samples, tree.shape[0] + 1)
     # _tree_to_labels only uses X for its sample count in current contrib. Keep a
-    # dummy dense array instead of threading the original X into this isolated
-    # stage.
+    # dummy dense array instead of threading the original X into this isolated stage.
     dummy_X = np.empty((tree.shape[0] + 1, 0), dtype=np.float64)
     hdbscan_contrib = _contrib_hdbscan_module()
-    with threadpool_limits(limits=1):
-        labels, probabilities, *_ = hdbscan_contrib._tree_to_labels(
-            dummy_X,
-            tree,
-            min_cluster_size=min_samples,
-            cluster_selection_method="eom",
-            allow_single_cluster=False,
-            match_reference_implementation=False,
-            cluster_selection_epsilon=0.0,
-            cluster_selection_persistence=0.0,
-            max_cluster_size=0,
-            cluster_selection_epsilon_max=float("inf"),
-        )
+    labels, probabilities, *_ = hdbscan_contrib._tree_to_labels(
+        dummy_X,
+        tree,
+        min_cluster_size=min_samples,
+        cluster_selection_method="eom",
+        allow_single_cluster=False,
+        match_reference_implementation=False,
+        cluster_selection_epsilon=0.0,
+        cluster_selection_persistence=0.0,
+        max_cluster_size=0,
+        cluster_selection_epsilon_max=float("inf"),
+    )
     return (
         np.asarray(labels, dtype=np.int32, order="C"),
         np.asarray(probabilities, dtype=np.float32, order="C"),

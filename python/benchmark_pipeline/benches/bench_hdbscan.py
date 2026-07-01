@@ -2,25 +2,39 @@ from __future__ import annotations
 
 import pyperf
 
-from benchmark_metadata import HDBSCAN_STAGE_KEYS, SKLEARN_BRUTE_REFERENCE
-from benchmark_pipeline.hdbscan_reference import (
-    prepare_hdbscan_reference_stage_input,
-    run_prepared_hdbscan_reference_stage,
-    validate_hdbscan_reference_key,
-    validate_min_samples,
-    validate_stage_key,
-)
-from benchmark_pipeline.hdbscan_stage_metrics import write_hdbscan_stage_metrics
+from benchmark_metadata import HDBSCAN_STAGE_KEYS, SKLEARN_BRUTE_REFERENCE, REFERENCE_KEYS_BY_PHASE
+SUPPORTED_HDBSCAN_REFERENCE_KEYS = REFERENCE_KEYS_BY_PHASE["hdbscan"]
 
+prepare_hdbscan_reference_stage_input = None
+run_prepared_hdbscan_reference_stage = None
+write_hdbscan_stage_metrics = None
+threadpool_limits = None
 np = None
 
 
-def import_runtime_deps():
-    global np
+def import_runtime_deps(include_metrics=False):
+    global threadpool_limits, np, prepare_hdbscan_reference_stage_input
+    global run_prepared_hdbscan_reference_stage
+    global write_hdbscan_stage_metrics
 
     import numpy as _np
+    from threadpoolctl import threadpool_limits as _threadpool_limits
+    from benchmark_pipeline import hdbscan_reference as _hdbscan_reference
 
     np = _np
+    threadpool_limits = _threadpool_limits
+    prepare_hdbscan_reference_stage_input = (
+        _hdbscan_reference.prepare_hdbscan_reference_stage_input
+    )
+    run_prepared_hdbscan_reference_stage = (
+        _hdbscan_reference.run_prepared_hdbscan_reference_stage
+    )
+
+    if include_metrics:
+        from benchmark_pipeline.hdbscan_stage_metrics import (
+            write_hdbscan_stage_metrics as _write_hdbscan_stage_metrics,
+        )
+        write_hdbscan_stage_metrics = _write_hdbscan_stage_metrics
 
 
 def load_dataset(args):
@@ -82,11 +96,10 @@ def main() -> None:
     runner.argparser.add_argument("--min-samples", type=int, required=True)
     runner.argparser.add_argument("--metrics-file", required=True)
     args = runner.parse_args()
-    validate_stage_key(args.stage)
-    validate_hdbscan_reference_key(args.reference)
-    validate_min_samples(args.min_samples, args.N)
 
-    if getattr(args, "worker", False):
+    is_worker = getattr(args, "worker", False)
+
+    if is_worker:
         import_runtime_deps()
         X = load_dataset(args)
         prepared_input = prepare_stage_input(
@@ -94,22 +107,28 @@ def main() -> None:
             args.stage,
             args.reference,
             args.min_samples,
-        )
+        )            
     else:
-        X = None
         prepared_input = None
 
-    runner.bench_func(
-        f"hdbscan_{args.stage}_{args.reference}_py",
-        run_prepared_stage,
-        args.stage,
-        args.reference,
-        prepared_input,
-        args.min_samples,
-    )
+    def bench() -> None:
+        runner.bench_func(
+                f"hdbscan_{args.stage}_{args.reference}_py",
+                run_prepared_stage,
+                args.stage,
+                args.reference,
+                prepared_input,
+                args.min_samples,
+            )
+        
+    if is_worker:
+        with threadpool_limits(limits=1):
+            bench()
+    else:
+        bench()
 
-    if not getattr(args, "worker", False):
-        import_runtime_deps()
+    if not is_worker:
+        import_runtime_deps(include_metrics=True)
         X = load_dataset(args)
         prepared_input = prepare_stage_input(
             X,
