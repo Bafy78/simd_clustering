@@ -185,7 +185,7 @@ def validate_hdbscan_timing_process_metrics(candidate: dict, reference: dict, pa
         "nan_count",
         "pos_inf_count",
         "neg_inf_count",
-        "fnv1a64_float32",
+        "fnv1a64_float64",
     ):
         if candidate_summary.get(field) != reference_summary.get(field):
             raise RuntimeError(

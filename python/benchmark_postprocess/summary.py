@@ -624,8 +624,8 @@ def build_summary(
                 "hdbscan_source": "precomputed hdbscan_{stage}_metrics_{variant}_{cpp,py}_*.json files",
                 "hdbscan_note": (
                     "HDBSCAN stage parity is computed from compact stage-output summaries. "
-                    "For implemented float-output stages, summaries are generated after casting the "
-                    "reference output to float32, matching the current C++ implementation scope."
+                    "Dense HDBSCAN stage boundaries and compact output summaries use float64, "
+                    "matching the current C++ implementation and sklearn/contrib reference scope."
                 ),
             },
         },

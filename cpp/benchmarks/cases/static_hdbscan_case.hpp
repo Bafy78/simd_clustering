@@ -91,7 +91,7 @@ struct static_hdbscan_case {
                 mutual_reachability_matrix_.begin()
             );
             mutual_reachability_matrix_inplace(
-                std::span<float>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
+                std::span<double>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
                 N_,
                 min_samples_
             );
@@ -100,7 +100,7 @@ struct static_hdbscan_case {
 
         if (stage_ == "mst") {
             minimum_spanning_tree_edges(
-                std::span<const float>(mutual_reachability_matrix_input_.data(), mutual_reachability_matrix_input_.size()),
+                std::span<const double>(mutual_reachability_matrix_input_.data(), mutual_reachability_matrix_input_.size()),
                 N_,
                 mst_edges_
             );
@@ -130,12 +130,12 @@ struct static_hdbscan_case {
                 distance_matrix_
             );
             mutual_reachability_matrix_inplace(
-                std::span<float>(distance_matrix_.data(), distance_matrix_.size()),
+                std::span<double>(distance_matrix_.data(), distance_matrix_.size()),
                 N_,
                 min_samples_
             );
             minimum_spanning_tree_edges(
-                std::span<const float>(distance_matrix_.data(), distance_matrix_.size()),
+                std::span<const double>(distance_matrix_.data(), distance_matrix_.size()),
                 N_,
                 mst_edges_
             );
@@ -182,7 +182,7 @@ struct static_hdbscan_case {
         if (stage_ == "distance") {
             hdbscan_metrics::write_hdbscan_distance_metrics(
                 metrics_json_out_,
-                std::span<const float>(distance_matrix_.data(), distance_matrix_.size()),
+                std::span<const double>(distance_matrix_.data(), distance_matrix_.size()),
                 N_,
                 min_samples_
             );
@@ -192,7 +192,7 @@ struct static_hdbscan_case {
         if (stage_ == "mreach") {
             hdbscan_metrics::write_hdbscan_mreach_metrics(
                 metrics_json_out_,
-                std::span<const float>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
+                std::span<const double>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
                 N_,
                 min_samples_
             );
@@ -214,7 +214,7 @@ struct static_hdbscan_case {
                 metrics_json_out_,
                 stage_,
                 std::span<const std::int32_t>(selection_result_.labels.data(), selection_result_.labels.size()),
-                std::span<const float>(selection_result_.probabilities.data(), selection_result_.probabilities.size()),
+                std::span<const double>(selection_result_.probabilities.data(), selection_result_.probabilities.size()),
                 N_,
                 min_samples_
             );
@@ -223,41 +223,41 @@ struct static_hdbscan_case {
     }
 
     void write_mst_outputs() const {
-        std::vector<float> flat_edges;
-        std::vector<float> edge_weights;
+        std::vector<double> flat_edges;
+        std::vector<double> edge_weights;
         flat_edges.reserve(mst_edges_.size() * 3);
         edge_weights.reserve(mst_edges_.size());
 
         for (const auto& edge : mst_edges_) {
-            flat_edges.push_back(static_cast<float>(edge.current_node));
-            flat_edges.push_back(static_cast<float>(edge.next_node));
+            flat_edges.push_back(static_cast<double>(edge.current_node));
+            flat_edges.push_back(static_cast<double>(edge.next_node));
             flat_edges.push_back(edge.distance);
             edge_weights.push_back(edge.distance);
         }
 
         hdbscan_metrics::write_hdbscan_mst_metrics(
             metrics_json_out_,
-            std::span<const float>(flat_edges.data(), flat_edges.size()),
-            std::span<const float>(edge_weights.data(), edge_weights.size()),
+            std::span<const double>(flat_edges.data(), flat_edges.size()),
+            std::span<const double>(edge_weights.data(), edge_weights.size()),
             N_,
             min_samples_
         );
     }
 
     void write_linkage_outputs() const {
-        std::vector<float> flat_tree;
+        std::vector<double> flat_tree;
         flat_tree.reserve(single_linkage_tree_.size() * 4);
 
         for (const auto& row : single_linkage_tree_) {
-            flat_tree.push_back(static_cast<float>(row.left_node));
-            flat_tree.push_back(static_cast<float>(row.right_node));
+            flat_tree.push_back(static_cast<double>(row.left_node));
+            flat_tree.push_back(static_cast<double>(row.right_node));
             flat_tree.push_back(row.distance);
-            flat_tree.push_back(static_cast<float>(row.cluster_size));
+            flat_tree.push_back(static_cast<double>(row.cluster_size));
         }
 
         hdbscan_metrics::write_hdbscan_linkage_metrics(
             metrics_json_out_,
-            std::span<const float>(flat_tree.data(), flat_tree.size()),
+            std::span<const double>(flat_tree.data(), flat_tree.size()),
             N_,
             min_samples_
         );
@@ -281,13 +281,13 @@ private:
         }
 
         if (stage_ == "distance" || stage_ == "full") {
-            const auto raw_aos_data = read_aos_f32(input_bin, N_, D);
-            copy_aos_to_static_samples<D>(raw_aos_data, N_, samples_);
+            const auto raw_aos_data = read_aos_f64(input_bin, N_, D);
+            copy_aos_to_hdbscan_samples<D>(raw_aos_data, N_, samples_);
         } else if (stage_ == "mreach") {
-            distance_matrix_input_ = read_binary_f32(input_bin, N_ * N_);
+            distance_matrix_input_ = read_binary_f64(input_bin, N_ * N_);
             mutual_reachability_matrix_.resize(N_ * N_);
         } else if (stage_ == "mst") {
-            mutual_reachability_matrix_input_ = read_binary_f32(input_bin, N_ * N_);
+            mutual_reachability_matrix_input_ = read_binary_f64(input_bin, N_ * N_);
         } else if (stage_ == "linkage") {
             mst_edges_input_ = read_mst_edges(input_bin, N_);
         } else if (stage_ == "select") {
@@ -302,7 +302,7 @@ private:
         const std::size_t row_count = N == 0 ? 0 : N - 1;
         std::vector<std::int32_t> left(row_count);
         std::vector<std::int32_t> right(row_count);
-        std::vector<float> distance(row_count);
+        std::vector<double> distance(row_count);
         std::vector<std::int32_t> cluster_size(row_count);
 
         std::ifstream file(filename, std::ios::binary);
@@ -320,7 +320,7 @@ private:
         );
         file.read(
             reinterpret_cast<char*>(distance.data()),
-            static_cast<std::streamsize>(distance.size() * sizeof(float))
+            static_cast<std::streamsize>(distance.size() * sizeof(double))
         );
         file.read(
             reinterpret_cast<char*>(cluster_size.data()),
@@ -346,7 +346,7 @@ private:
         const std::size_t edge_count = N == 0 ? 0 : N - 1;
         std::vector<std::int32_t> left(edge_count);
         std::vector<std::int32_t> right(edge_count);
-        std::vector<float> distance(edge_count);
+        std::vector<double> distance(edge_count);
 
         std::ifstream file(filename, std::ios::binary);
         if (!file) {
@@ -363,7 +363,7 @@ private:
         );
         file.read(
             reinterpret_cast<char*>(distance.data()),
-            static_cast<std::streamsize>(distance.size() * sizeof(float))
+            static_cast<std::streamsize>(distance.size() * sizeof(double))
         );
 
         if (!file) {
@@ -381,13 +381,13 @@ private:
     std::string stage_;
     std::size_t N_ = 0;
     std::size_t min_samples_ = 0;
-    static_samples_soa_vector<D> samples_;
-    std::vector<float> distance_matrix_input_;
-    std::vector<float> mutual_reachability_matrix_input_;
+    hdbscan_static_samples_soa_vector<D> samples_;
+    std::vector<double> distance_matrix_input_;
+    std::vector<double> mutual_reachability_matrix_input_;
     std::vector<mst_edge> mst_edges_input_;
     std::vector<single_linkage_row> single_linkage_tree_input_;
-    std::vector<float, eve::aligned_allocator<float>> distance_matrix_;
-    std::vector<float, eve::aligned_allocator<float>> mutual_reachability_matrix_;
+    std::vector<double, eve::aligned_allocator<double>> distance_matrix_;
+    std::vector<double, eve::aligned_allocator<double>> mutual_reachability_matrix_;
     std::vector<mst_edge> mst_edges_;
     std::vector<single_linkage_row> single_linkage_tree_;
     hdbscan_selection_result selection_result_;

@@ -96,6 +96,10 @@ This means full-covariance parity should be interpreted carefully:
 
 I didn't bother including a diagnostic script here, but basically if you change the code to always run the fallback (setting `covariance_needs_stable_recompute[k] = 1` all the time), you will see that we lose about **half the performance** (each EM iteration is basically ran twice) but almost all the covariance parity pressure disappears.
 
+## 🌲 HDBSCAN stage parity
+
+HDBSCAN uses a double-precision stage contract in this benchmark. The HDBSCAN references used for comparison are double-based at some places: scikit-learn and scikit-learn-contrib use double-precision MST data in their dense HDBSCAN paths, and ASL-hdbscan is implemented around `double` data and edge weights. Using `double` in our HDBSCAN path avoids comparing a `float32` specialization against double-precision references, or doing some upcasting and downcasting during between stages.
+
 ## ⏱️ C++ timing-process metrics validation
 
 C++ benchmark tasks are run once per configured timing process. Each process writes its own temporary timing JSON. For Lloyd and GMM, each process also writes its own temporary metrics file.

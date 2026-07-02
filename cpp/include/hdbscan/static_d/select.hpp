@@ -18,7 +18,7 @@
 
 struct hdbscan_selection_result {
     std::vector<std::int32_t> labels;
-    std::vector<float> probabilities;
+    std::vector<double> probabilities;
 };
 
 struct condensed_tree_row {
@@ -325,7 +325,7 @@ inline hdbscan_selection_result labels_and_probabilities_from_condensed_tree(
 ) {
     hdbscan_selection_result result;
     result.labels.assign(n_samples, -1);
-    result.probabilities.assign(n_samples, 0.0f);
+    result.probabilities.assign(n_samples, 0.0);
 
     if (condensed_tree.empty()) {
         return result;
@@ -385,10 +385,10 @@ inline hdbscan_selection_result labels_and_probabilities_from_condensed_tree(
             : 0.0;
 
         if (max_lambda == 0.0 || std::isinf(row.lambda_value)) {
-            result.probabilities[static_cast<std::size_t>(point)] = 1.0f;
+            result.probabilities[static_cast<std::size_t>(point)] = 1.0;
         } else {
             const double lambda_value = std::min(row.lambda_value, max_lambda);
-            result.probabilities[static_cast<std::size_t>(point)] = static_cast<float>(lambda_value / max_lambda);
+            result.probabilities[static_cast<std::size_t>(point)] = lambda_value / max_lambda;
         }
     }
 
@@ -402,7 +402,7 @@ inline hdbscan_selection_result select_clusters_from_single_linkage_tree(
     const std::size_t n_samples = single_linkage_tree.size() + 1;
     hdbscan_selection_result empty_result;
     empty_result.labels.assign(n_samples, -1);
-    empty_result.probabilities.assign(n_samples, 0.0f);
+    empty_result.probabilities.assign(n_samples, 0.0);
 
     if (single_linkage_tree.empty()) {
         return empty_result;

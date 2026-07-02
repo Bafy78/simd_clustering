@@ -17,32 +17,60 @@
 #include <eve/module/math.hpp>
 #include <eve/memory/aligned_allocator.hpp>
 
-#include "../../layout/static_soa.hpp"
-#include "../../simd.hpp"
+#include "types.hpp"
 
 template<typename SimdSample, typename ScalarSample>
-wide_f euclidean_distance_to_sample(
+hdbscan_wide euclidean_distance_to_sample(
     const SimdSample& samples,
     const ScalarSample& reference
 ) {
-    auto squared_distance = wide_zero_f;
+    auto squared_distance = hdbscan_wide_zero;
 
     kumi::for_each(
         [&](auto x, auto reference_x) {
-            const auto diff = x - wide_f(reference_x);
+            const auto diff = x - hdbscan_wide(reference_x);
             squared_distance = eve::fma(diff, diff, squared_distance);
         },
         samples,
         reference
     );
 
-    return eve::sqrt(eve::max(squared_distance, wide_zero_f));
+    return eve::sqrt(eve::max(squared_distance, hdbscan_wide_zero));
+}
+
+template<std::size_t Dim>
+void check_hdbscan_aos_size(std::span<const double> aos, std::size_t rows, const char* label) {
+    if (aos.size() != rows * Dim) {
+        throw std::runtime_error(std::string(label) + " AoS buffer has unexpected size");
+    }
+}
+
+template<std::size_t Dim>
+void copy_aos_to_hdbscan_samples(
+    std::span<const double> aos,
+    std::size_t N,
+    hdbscan_static_samples_soa_vector<Dim>& samples
+) {
+    check_hdbscan_aos_size<Dim>(aos, N, "HDBSCAN samples");
+
+    for (std::size_t n = 0; n < N; ++n) {
+        hdbscan_static_sample_type<Dim> sample;
+
+        kumi::for_each_index(
+            [&](auto index, auto& element) {
+                element = aos[n * Dim + index];
+            },
+            sample
+        );
+
+        samples.set(n, sample);
+    }
 }
 
 template<std::size_t Dim>
 void euclidean_distance_matrix(
-    const static_samples_soa_vector<Dim>& samples,
-    std::vector<float, eve::aligned_allocator<float>>& distances
+    const hdbscan_static_samples_soa_vector<Dim>& samples,
+    std::vector<double, eve::aligned_allocator<double>>& distances
 ) {
     const std::size_t N = samples.size();
     const std::size_t matrix_size = N * N;
@@ -56,7 +84,7 @@ void euclidean_distance_matrix(
         auto row_out_range = eve::algo::as_range(row_out, row_out + N);
         auto zipped = eve::views::zip(samples, row_out_range);
 
-        eve::algo::for_each[eve::algo::force_cardinal<cardinal{}()>](
+        eve::algo::for_each[eve::algo::force_cardinal<hdbscan_cardinal{}()>](
             zipped,
             [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
                 auto [sample_it, out_it] = it;
@@ -67,28 +95,28 @@ void euclidean_distance_matrix(
         );
 
         // Keep the diagonal exactly zero even if sqrt/fma details change later.
-        row_out[row] = 0.0f;
+        row_out[row] = 0.0;
     }
 }
 
-inline std::uint32_t float32_ordered_bits(float value) {
-    return std::bit_cast<std::uint32_t>(value);
+inline std::uint64_t float64_ordered_bits(double value) {
+    return std::bit_cast<std::uint64_t>(value);
 }
 
-inline float bits_to_float32(std::uint32_t bits) {
-    return std::bit_cast<float>(bits);
+inline double bits_to_float64(std::uint64_t bits) {
+    return std::bit_cast<double>(bits);
 }
 
-inline float find_unique_prefix_value(
-    const float* row,
+inline double find_unique_prefix_value(
+    const double* row,
     std::uint32_t N,
-    std::uint32_t prefix,
-    std::uint32_t prefix_mask
+    std::uint64_t prefix,
+    std::uint64_t prefix_mask
 ) {
     for (std::uint32_t i = 0; i < N; ++i) {
-        const std::uint32_t bits = float32_ordered_bits(row[i]);
+        const std::uint64_t bits = float64_ordered_bits(row[i]);
         if ((bits & prefix_mask) == prefix) {
-            return bits_to_float32(bits);
+            return bits_to_float64(bits);
         }
     }
 
@@ -97,11 +125,11 @@ inline float find_unique_prefix_value(
 
 template<std::uint32_t Width>
 inline std::uint32_t select_radix_group(
-    const float* row,
+    const double* row,
     std::uint32_t N,
     unsigned shift,
-    std::uint32_t& prefix,
-    std::uint32_t& prefix_mask,
+    std::uint64_t& prefix,
+    std::uint64_t& prefix_mask,
     std::uint32_t& rank
 ) {
     static_assert(Width > 0 && Width <= 12);
@@ -112,14 +140,14 @@ inline std::uint32_t select_radix_group(
 
     if (prefix_mask == 0u) {
         for (std::uint32_t i = 0; i < N; ++i) {
-            const std::uint32_t bits = float32_ordered_bits(row[i]);
-            ++counts[(bits >> shift) & bucket_mask];
+            const std::uint64_t bits = float64_ordered_bits(row[i]);
+            ++counts[static_cast<std::size_t>((bits >> shift) & bucket_mask)];
         }
     } else {
         for (std::uint32_t i = 0; i < N; ++i) {
-            const std::uint32_t bits = float32_ordered_bits(row[i]);
+            const std::uint64_t bits = float64_ordered_bits(row[i]);
             if ((bits & prefix_mask) == prefix) {
-                ++counts[(bits >> shift) & bucket_mask];
+                ++counts[static_cast<std::size_t>((bits >> shift) & bucket_mask)];
             }
         }
     }
@@ -139,13 +167,13 @@ inline std::uint32_t select_radix_group(
         throw std::runtime_error("Could not find HDBSCAN radix-selection bucket");
     }
 
-    prefix |= selected << shift;
-    prefix_mask |= bucket_mask << shift;
+    prefix |= static_cast<std::uint64_t>(selected) << shift;
+    prefix_mask |= static_cast<std::uint64_t>(bucket_mask) << shift;
     return counts[selected];
 }
 
-inline float kth_smallest_value_radix_float32(
-    const float* row,
+inline double kth_smallest_value_radix_float64(
+    const double* row,
     std::size_t N,
     std::size_t k_zero_based
 ) {
@@ -161,25 +189,34 @@ inline float kth_smallest_value_radix_float32(
 
     const auto N_u32 = static_cast<std::uint32_t>(N);
     std::uint32_t rank = static_cast<std::uint32_t>(k_zero_based);
-    std::uint32_t prefix = 0u;
-    std::uint32_t prefix_mask = 0u;
+    std::uint64_t prefix = 0u;
+    std::uint64_t prefix_mask = 0u;
 
-    if (select_radix_group<12>(row, N_u32, 20, prefix, prefix_mask, rank) == 1u) {
+    if (select_radix_group<12>(row, N_u32, 52, prefix, prefix_mask, rank) == 1u) {
         return find_unique_prefix_value(row, N_u32, prefix, prefix_mask);
     }
-    if (select_radix_group<10>(row, N_u32, 10, prefix, prefix_mask, rank) == 1u) {
+    if (select_radix_group<12>(row, N_u32, 40, prefix, prefix_mask, rank) == 1u) {
         return find_unique_prefix_value(row, N_u32, prefix, prefix_mask);
     }
-    (void)select_radix_group<10>(row, N_u32, 0, prefix, prefix_mask, rank);
+    if (select_radix_group<12>(row, N_u32, 28, prefix, prefix_mask, rank) == 1u) {
+        return find_unique_prefix_value(row, N_u32, prefix, prefix_mask);
+    }
+    if (select_radix_group<12>(row, N_u32, 16, prefix, prefix_mask, rank) == 1u) {
+        return find_unique_prefix_value(row, N_u32, prefix, prefix_mask);
+    }
+    if (select_radix_group<12>(row, N_u32, 4, prefix, prefix_mask, rank) == 1u) {
+        return find_unique_prefix_value(row, N_u32, prefix, prefix_mask);
+    }
+    (void)select_radix_group<4>(row, N_u32, 0, prefix, prefix_mask, rank);
 
-    return bits_to_float32(prefix);
+    return bits_to_float64(prefix);
 }
 
 inline void core_distances(
-    std::span<const float> distance_matrix,
+    std::span<const double> distance_matrix,
     std::size_t N,
     std::size_t min_samples,
-    std::vector<float, eve::aligned_allocator<float>>& core
+    std::vector<double, eve::aligned_allocator<double>>& core
 ) {
     if (distance_matrix.size() != N * N) {
         throw std::runtime_error("HDBSCAN core stage expected a dense N x N distance matrix");
@@ -194,15 +231,16 @@ inline void core_distances(
 
     const std::size_t k_zero_based = min_samples - 1;
     for (std::size_t row = 0; row < N; ++row) {
-        core[row] = kth_smallest_value_radix_float32(
+        core[row] = kth_smallest_value_radix_float64(
             distance_matrix.data() + row * N,
             N,
             k_zero_based
         );
     }
 }
+
 inline void mutual_reachability_matrix_inplace(
-    std::span<float> distance_or_mreach_matrix,
+    std::span<double> distance_or_mreach_matrix,
     std::size_t N,
     std::size_t min_samples
 ) {
@@ -210,22 +248,22 @@ inline void mutual_reachability_matrix_inplace(
         throw std::runtime_error("HDBSCAN mreach stage expected a dense N x N distance matrix");
     }
 
-// Compute core distances before overwriting the distance matrix. After this
+    // Compute core distances before overwriting the distance matrix. After this
     // point the input buffer is deliberately reused as the mutual-reachability
     // matrix, matching the dense scikit-learn full-pipeline contract.
-    std::vector<float, eve::aligned_allocator<float>> core;
+    std::vector<double, eve::aligned_allocator<double>> core;
     core_distances(distance_or_mreach_matrix, N, min_samples, core);
-    
+
     for (std::size_t row = 0; row < N; ++row) {
-        const wide_f core_i(core[row]);
-        float* row_data = distance_or_mreach_matrix.data() + row * N;
-        
+        const hdbscan_wide core_i(core[row]);
+        double* row_data = distance_or_mreach_matrix.data() + row * N;
+
         auto distance_range = eve::algo::as_range(row_data, row_data + N);
         auto core_range = eve::algo::as_range(core.data(), core.data() + N);
         auto input_range = eve::views::zip(distance_range, core_range);
-auto out_range = eve::algo::as_range(row_data, row_data + N);
-        
-        eve::algo::transform_to[eve::algo::force_cardinal<cardinal{}()>][eve::algo::no_unrolling](
+        auto out_range = eve::algo::as_range(row_data, row_data + N);
+
+        eve::algo::transform_to[eve::algo::force_cardinal<hdbscan_cardinal{}()>][eve::algo::no_unrolling](
             input_range,
             out_range,
             [core_i](auto values) {

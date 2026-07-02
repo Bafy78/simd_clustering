@@ -23,6 +23,7 @@ from benchmark_metadata import (
 
 
 DATASET_ARTIFACT = "dataset"
+HDBSCAN_DATASET_ARTIFACT = "hdbscan_dataset"
 INIT_CENTROIDS_ARTIFACT = "init_centroids"
 GMM_WEIGHTS_ARTIFACT = "gmm_weights"
 GMM_MEANS_ARTIFACT = "gmm_means"
@@ -68,34 +69,39 @@ DEFAULT_STAGE_SPECS: dict[tuple[str, str], StageSpec] = {
 
 DEFAULT_STAGE_SPECS.update(
     {
+        ("hdbscan", FULL_STAGE_KEY): StageSpec(
+            phase_key="hdbscan",
+            stage_key=FULL_STAGE_KEY,
+            input_artifact_keys=(HDBSCAN_DATASET_ARTIFACT,),
+        ),
         ("hdbscan", HDBSCAN_DISTANCE_STAGE_KEY): StageSpec(
             phase_key="hdbscan",
             stage_key=HDBSCAN_DISTANCE_STAGE_KEY,
-            input_artifact_keys=(DATASET_ARTIFACT,),
+            input_artifact_keys=(HDBSCAN_DATASET_ARTIFACT,),
         ),
         ("hdbscan", HDBSCAN_MREACH_STAGE_KEY): StageSpec(
             phase_key="hdbscan",
             stage_key=HDBSCAN_MREACH_STAGE_KEY,
             input_artifact_keys=(HDBSCAN_DISTANCE_MATRIX_ARTIFACT,),
-            reference_input_artifact_keys=(DATASET_ARTIFACT,),
+            reference_input_artifact_keys=(HDBSCAN_DATASET_ARTIFACT,),
         ),
         ("hdbscan", HDBSCAN_MST_STAGE_KEY): StageSpec(
             phase_key="hdbscan",
             stage_key=HDBSCAN_MST_STAGE_KEY,
             input_artifact_keys=(HDBSCAN_MREACH_MATRIX_ARTIFACT,),
-            reference_input_artifact_keys=(DATASET_ARTIFACT,),
+            reference_input_artifact_keys=(HDBSCAN_DATASET_ARTIFACT,),
         ),
         ("hdbscan", HDBSCAN_LINKAGE_STAGE_KEY): StageSpec(
             phase_key="hdbscan",
             stage_key=HDBSCAN_LINKAGE_STAGE_KEY,
             input_artifact_keys=(HDBSCAN_MST_EDGES_ARTIFACT,),
-            reference_input_artifact_keys=(DATASET_ARTIFACT,),
+            reference_input_artifact_keys=(HDBSCAN_DATASET_ARTIFACT,),
         ),
         ("hdbscan", HDBSCAN_SELECT_STAGE_KEY): StageSpec(
             phase_key="hdbscan",
             stage_key=HDBSCAN_SELECT_STAGE_KEY,
             input_artifact_keys=(HDBSCAN_LINKAGE_TREE_ARTIFACT,),
-            reference_input_artifact_keys=(DATASET_ARTIFACT,),
+            reference_input_artifact_keys=(HDBSCAN_DATASET_ARTIFACT,),
         ),
     }
 )

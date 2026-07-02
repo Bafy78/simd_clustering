@@ -4,9 +4,12 @@
 
 The project uses EVE vectors as the common SIMD abstraction:
 
-* `wide_f` is a SIMD vector of `float`.
+* `wide_f` is a SIMD vector of `float` used by the Lloyd/GMM/K-Means++ paths.
 * `wide_i` is a SIMD vector of `int` with the same cardinality as `wide_f`.
+* HDBSCAN is intentionally double-only and uses its own `hdbscan_wide` / `hdbscan_wide_i` aliases for `double` stage-boundary computations.
 * `cardinal` / `simd_cardinal()` is the number of scalar values processed by one SIMD vector.
+
+The Lloyd, GMM, and K-Means++ kernels use `float` deliberately, which gives twice as many scalar lanes per vector register as `double`, an extra advantage to SIMD.
 
 The most important idea is that SIMD lanes almost always represent **different samples**. A single SIMD register therefore contains the same dimension for several samples at once:
 

@@ -25,12 +25,12 @@ inline std::uint64_t fnv1a_update(std::uint64_t hash, const void* data, std::siz
     return hash;
 }
 
-inline std::uint64_t float_vector_fnv1a(std::span<const float> values) {
+inline std::uint64_t double_vector_fnv1a(std::span<const double> values) {
     std::uint64_t hash = 14695981039346656037ULL;
-    for (float value : values) {
-        static_assert(sizeof(float) == 4);
-        std::uint32_t bits = 0;
-        std::memcpy(&bits, &value, sizeof(float));
+    for (double value : values) {
+        static_assert(sizeof(double) == 8);
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(double));
         hash = fnv1a_update(hash, &bits, sizeof(bits));
     }
     return hash;
@@ -70,9 +70,9 @@ inline std::vector<std::size_t> probe_indices(std::size_t value_count) {
     return indices;
 }
 
-inline void write_float_vector_summary_json(
+inline void write_double_vector_summary_json(
     std::ostream& out,
-    std::span<const float> values,
+    std::span<const double> values,
     const char* indent
 ) {
     const std::size_t value_count = values.size();
@@ -81,40 +81,39 @@ inline void write_float_vector_summary_json(
     double sum_abs = 0.0;
     double sum_squares = 0.0;
     double weighted_sum = 0.0;
-    float min_value = std::numeric_limits<float>::infinity();
-    float max_value = -std::numeric_limits<float>::infinity();
+    double min_value = std::numeric_limits<double>::infinity();
+    double max_value = -std::numeric_limits<double>::infinity();
     std::size_t finite_count = 0;
     std::size_t nan_count = 0;
     std::size_t pos_inf_count = 0;
     std::size_t neg_inf_count = 0;
 
     for (std::size_t i = 0; i < value_count; ++i) {
-        const float value = values[i];
+        const double value = values[i];
         if (std::isnan(value)) {
             ++nan_count;
             continue;
         }
-        if (value == std::numeric_limits<float>::infinity()) {
+        if (value == std::numeric_limits<double>::infinity()) {
             ++pos_inf_count;
             continue;
         }
-        if (value == -std::numeric_limits<float>::infinity()) {
+        if (value == -std::numeric_limits<double>::infinity()) {
             ++neg_inf_count;
             continue;
         }
         ++finite_count;
         min_value = std::min(min_value, value);
         max_value = std::max(max_value, value);
-        const double value64 = static_cast<double>(value);
-        sum += value64;
-        sum_abs += std::abs(value64);
-        sum_squares += value64 * value64;
-        weighted_sum += value64 * deterministic_weight(i);
+        sum += value;
+        sum_abs += std::abs(value);
+        sum_squares += value * value;
+        weighted_sum += value * deterministic_weight(i);
     }
 
     if (finite_count == 0) {
-        min_value = std::numeric_limits<float>::quiet_NaN();
-        max_value = std::numeric_limits<float>::quiet_NaN();
+        min_value = std::numeric_limits<double>::quiet_NaN();
+        max_value = std::numeric_limits<double>::quiet_NaN();
     }
 
     out << indent << "\"value_count\": " << value_count << ",\n";
@@ -126,9 +125,9 @@ inline void write_float_vector_summary_json(
     out << indent << "\"sum_abs\": " << sum_abs << ",\n";
     out << indent << "\"sum_squares\": " << sum_squares << ",\n";
     out << indent << "\"weighted_sum\": " << weighted_sum << ",\n";
-    out << indent << "\"min\": " << static_cast<double>(min_value) << ",\n";
-    out << indent << "\"max\": " << static_cast<double>(max_value) << ",\n";
-    out << indent << "\"fnv1a64_float32\": \"0x" << std::hex << float_vector_fnv1a(values)
+    out << indent << "\"min\": " << min_value << ",\n";
+    out << indent << "\"max\": " << max_value << ",\n";
+    out << indent << "\"fnv1a64_float64\": \"0x" << std::hex << double_vector_fnv1a(values)
         << std::dec << "\",\n";
 
     out << indent << "\"probes\": [";
@@ -146,7 +145,7 @@ inline void write_float_vector_summary_json(
 
 inline void write_hdbscan_distance_metrics(
     const std::string& filename,
-    std::span<const float> distance_matrix,
+    std::span<const double> distance_matrix,
     std::size_t N,
     std::size_t min_samples
 ) {
@@ -181,21 +180,21 @@ inline void write_hdbscan_distance_metrics(
     out << "  \"phase\": \"hdbscan\",\n";
     out << "  \"language\": \"cpp\",\n";
     out << "  \"stage\": \"distance\",\n";
-    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"dtype\": \"float64\",\n";
     out << "  \"n_samples\": " << N << ",\n";
     out << "  \"min_samples\": " << min_samples << ",\n";
     out << "  \"shape\": [" << N << ", " << N << "],\n";
     out << "  \"diagonal_max_abs\": " << diagonal_max_abs << ",\n";
     out << "  \"symmetry_max_abs\": " << symmetry_max_abs << ",\n";
     out << "  \"summary\": {\n";
-    write_float_vector_summary_json(out, distance_matrix, "    ");
+    write_double_vector_summary_json(out, distance_matrix, "    ");
     out << "  }\n";
     out << "}\n";
 }
 
 inline void write_hdbscan_mreach_metrics(
     const std::string& filename,
-    std::span<const float> mutual_reachability_matrix,
+    std::span<const double> mutual_reachability_matrix,
     std::size_t N,
     std::size_t min_samples
 ) {
@@ -204,7 +203,7 @@ inline void write_hdbscan_mreach_metrics(
     }
 
     double symmetry_max_abs = 0.0;
-    std::vector<float> diagonal;
+    std::vector<double> diagonal;
     diagonal.reserve(N);
     for (std::size_t i = 0; i < N; ++i) {
         diagonal.push_back(mutual_reachability_matrix[i * N + i]);
@@ -228,16 +227,16 @@ inline void write_hdbscan_mreach_metrics(
     out << "  \"phase\": \"hdbscan\",\n";
     out << "  \"language\": \"cpp\",\n";
     out << "  \"stage\": \"mreach\",\n";
-    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"dtype\": \"float64\",\n";
     out << "  \"n_samples\": " << N << ",\n";
     out << "  \"min_samples\": " << min_samples << ",\n";
     out << "  \"shape\": [" << N << ", " << N << "],\n";
     out << "  \"symmetry_max_abs\": " << symmetry_max_abs << ",\n";
     out << "  \"summary\": {\n";
-    write_float_vector_summary_json(out, mutual_reachability_matrix, "    ");
+    write_double_vector_summary_json(out, mutual_reachability_matrix, "    ");
     out << "  },\n";
     out << "  \"diagonal_summary\": {\n";
-    write_float_vector_summary_json(out, std::span<const float>(diagonal.data(), diagonal.size()), "    ");
+    write_double_vector_summary_json(out, std::span<const double>(diagonal.data(), diagonal.size()), "    ");
     out << "  }\n";
     out << "}\n";
 }
@@ -245,8 +244,8 @@ inline void write_hdbscan_mreach_metrics(
 
 inline void write_hdbscan_mst_metrics(
     const std::string& filename,
-    std::span<const float> flat_edges,
-    std::span<const float> edge_weights,
+    std::span<const double> flat_edges,
+    std::span<const double> edge_weights,
     std::size_t N,
     std::size_t min_samples
 ) {
@@ -269,23 +268,23 @@ inline void write_hdbscan_mst_metrics(
     out << "  \"phase\": \"hdbscan\",\n";
     out << "  \"language\": \"cpp\",\n";
     out << "  \"stage\": \"mst\",\n";
-    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"dtype\": \"float64\",\n";
     out << "  \"n_samples\": " << N << ",\n";
     out << "  \"min_samples\": " << min_samples << ",\n";
     out << "  \"edge_count\": " << expected_edges << ",\n";
     out << "  \"shape\": [" << expected_edges << ", 3],\n";
     out << "  \"summary\": {\n";
-    write_float_vector_summary_json(out, flat_edges, "    ");
+    write_double_vector_summary_json(out, flat_edges, "    ");
     out << "  },\n";
     out << "  \"weight_summary\": {\n";
-    write_float_vector_summary_json(out, edge_weights, "    ");
+    write_double_vector_summary_json(out, edge_weights, "    ");
     out << "  }\n";
     out << "}\n";
 }
 
 inline void write_hdbscan_linkage_metrics(
     const std::string& filename,
-    std::span<const float> flat_tree,
+    std::span<const double> flat_tree,
     std::size_t N,
     std::size_t min_samples
 ) {
@@ -294,8 +293,8 @@ inline void write_hdbscan_linkage_metrics(
         throw std::runtime_error("HDBSCAN linkage metrics flat tree size does not match 4 * (N - 1)");
     }
 
-    std::vector<float> distances;
-    std::vector<float> cluster_sizes;
+    std::vector<double> distances;
+    std::vector<double> cluster_sizes;
     distances.reserve(expected_rows);
     cluster_sizes.reserve(expected_rows);
     for (std::size_t i = 0; i < expected_rows; ++i) {
@@ -314,19 +313,19 @@ inline void write_hdbscan_linkage_metrics(
     out << "  \"phase\": \"hdbscan\",\n";
     out << "  \"language\": \"cpp\",\n";
     out << "  \"stage\": \"linkage\",\n";
-    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"dtype\": \"float64\",\n";
     out << "  \"n_samples\": " << N << ",\n";
     out << "  \"min_samples\": " << min_samples << ",\n";
     out << "  \"row_count\": " << expected_rows << ",\n";
     out << "  \"shape\": [" << expected_rows << ", 4],\n";
     out << "  \"summary\": {\n";
-    write_float_vector_summary_json(out, flat_tree, "    ");
+    write_double_vector_summary_json(out, flat_tree, "    ");
     out << "  },\n";
     out << "  \"distance_summary\": {\n";
-    write_float_vector_summary_json(out, std::span<const float>(distances.data(), distances.size()), "    ");
+    write_double_vector_summary_json(out, std::span<const double>(distances.data(), distances.size()), "    ");
     out << "  },\n";
     out << "  \"cluster_size_summary\": {\n";
-    write_float_vector_summary_json(out, std::span<const float>(cluster_sizes.data(), cluster_sizes.size()), "    ");
+    write_double_vector_summary_json(out, std::span<const double>(cluster_sizes.data(), cluster_sizes.size()), "    ");
     out << "  }\n";
     out << "}\n";
 }
@@ -336,7 +335,7 @@ inline void write_hdbscan_label_probability_metrics(
     const std::string& filename,
     const std::string& stage,
     std::span<const std::int32_t> labels,
-    std::span<const float> probabilities,
+    std::span<const double> probabilities,
     std::size_t N,
     std::size_t min_samples
 ) {
@@ -344,8 +343,8 @@ inline void write_hdbscan_label_probability_metrics(
         throw std::runtime_error("HDBSCAN label/probability metrics size does not match N");
     }
 
-    std::vector<float> flat;
-    std::vector<float> label_values;
+    std::vector<double> flat;
+    std::vector<double> label_values;
     flat.reserve(N * 2);
     label_values.reserve(N);
 
@@ -353,7 +352,7 @@ inline void write_hdbscan_label_probability_metrics(
     std::size_t noise_count = 0;
     for (std::size_t i = 0; i < N; ++i) {
         const std::int32_t label = labels[i];
-        const float label_float = static_cast<float>(label);
+        const double label_float = static_cast<double>(label);
         label_values.push_back(label_float);
         flat.push_back(label_float);
         flat.push_back(probabilities[i]);
@@ -375,20 +374,20 @@ inline void write_hdbscan_label_probability_metrics(
     out << "  \"phase\": \"hdbscan\",\n";
     out << "  \"language\": \"cpp\",\n";
     out << "  \"stage\": \"" << stage << "\",\n";
-    out << "  \"dtype\": \"float32\",\n";
+    out << "  \"dtype\": \"float64\",\n";
     out << "  \"n_samples\": " << N << ",\n";
     out << "  \"min_samples\": " << min_samples << ",\n";
     out << "  \"shape\": [" << N << ", 2],\n";
     out << "  \"noise_count\": " << noise_count << ",\n";
     out << "  \"cluster_count\": " << clusters.size() << ",\n";
     out << "  \"summary\": {\n";
-    write_float_vector_summary_json(out, std::span<const float>(flat.data(), flat.size()), "    ");
+    write_double_vector_summary_json(out, std::span<const double>(flat.data(), flat.size()), "    ");
     out << "  },\n";
     out << "  \"label_summary\": {\n";
-    write_float_vector_summary_json(out, std::span<const float>(label_values.data(), label_values.size()), "    ");
+    write_double_vector_summary_json(out, std::span<const double>(label_values.data(), label_values.size()), "    ");
     out << "  },\n";
     out << "  \"probability_summary\": {\n";
-    write_float_vector_summary_json(out, probabilities, "    ");
+    write_double_vector_summary_json(out, probabilities, "    ");
     out << "  }\n";
     out << "}\n";
 }
@@ -396,7 +395,7 @@ inline void write_hdbscan_label_probability_metrics(
 inline void write_hdbscan_select_metrics(
     const std::string& filename,
     std::span<const std::int32_t> labels,
-    std::span<const float> probabilities,
+    std::span<const double> probabilities,
     std::size_t N,
     std::size_t min_samples
 ) {

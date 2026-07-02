@@ -40,7 +40,7 @@ def import_runtime_deps(include_metrics=False):
 def load_dataset(args):
     return np.memmap(
         args.dataset_bin,
-        dtype=np.float32,
+        dtype=np.float64,
         mode="r",
         shape=(args.N, args.D),
     )

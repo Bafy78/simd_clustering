@@ -1,7 +1,7 @@
 """Compact HDBSCAN stage-output metrics.
 
 These summaries are benchmark/postprocess artifacts, not debugging fixtures.
-They intentionally summarize float32 stage-boundary outputs without retaining
+They intentionally summarize float64 stage-boundary outputs without retaining
 full matrices in JSON.
 """
 
@@ -20,8 +20,8 @@ _FNV_OFFSET = 14695981039346656037
 _FNV_PRIME = 1099511628211
 
 
-def _fnv1a64_float32(values: NDArray[np.float32]) -> str:
-    contiguous = np.ascontiguousarray(values, dtype=np.float32)
+def _fnv1a64_float64(values: NDArray[np.float64]) -> str:
+    contiguous = np.ascontiguousarray(values, dtype=np.float64)
     hash_value = _FNV_OFFSET
     for byte in contiguous.view(np.uint8):
         hash_value ^= int(byte)
@@ -54,8 +54,8 @@ def _probe_indices(value_count: int) -> list[int]:
     return sorted(set(indices))
 
 
-def _float32_summary(values: ArrayLike) -> dict[str, Any]:
-    flat = np.ascontiguousarray(values, dtype=np.float32).reshape(-1)
+def _float64_summary(values: ArrayLike) -> dict[str, Any]:
+    flat = np.ascontiguousarray(values, dtype=np.float64).reshape(-1)
     value_count = int(flat.size)
 
     finite_mask = np.isfinite(flat)
@@ -101,12 +101,12 @@ def _float32_summary(values: ArrayLike) -> dict[str, Any]:
         "weighted_sum": weighted_sum,
         "min": min_value,
         "max": max_value,
-        "fnv1a64_float32": _fnv1a64_float32(flat),
+        "fnv1a64_float64": _fnv1a64_float64(flat),
         "probes": probes,
     }
 
 
-def _symmetry_max_abs(matrix: NDArray[np.float32]) -> float:
+def _symmetry_max_abs(matrix: NDArray[np.float64]) -> float:
     n_samples = matrix.shape[0]
     max_abs = 0.0
     for row in range(n_samples - 1):
@@ -116,33 +116,33 @@ def _symmetry_max_abs(matrix: NDArray[np.float32]) -> float:
     return max_abs
 
 
-def _matrix32(values: ArrayLike) -> NDArray[np.float32]:
-    matrix = np.asarray(values, dtype=np.float32, order="C")
+def _matrix64(values: ArrayLike) -> NDArray[np.float64]:
+    matrix = np.asarray(values, dtype=np.float64, order="C")
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError(f"Expected a square 2-D matrix, got shape {matrix.shape}")
     return matrix
 
 
 
-def _mst_edges_to_flat_float32(values: ArrayLike) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+def _mst_edges_to_flat_float64(values: ArrayLike) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     edges = np.asarray(values)
 
     if edges.dtype.names is not None:
-        left = np.asarray(edges["current_node"], dtype=np.float32)
-        right = np.asarray(edges["next_node"], dtype=np.float32)
-        weight = np.asarray(edges["distance"], dtype=np.float32)
+        left = np.asarray(edges["current_node"], dtype=np.float64)
+        right = np.asarray(edges["next_node"], dtype=np.float64)
+        weight = np.asarray(edges["distance"], dtype=np.float64)
     else:
         if edges.ndim != 2 or edges.shape[1] < 3:
             raise ValueError(
                 "Expected MST edges to be either a structured sklearn edge array "
                 f"or a 2-D array with at least 3 columns, got shape {edges.shape}"
             )
-        left = np.asarray(edges[:, 0], dtype=np.float32)
-        right = np.asarray(edges[:, 1], dtype=np.float32)
-        weight = np.asarray(edges[:, 2], dtype=np.float32)
+        left = np.asarray(edges[:, 0], dtype=np.float64)
+        right = np.asarray(edges[:, 1], dtype=np.float64)
+        weight = np.asarray(edges[:, 2], dtype=np.float64)
 
     edge_count = int(weight.size)
-    flat = np.empty(edge_count * 3, dtype=np.float32)
+    flat = np.empty(edge_count * 3, dtype=np.float64)
     flat[0::3] = left
     flat[1::3] = right
     flat[2::3] = weight
@@ -150,27 +150,27 @@ def _mst_edges_to_flat_float32(values: ArrayLike) -> tuple[NDArray[np.float32], 
 
 
 
-def _single_linkage_to_flat_float32(values: ArrayLike) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
+def _single_linkage_to_flat_float64(values: ArrayLike) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
     tree = np.asarray(values)
 
     if tree.dtype.names is not None:
-        left = np.asarray(tree["left_node"], dtype=np.float32)
-        right = np.asarray(tree["right_node"], dtype=np.float32)
-        distance = np.asarray(tree["value"], dtype=np.float32)
-        cluster_size = np.asarray(tree["cluster_size"], dtype=np.float32)
+        left = np.asarray(tree["left_node"], dtype=np.float64)
+        right = np.asarray(tree["right_node"], dtype=np.float64)
+        distance = np.asarray(tree["value"], dtype=np.float64)
+        cluster_size = np.asarray(tree["cluster_size"], dtype=np.float64)
     else:
         if tree.ndim != 2 or tree.shape[1] < 4:
             raise ValueError(
                 "Expected single linkage tree to be either a structured sklearn tree "
                 f"or a 2-D array with at least 4 columns, got shape {tree.shape}"
             )
-        left = np.asarray(tree[:, 0], dtype=np.float32)
-        right = np.asarray(tree[:, 1], dtype=np.float32)
-        distance = np.asarray(tree[:, 2], dtype=np.float32)
-        cluster_size = np.asarray(tree[:, 3], dtype=np.float32)
+        left = np.asarray(tree[:, 0], dtype=np.float64)
+        right = np.asarray(tree[:, 1], dtype=np.float64)
+        distance = np.asarray(tree[:, 2], dtype=np.float64)
+        cluster_size = np.asarray(tree[:, 3], dtype=np.float64)
 
     row_count = int(distance.size)
-    flat = np.empty(row_count * 4, dtype=np.float32)
+    flat = np.empty(row_count * 4, dtype=np.float64)
     flat[0::4] = left
     flat[1::4] = right
     flat[2::4] = distance
@@ -182,11 +182,11 @@ def _single_linkage_to_flat_float32(values: ArrayLike) -> tuple[NDArray[np.float
     )
 
 
-def _label_probability_output_to_flat_float32(
+def _label_probability_output_to_flat_float64(
     values: object,
     *,
     stage: str,
-) -> tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]]:
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
     if isinstance(values, tuple) and len(values) == 2:
         raw_labels = values[0]
         raw_probabilities = values[1]
@@ -200,15 +200,15 @@ def _label_probability_output_to_flat_float32(
         )
 
     labels = np.ascontiguousarray(raw_labels, dtype=np.int32)
-    probabilities = np.ascontiguousarray(raw_probabilities, dtype=np.float32)
+    probabilities = np.ascontiguousarray(raw_probabilities, dtype=np.float64)
     if labels.shape != probabilities.shape:
         raise ValueError(
             "Expected select labels and probabilities to have identical shape, "
             f"got {labels.shape} and {probabilities.shape}"
         )
 
-    label_values = np.ascontiguousarray(labels.astype(np.float32), dtype=np.float32)
-    flat = np.empty(labels.size * 2, dtype=np.float32)
+    label_values = np.ascontiguousarray(labels.astype(np.float64), dtype=np.float64)
+    flat = np.empty(labels.size * 2, dtype=np.float64)
     flat[0::2] = label_values
     flat[1::2] = probabilities
     return flat, label_values, probabilities
@@ -216,7 +216,7 @@ def _label_probability_output_to_flat_float32(
 def _base_payload(
     *,
     stage: str,
-    matrix: NDArray[np.float32],
+    matrix: NDArray[np.float64],
     min_samples: int,
     language: str,
 ) -> dict[str, Any]:
@@ -226,12 +226,12 @@ def _base_payload(
         "phase": "hdbscan",
         "language": language,
         "stage": stage,
-        "dtype": "float32",
+        "dtype": "float64",
         "n_samples": n_samples,
         "min_samples": int(min_samples),
         "shape": [n_samples, n_samples],
         "symmetry_max_abs": _symmetry_max_abs(matrix),
-        "summary": _float32_summary(matrix),
+        "summary": _float64_summary(matrix),
     }
 
 
@@ -243,42 +243,42 @@ def hdbscan_stage_metrics_payload(
     language: str,
 ) -> dict[str, Any]:
     if stage == "mst":
-        flat_edges, weights = _mst_edges_to_flat_float32(values)
+        flat_edges, weights = _mst_edges_to_flat_float64(values)
         edge_count = int(weights.size)
         return {
             "schema_version": 1,
             "phase": "hdbscan",
             "language": language,
             "stage": stage,
-            "dtype": "float32",
+            "dtype": "float64",
             "n_samples": edge_count + 1 if edge_count else 0,
             "min_samples": int(min_samples),
             "edge_count": edge_count,
             "shape": [edge_count, 3],
-            "summary": _float32_summary(flat_edges),
-            "weight_summary": _float32_summary(weights),
+            "summary": _float64_summary(flat_edges),
+            "weight_summary": _float64_summary(weights),
         }
 
     if stage == "linkage":
-        flat_tree, distances, cluster_sizes = _single_linkage_to_flat_float32(values)
+        flat_tree, distances, cluster_sizes = _single_linkage_to_flat_float64(values)
         row_count = int(distances.size)
         return {
             "schema_version": 1,
             "phase": "hdbscan",
             "language": language,
             "stage": stage,
-            "dtype": "float32",
+            "dtype": "float64",
             "n_samples": row_count + 1 if row_count else 0,
             "min_samples": int(min_samples),
             "row_count": row_count,
             "shape": [row_count, 4],
-            "summary": _float32_summary(flat_tree),
-            "distance_summary": _float32_summary(distances),
-            "cluster_size_summary": _float32_summary(cluster_sizes),
+            "summary": _float64_summary(flat_tree),
+            "distance_summary": _float64_summary(distances),
+            "cluster_size_summary": _float64_summary(cluster_sizes),
         }
 
     if stage in {"select", "full"}:
-        flat, labels, probabilities = _label_probability_output_to_flat_float32(values, stage=stage)
+        flat, labels, probabilities = _label_probability_output_to_flat_float64(values, stage=stage)
         n_samples = int(labels.size)
         unique_clusters = np.unique(labels[labels >= 0])
         return {
@@ -286,18 +286,18 @@ def hdbscan_stage_metrics_payload(
             "phase": "hdbscan",
             "language": language,
             "stage": stage,
-            "dtype": "float32",
+            "dtype": "float64",
             "n_samples": n_samples,
             "min_samples": int(min_samples),
             "shape": [n_samples, 2],
             "noise_count": int(np.count_nonzero(labels < 0)),
             "cluster_count": int(unique_clusters.size),
-            "summary": _float32_summary(flat),
-            "label_summary": _float32_summary(labels),
-            "probability_summary": _float32_summary(probabilities),
+            "summary": _float64_summary(flat),
+            "label_summary": _float64_summary(labels),
+            "probability_summary": _float64_summary(probabilities),
         }
 
-    matrix = _matrix32(values)
+    matrix = _matrix64(values)
 
     if stage == "distance":
         payload = _base_payload(
@@ -316,7 +316,7 @@ def hdbscan_stage_metrics_payload(
             min_samples=min_samples,
             language=language,
         )
-        payload["diagonal_summary"] = _float32_summary(np.diag(matrix))
+        payload["diagonal_summary"] = _float64_summary(np.diag(matrix))
         return payload
 
     raise ValueError(f"Unsupported HDBSCAN metrics stage {stage!r}")

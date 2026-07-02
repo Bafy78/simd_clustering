@@ -12,31 +12,31 @@
 #include <eve/module/core.hpp>
 #include <eve/memory/aligned_allocator.hpp>
 
-#include "../../simd.hpp"
+#include "types.hpp"
 
 struct mst_edge {
     std::int32_t current_node;
     std::int32_t next_node;
-    float distance;
+    double distance;
 };
 
 struct mst_step_result {
     std::size_t next;
-    float distance;
+    double distance;
 };
 
-inline wide_i mst_lane_offsets() {
-    return wide_i([](auto lane, auto) {
+inline hdbscan_wide_i mst_lane_offsets() {
+    return hdbscan_wide_i([](auto lane, auto) {
         return static_cast<int>(lane);
     });
 }
 
-inline mst_step_result reduce_min_index_wide(wide_f distances, wide_i indices) {
-    float best_distance = std::numeric_limits<float>::infinity();
+inline mst_step_result reduce_min_index_wide(hdbscan_wide distances, hdbscan_wide_i indices) {
+    double best_distance = std::numeric_limits<double>::infinity();
     std::size_t best_index = 0;
 
-    for (std::size_t lane = 0; lane < wide_f::size(); ++lane) {
-        const float lane_distance = distances.get(lane);
+    for (std::size_t lane = 0; lane < hdbscan_wide::size(); ++lane) {
+        const double lane_distance = distances.get(lane);
         const std::size_t lane_index = static_cast<std::size_t>(indices.get(lane));
 
         if (lane_distance < best_distance
@@ -50,29 +50,29 @@ inline mst_step_result reduce_min_index_wide(wide_f distances, wide_i indices) {
 }
 
 inline mst_step_result update_mst_candidates_and_select_next(
-    const float* current_row,
-    std::span<float> best_distance,
+    const double* current_row,
+    std::span<double> best_distance,
     std::size_t current,
     std::size_t N
 ) {
-    constexpr std::size_t card = wide_f::size();
-    constexpr float selected_sentinel = -1.0f;
-    const float infinity = std::numeric_limits<float>::infinity();
+    constexpr std::size_t card = hdbscan_wide::size();
+    constexpr double selected_sentinel = -1.0;
+    const double infinity = std::numeric_limits<double>::infinity();
 
     // Selected vertices are encoded directly in best_distance. Mutual reachability
     // distances for Euclidean HDBSCAN are non-negative, so a negative value is a
     // compact active-state sentinel and avoids a separate attached[] stream.
     best_distance[current] = selected_sentinel;
 
-    const wide_i lane_offsets = mst_lane_offsets();
-    wide_f vector_min_distances(infinity);
-    wide_i vector_min_indices(0);
+    const hdbscan_wide_i lane_offsets = mst_lane_offsets();
+    hdbscan_wide vector_min_distances(infinity);
+    hdbscan_wide_i vector_min_indices(0);
 
     auto process_block = [&](std::size_t j, auto ignore) {
         const auto candidates = eve::load[ignore](current_row + j);
         const auto previous_best = eve::load[ignore](best_distance.data() + j);
 
-        const auto active = ignore.mask(eve::as<wide_f>()) && (previous_best >= wide_zero_f);
+        const auto active = ignore.mask(eve::as<hdbscan_wide>()) && (previous_best >= hdbscan_wide_zero);
         const auto updated_best = eve::if_else(
             active && (candidates < previous_best),
             candidates,
@@ -80,8 +80,8 @@ inline mst_step_result update_mst_candidates_and_select_next(
         );
         eve::store[ignore](updated_best, best_distance.data() + j);
 
-        const auto selectable_distance = eve::if_else(active, updated_best, wide_f(infinity));
-        const wide_i candidate_indices = wide_i(static_cast<int>(j)) + lane_offsets;
+        const auto selectable_distance = eve::if_else(active, updated_best, hdbscan_wide(infinity));
+        const hdbscan_wide_i candidate_indices = hdbscan_wide_i(static_cast<int>(j)) + lane_offsets;
         const auto better = selectable_distance < vector_min_distances;
 
         vector_min_distances = eve::if_else(better, selectable_distance, vector_min_distances);
@@ -103,7 +103,7 @@ inline mst_step_result update_mst_candidates_and_select_next(
 }
 
 inline void minimum_spanning_tree_edges(
-    std::span<const float> mutual_reachability,
+    std::span<const double> mutual_reachability,
     std::size_t N,
     std::vector<mst_edge>& edges
 ) {
@@ -117,9 +117,9 @@ inline void minimum_spanning_tree_edges(
     }
     edges.reserve(N - 1);
 
-    std::vector<float, eve::aligned_allocator<float>> best_distance(
+    std::vector<double, eve::aligned_allocator<double>> best_distance(
         N,
-        std::numeric_limits<float>::infinity()
+        std::numeric_limits<double>::infinity()
     );
 
     // Match scikit-learn's dense private mst_from_mutual_reachability behavior:
@@ -131,7 +131,7 @@ inline void minimum_spanning_tree_edges(
     for (std::size_t edge_index = 0; edge_index + 1 < N; ++edge_index) {
         const mst_step_result next_step = update_mst_candidates_and_select_next(
             mutual_reachability.data() + current * N,
-            std::span<float>(best_distance.data(), best_distance.size()),
+            std::span<double>(best_distance.data(), best_distance.size()),
             current,
             N
         );

@@ -80,6 +80,7 @@ def default_config() -> BenchmarkConfig:
         test_Ds=[1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 17, 23, 30, 40, 60, 90],
         test_Ns=[
             128,
+            256,
             512,
             1024,
             2048,

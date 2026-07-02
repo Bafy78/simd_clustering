@@ -678,11 +678,11 @@ def _summary_comparison(
         "scalar_abs_diff_max": scalar_abs_diff_max,
         "scalar_rel_diff_max": scalar_rel_diff_max,
         "probe_value_max_abs_diff": probe_value_max_abs_diff,
-        "candidate_hash": candidate_summary.get("fnv1a64_float32"),
-        "reference_hash": reference_summary.get("fnv1a64_float32"),
+        "candidate_hash": candidate_summary.get("fnv1a64_float64"),
+        "reference_hash": reference_summary.get("fnv1a64_float64"),
         "hash_equal": (
-            candidate_summary.get("fnv1a64_float32")
-            == reference_summary.get("fnv1a64_float32")
+            candidate_summary.get("fnv1a64_float64")
+            == reference_summary.get("fnv1a64_float64")
         ),
     }
     return checks, details

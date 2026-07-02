@@ -13,6 +13,7 @@ This means the benchmark inputs are synthetic blob datasets, not real datasets. 
 For a fixed `(D, N, K)` configuration and unchanged generator code, the dataset is deterministic: `make_blobs` is called with `random_state=42`. Re-running the benchmark pipeline therefore regenerates the same samples for that configuration.
 
 The generated samples are stored as flat `float32` binary files. Both C++ and Python benchmarks read those same files, so implementation comparisons are based on shared input data rather than separately generated datasets.
+Hdbscan is using `float64` data though, so we're just upcasting our dataset, as it shouldn't change anything whether the data is actually from a float64 or not.
 
 ### Initialization regime
 

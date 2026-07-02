@@ -2,9 +2,10 @@
 
 The wrappers in this module intentionally call implementation internals rather
 than reimplementing HDBSCAN stages in Python. The public reference contract is
-float32 at dense stage boundaries: input data, distance matrices, and mutual-
-reachability matrices are float32. Some private helpers require float64
-internally; those wrappers promote only at the call site.
+float64 at dense stage boundaries: input data, distance matrices, mutual-
+reachability matrices, MST edge weights, linkage distances, and probabilities
+are float64. This matches the dtype contract used by sklearn / hdbscan-contrib
+/ ASL-style HDBSCAN references.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ from benchmark_metadata import (
 @dataclass(frozen=True)
 class HdbscanFullResult:
     labels: NDArray[np.int32]
-    probabilities: NDArray[np.float32]
+    probabilities: NDArray[np.float64]
     single_linkage_tree: NDArray[Any]
 
 
@@ -79,23 +80,23 @@ def validate_stage_key(stage_key: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def as_sklearn_brute_input(X: ArrayLike) -> NDArray[np.float32]:
-    """Return the float32 dense input used by the staged sklearn reference."""
-    return np.asarray(X, dtype=np.float32, order="C")
+def as_sklearn_brute_input(X: ArrayLike) -> NDArray[np.float64]:
+    """Return the float64 dense input used by the staged sklearn reference."""
+    return np.asarray(X, dtype=np.float64, order="C")
 
 
-def sklearn_brute_distance_matrix(X: ArrayLike) -> NDArray[np.float32]:
+def sklearn_brute_distance_matrix(X: ArrayLike) -> NDArray[np.float64]:
     """distance: X -> dense Euclidean distance matrix."""
-    X32 = as_sklearn_brute_input(X)
-    distances = pairwise_distances(X32, metric="euclidean", n_jobs=1)
-    return np.asarray(distances, dtype=np.float32, order="C")
+    X64 = as_sklearn_brute_input(X)
+    distances = pairwise_distances(X64, metric="euclidean", n_jobs=1)
+    return np.asarray(distances, dtype=np.float64, order="C")
 
 
 def sklearn_brute_mutual_reachability_matrix(
     distance_matrix: ArrayLike,
     *,
     min_samples: int,
-) -> NDArray[np.float32]:
+) -> NDArray[np.float64]:
     """mreach: distance matrix -> mutual reachability matrix.
 
     This stage includes scikit-learn's internal core-distance computation. The
@@ -108,7 +109,7 @@ def sklearn_brute_mutual_reachability_matrix(
     reference uses the same helper in-place because the distance matrix is
     disposable after mreach.
     """
-    distances = np.asarray(distance_matrix, dtype=np.float32, order="C").copy()
+    distances = np.asarray(distance_matrix, dtype=np.float64, order="C").copy()
     return sklearn_brute_mutual_reachability_matrix_inplace(
         distances,
         min_samples=min_samples,
@@ -116,17 +117,17 @@ def sklearn_brute_mutual_reachability_matrix(
 
 
 def sklearn_brute_mutual_reachability_matrix_inplace(
-    distance_or_mreach_matrix: NDArray[np.float32],
+    distance_or_mreach_matrix: NDArray[np.float64],
     *,
     min_samples: int,
-) -> NDArray[np.float32]:
+) -> NDArray[np.float64]:
     """Overwrite a dense distance matrix with sklearn mutual reachability."""
     if (
-        distance_or_mreach_matrix.dtype != np.float32
+        distance_or_mreach_matrix.dtype != np.float64
         or not distance_or_mreach_matrix.flags.c_contiguous
     ):
         raise ValueError(
-            "Expected a C-contiguous float32 distance matrix for in-place mreach"
+            "Expected a C-contiguous float64 distance matrix for in-place mreach"
         )
     validate_min_samples(min_samples, distance_or_mreach_matrix.shape[0])
     result = mutual_reachability_graph(
@@ -134,10 +135,10 @@ def sklearn_brute_mutual_reachability_matrix_inplace(
         min_samples=min_samples,
         max_distance=0.0,
     )
-    return np.asarray(result, dtype=np.float32, order="C")
+    return np.asarray(result, dtype=np.float64, order="C")
 
 
-def as_cpp_prim_order_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float32]:
+def as_cpp_prim_order_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float64]:
     """Return contrib MST edges normalized to the C++ staged MST convention.
 
     hdbscan-contrib's mst_linkage_core emits true Prim parent edges:
@@ -160,20 +161,27 @@ def as_cpp_prim_order_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float32]:
     contrib's MST parent endpoint is wrong; it just makes the contrib reference
     use the same endpoint convention as the C++ artifact being compared.
     """
-    plain = as_float32_plain_mst_edges(mst_edges).copy()
+    plain = as_float64_plain_mst_edges(mst_edges).copy()
     if plain.shape[0] == 0:
         return plain
 
-    previous_selected = np.empty(plain.shape[0], dtype=np.float32)
+    previous_selected = np.empty(plain.shape[0], dtype=np.float64)
     previous_selected[0] = 0.0
     previous_selected[1:] = plain[:-1, 1]
     plain[:, 0] = previous_selected
     return np.ascontiguousarray(plain)
 
 
-def as_float32_mst_edges(mst_edges: ArrayLike) -> NDArray[Any]:
-    """Return sklearn MST-edge dtype with float32-rounded edge weights."""
+def as_float64_mst_edges(mst_edges: ArrayLike) -> NDArray[Any]:
+    """Return sklearn MST-edge dtype with float64 edge weights.
+
+    Avoid copying when the input is already sklearn's native MST_edge_dtype.
+    """
     edges = np.asarray(mst_edges)
+
+    if edges.dtype == MST_edge_dtype:
+        return edges
+
     rounded = np.empty(edges.shape[0], dtype=MST_edge_dtype)
 
     if edges.dtype.names is not None:
@@ -189,13 +197,20 @@ def as_float32_mst_edges(mst_edges: ArrayLike) -> NDArray[Any]:
 
     rounded["current_node"] = np.asarray(left, dtype=np.intp)
     rounded["next_node"] = np.asarray(right, dtype=np.intp)
-    rounded["distance"] = np.asarray(distance, dtype=np.float32).astype(np.float64)
+    rounded["distance"] = np.asarray(distance, dtype=np.float64)
     return rounded
 
 
-def as_float32_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDArray[Any]:
-    """Return sklearn hierarchy dtype with float32-rounded merge distances."""
+def as_float64_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDArray[Any]:
+    """Return sklearn hierarchy dtype with float64 merge distances.
+
+    Avoid copying when the input is already sklearn's native HIERARCHY_dtype.
+    """
     tree = np.asarray(single_linkage_tree)
+
+    if tree.dtype == HIERARCHY_dtype:
+        return tree
+
     rounded = np.empty(tree.shape[0], dtype=HIERARCHY_dtype)
 
     if tree.dtype.names is not None:
@@ -213,7 +228,7 @@ def as_float32_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDArray[An
 
     rounded["left_node"] = np.asarray(left, dtype=np.intp)
     rounded["right_node"] = np.asarray(right, dtype=np.intp)
-    rounded["value"] = np.asarray(distance, dtype=np.float32).astype(np.float64)
+    rounded["value"] = np.asarray(distance, dtype=np.float64)
     rounded["cluster_size"] = np.asarray(cluster_size, dtype=np.intp)
     return rounded
 
@@ -230,13 +245,12 @@ def sklearn_brute_mst_edges(
         order="C",
     )
     validate_min_samples(min_samples, mutual_reachability.shape[0])
-    mst_edges = _brute_mst(mutual_reachability, min_samples=min_samples)
-    return as_float32_mst_edges(mst_edges)
+    return _brute_mst(mutual_reachability, min_samples=min_samples)
 
 
 def sklearn_brute_single_linkage_tree(mst_edges: NDArray[Any]) -> NDArray[Any]:
     """linkage: MST edge list -> single linkage tree."""
-    edges = as_float32_mst_edges(mst_edges)
+    edges = as_float64_mst_edges(mst_edges)
 
     # Override sklearn's private _process_mst edge ordering.
     #
@@ -263,19 +277,16 @@ def sklearn_brute_single_linkage_tree(mst_edges: NDArray[Any]) -> NDArray[Any]:
             edges["distance"],
         )
     )
-
-    tree = make_single_linkage(edges[row_order])
-
-    return as_float32_single_linkage_tree(tree)
+    return make_single_linkage(edges[row_order])
 
 
 def sklearn_brute_select_clusters(
     single_linkage_tree: NDArray[Any],
     *,
     min_samples: int,
-) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+) -> tuple[NDArray[np.int32], NDArray[np.float64]]:
     """select: single linkage tree -> labels and probabilities."""
-    tree = as_float32_single_linkage_tree(single_linkage_tree)
+    tree = as_float64_single_linkage_tree(single_linkage_tree)
     labels, probabilities = tree_to_labels(
         tree,
         min_samples,
@@ -286,12 +297,12 @@ def sklearn_brute_select_clusters(
     )
     return (
         np.asarray(labels, dtype=np.int32, order="C"),
-        np.asarray(probabilities, dtype=np.float32, order="C"),
+        np.asarray(probabilities, dtype=np.float64, order="C"),
     )
 
 
 def sklearn_brute_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult:
-    """full: X -> labels and probabilities via the staged float32 reference."""
+    """full: X -> labels and probabilities via the staged float64 reference."""
     distance_matrix = sklearn_brute_distance_matrix(X)
     mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix_inplace(
         distance_matrix,
@@ -341,23 +352,23 @@ def contrib_internal_min_samples(min_samples: int) -> int:
     return max(1, int(min_samples) - 1)
 
 
-def as_hdbscan_contrib_input(X: ArrayLike) -> NDArray[np.float32]:
-    """Return the float32 dense input used by the hdbscan-contrib adapter."""
-    return np.asarray(X, dtype=np.float32, order="C")
+def as_hdbscan_contrib_input(X: ArrayLike) -> NDArray[np.float64]:
+    """Return the float64 dense input used by the hdbscan-contrib adapter."""
+    return np.asarray(X, dtype=np.float64, order="C")
 
 
-def hdbscan_contrib_distance_matrix(X: ArrayLike) -> NDArray[np.float32]:
+def hdbscan_contrib_distance_matrix(X: ArrayLike) -> NDArray[np.float64]:
     """distance: X -> dense Euclidean distance matrix for contrib/generic."""
-    X32 = as_hdbscan_contrib_input(X)
-    distances = pairwise_distances(X32, metric="euclidean", n_jobs=1)
-    return np.asarray(distances, dtype=np.float32, order="C")
+    X64 = as_hdbscan_contrib_input(X)
+    distances = pairwise_distances(X64, metric="euclidean", n_jobs=1)
+    return np.asarray(distances, dtype=np.float64, order="C")
 
 
 def hdbscan_contrib_mutual_reachability_matrix(
     distance_matrix: ArrayLike,
     *,
     min_samples: int,
-) -> NDArray[np.float32]:
+) -> NDArray[np.float64]:
     """mreach: distance matrix -> hdbscan-contrib mutual reachability matrix."""
     distances = np.asarray(distance_matrix, dtype=np.float64, order="C")
     validate_min_samples(min_samples, distances.shape[0])
@@ -367,11 +378,11 @@ def hdbscan_contrib_mutual_reachability_matrix(
         min_points=contrib_internal_min_samples(min_samples),
         alpha=1.0,
     )
-    return np.asarray(result, dtype=np.float32, order="C")
+    return np.asarray(result, dtype=np.float64, order="C")
 
 
-def as_float32_plain_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float32]:
-    """Return an hdbscan-contrib-style MST array with float32 values.
+def as_float64_plain_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float64]:
+    """Return an hdbscan-contrib-style MST array with float64 values.
 
     The plain contrib representation is shape (n_edges, 3): left, right, weight.
     """
@@ -388,15 +399,15 @@ def as_float32_plain_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float32]:
         right = edges[:, 1]
         distance = edges[:, 2]
 
-    plain = np.empty((edges.shape[0], 3), dtype=np.float32)
-    plain[:, 0] = np.asarray(left, dtype=np.float32)
-    plain[:, 1] = np.asarray(right, dtype=np.float32)
-    plain[:, 2] = np.asarray(distance, dtype=np.float32)
+    plain = np.empty((edges.shape[0], 3), dtype=np.float64)
+    plain[:, 0] = np.asarray(left, dtype=np.float64)
+    plain[:, 1] = np.asarray(right, dtype=np.float64)
+    plain[:, 2] = np.asarray(distance, dtype=np.float64)
     return np.ascontiguousarray(plain)
 
 
-def as_float32_plain_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDArray[np.float32]:
-    """Return a contrib-style single linkage tree with float32 values.
+def as_float64_plain_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDArray[np.float64]:
+    """Return a contrib-style single linkage tree with float64 values.
 
     The plain contrib representation is shape (n_merges, 4): left, right,
     distance, cluster_size.
@@ -416,11 +427,11 @@ def as_float32_plain_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDAr
         distance = tree[:, 2]
         cluster_size = tree[:, 3]
 
-    plain = np.empty((tree.shape[0], 4), dtype=np.float32)
-    plain[:, 0] = np.asarray(left, dtype=np.float32)
-    plain[:, 1] = np.asarray(right, dtype=np.float32)
-    plain[:, 2] = np.asarray(distance, dtype=np.float32)
-    plain[:, 3] = np.asarray(cluster_size, dtype=np.float32)
+    plain = np.empty((tree.shape[0], 4), dtype=np.float64)
+    plain[:, 0] = np.asarray(left, dtype=np.float64)
+    plain[:, 1] = np.asarray(right, dtype=np.float64)
+    plain[:, 2] = np.asarray(distance, dtype=np.float64)
+    plain[:, 3] = np.asarray(cluster_size, dtype=np.float64)
     return np.ascontiguousarray(plain)
 
 
@@ -428,7 +439,7 @@ def hdbscan_contrib_mst_edges(
     mutual_reachability_matrix: ArrayLike,
     *,
     min_samples: int,
-) -> NDArray[np.float32]:
+) -> NDArray[np.float64]:
     """mst: mutual reachability matrix -> normalized contrib MST edge list."""
     mutual_reachability = np.asarray(
         mutual_reachability_matrix,
@@ -442,10 +453,10 @@ def hdbscan_contrib_mst_edges(
     return as_cpp_prim_order_mst_edges(mst_edges)
 
 
-def hdbscan_contrib_single_linkage_tree(mst_edges: ArrayLike) -> NDArray[np.float32]:
+def hdbscan_contrib_single_linkage_tree(mst_edges: ArrayLike) -> NDArray[np.float64]:
     """linkage: contrib MST edge list -> contrib single linkage tree."""
     hdbscan_contrib = _contrib_hdbscan_module()
-    edges = np.asarray(as_float32_plain_mst_edges(mst_edges), dtype=np.float64, order="C")
+    edges = np.asarray(as_float64_plain_mst_edges(mst_edges), dtype=np.float64, order="C")
 
     # Override contrib's private linkage tie ordering.
     #
@@ -476,17 +487,17 @@ def hdbscan_contrib_single_linkage_tree(mst_edges: ArrayLike) -> NDArray[np.floa
 
     tree = hdbscan_contrib.label(edges[row_order, :])
 
-    return as_float32_plain_single_linkage_tree(tree)
+    return as_float64_plain_single_linkage_tree(tree)
 
 
 def hdbscan_contrib_select_clusters(
     single_linkage_tree: ArrayLike,
     *,
     min_samples: int,
-) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+) -> tuple[NDArray[np.int32], NDArray[np.float64]]:
     """select: contrib single linkage tree -> labels and probabilities."""
     tree = np.asarray(
-        as_float32_plain_single_linkage_tree(single_linkage_tree),
+        as_float64_plain_single_linkage_tree(single_linkage_tree),
         dtype=np.float64,
         order="C",
     )
@@ -509,15 +520,15 @@ def hdbscan_contrib_select_clusters(
     )
     return (
         np.asarray(labels, dtype=np.int32, order="C"),
-        np.asarray(probabilities, dtype=np.float32, order="C"),
+        np.asarray(probabilities, dtype=np.float64, order="C"),
     )
 
 
 def hdbscan_contrib_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult:
-    X32 = as_hdbscan_contrib_input(X)
-    validate_min_samples(min_samples, X32.shape[0])
+    X64 = as_hdbscan_contrib_input(X)
+    validate_min_samples(min_samples, X64.shape[0])
 
-    distance_matrix = hdbscan_contrib_distance_matrix(X32)
+    distance_matrix = hdbscan_contrib_distance_matrix(X64)
     mutual_reachability_matrix = hdbscan_contrib_mutual_reachability_matrix(
         distance_matrix,
         min_samples=min_samples,
@@ -751,7 +762,7 @@ def run_prepared_hdbscan_reference_stage(
     raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
 
 
-def reference_distance_matrix(reference_key: str, X: ArrayLike) -> NDArray[np.float32]:
+def reference_distance_matrix(reference_key: str, X: ArrayLike) -> NDArray[np.float64]:
     reference_key = validate_hdbscan_reference_key(reference_key)
     if reference_key == SKLEARN_BRUTE_REFERENCE:
         return sklearn_brute_distance_matrix(X)
@@ -765,7 +776,7 @@ def reference_mutual_reachability_matrix(
     distance_matrix: ArrayLike,
     *,
     min_samples: int,
-) -> NDArray[np.float32]:
+) -> NDArray[np.float64]:
     reference_key = validate_hdbscan_reference_key(reference_key)
     if reference_key == SKLEARN_BRUTE_REFERENCE:
         return sklearn_brute_mutual_reachability_matrix(
@@ -817,7 +828,7 @@ def reference_select_clusters(
     single_linkage_tree: ArrayLike,
     *,
     min_samples: int,
-) -> tuple[NDArray[np.int32], NDArray[np.float32]]:
+) -> tuple[NDArray[np.int32], NDArray[np.float64]]:
     reference_key = validate_hdbscan_reference_key(reference_key)
     if reference_key == SKLEARN_BRUTE_REFERENCE:
         return sklearn_brute_select_clusters(

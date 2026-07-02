@@ -12,7 +12,7 @@
 struct single_linkage_row {
     std::int32_t left_node;
     std::int32_t right_node;
-    float distance;
+    double distance;
     std::int32_t cluster_size;
 };
 

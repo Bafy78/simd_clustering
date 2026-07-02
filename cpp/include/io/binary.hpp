@@ -36,3 +36,34 @@ inline std::vector<float> read_aos_f32(
 ) {
     return read_binary_f32(filename, rows * cols);
 }
+
+inline std::vector<double> read_binary_f64(
+    const std::string& filename,
+    std::size_t value_count
+) {
+    std::vector<double> values(value_count);
+
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        throw std::runtime_error("Error: Could not open file " + filename);
+    }
+
+    file.read(
+        reinterpret_cast<char*>(values.data()),
+        static_cast<std::streamsize>(values.size() * sizeof(double))
+    );
+
+    if (!file) {
+        throw std::runtime_error("Error: Could not read expected double data from " + filename);
+    }
+
+    return values;
+}
+
+inline std::vector<double> read_aos_f64(
+    const std::string& filename,
+    std::size_t rows,
+    std::size_t cols
+) {
+    return read_binary_f64(filename, rows * cols);
+}

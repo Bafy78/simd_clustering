@@ -34,6 +34,7 @@ from benchmark_metadata import (
 )
 from benchmark_pipeline.stages import (
     DATASET_ARTIFACT,
+    HDBSCAN_DATASET_ARTIFACT,
     GMM_MEANS_ARTIFACT,
     GMM_PRECISIONS_ARTIFACT,
     GMM_WEIGHTS_ARTIFACT,
@@ -419,6 +420,10 @@ class BenchmarkArtifacts:
         return self.dataset(f"init_{self.case_id}.bin")
 
     @property
+    def hdbscan_dataset_bin(self) -> str:
+        return self.dataset(f"hdbscan_data_f64_{self.case_id}.bin")
+
+    @property
     def gmm_weights_bin(self) -> str:
         return self.dataset(f"gmm_weights_{self.case_id}.bin")
 
@@ -459,6 +464,8 @@ class BenchmarkArtifacts:
     ) -> str:
         if artifact_key == DATASET_ARTIFACT:
             return self.dataset_bin
+        if artifact_key == HDBSCAN_DATASET_ARTIFACT:
+            return self.hdbscan_dataset_bin
         if artifact_key == INIT_CENTROIDS_ARTIFACT:
             return self.init_centroids_bin
         if artifact_key == GMM_WEIGHTS_ARTIFACT:
@@ -1096,6 +1103,34 @@ def build_dataset_setup_task(
 
 
 
+def build_hdbscan_dataset_setup_task(
+    case: BenchmarkCase,
+    datasets_dir: str | Path = DATASETS_DIR,
+) -> Task:
+    """Materialize the shared dataset as float64 for HDBSCAN-only runs."""
+    artifacts = BenchmarkArtifacts.for_case(case, datasets_dir)
+    return Task(
+        name="Setup: HDBSCAN float64 dataset",
+        command=[
+            sys.executable,
+            repo_path("python", "benchmark_pipeline", "tools", "hdbscan_dataset_f64.py"),
+            "--dataset-bin",
+            artifacts.dataset_bin,
+            "--hdbscan-dataset-out",
+            artifacts.hdbscan_dataset_bin,
+            "--N",
+            str(case.N),
+            "--D",
+            str(case.D),
+        ],
+        phase_key="hdbscan",
+        stage_key=FULL_STAGE_KEY,
+        input_artifacts=(artifacts.dataset_bin,),
+        output_artifacts=(artifacts.hdbscan_dataset_bin,),
+    )
+
+
+
 HDBSCAN_STAGE_ARTIFACT_ORDER = (
     HDBSCAN_DISTANCE_MATRIX_ARTIFACT,
     HDBSCAN_MREACH_MATRIX_ARTIFACT,
@@ -1156,7 +1191,7 @@ def build_hdbscan_stage_artifact_task(
         sys.executable,
         repo_path("python", "benchmark_pipeline", "tools", "hdbscan_stage_artifacts.py"),
         "--dataset-bin",
-        artifacts.dataset_bin,
+        artifacts.hdbscan_dataset_bin,
         *case.dimension_args(),
         "--min-samples",
         str(case.K),
@@ -1175,7 +1210,7 @@ def build_hdbscan_stage_artifact_task(
         command=command,
         phase_key="hdbscan",
         stage_key=FULL_STAGE_KEY,
-        input_artifacts=(artifacts.dataset_bin,),
+        input_artifacts=(artifacts.hdbscan_dataset_bin,),
         output_artifacts=tuple(output_artifacts),
     )
 
@@ -1448,6 +1483,8 @@ def build_pipeline(
         _validate_hdbscan_stage_keys(options.hdbscan_stages)
         _validate_hdbscan_reference_keys(options.hdbscan_references)
 
+        tasks.append(build_hdbscan_dataset_setup_task(case, datasets_dir))
+
         hdbscan_targets = [
             target
             for target in active_cpp_targets_for_case(case, options, exclusion_rules)
@@ -1505,7 +1542,7 @@ def build_pipeline(
                                 sys.executable,
                                 repo_path("python", "benchmark_pipeline", "benches", "bench_hdbscan.py"),
                                 "--dataset-bin",
-                                artifacts.dataset_bin,
+                                artifacts.hdbscan_dataset_bin,
                                 *case.dimension_args(),
                                 "--stage",
                                 stage_key,
@@ -1519,7 +1556,7 @@ def build_pipeline(
                             ],
                             phase_key="hdbscan",
                             stage_key=stage_key,
-                            input_artifacts=(artifacts.dataset_bin,),
+                            input_artifacts=(artifacts.hdbscan_dataset_bin,),
                             output_artifacts=(metrics_path,),
                         )
                     )

@@ -21,13 +21,13 @@ def ensure_parent_dir(path: str | Path | None) -> None:
         Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
 
-def write_float32_array(path: str | Path, values: Any) -> None:
+def write_float64_array(path: str | Path, values: Any) -> None:
     ensure_parent_dir(path)
-    np.ascontiguousarray(values, dtype=np.float32).tofile(path)
+    np.ascontiguousarray(values, dtype=np.float64).tofile(path)
 
 
 def write_mst_edges(path: str | Path, mst_edges: NDArray[Any]) -> None:
-    """Write MST edges as left[int32], right[int32], weight[float32]."""
+    """Write MST edges as left[int32], right[int32], weight[float64]."""
     ensure_parent_dir(path)
     edges = np.asarray(mst_edges)
 
@@ -48,7 +48,7 @@ def write_mst_edges(path: str | Path, mst_edges: NDArray[Any]) -> None:
 
     left = np.ascontiguousarray(left_values, dtype=np.int32)
     right = np.ascontiguousarray(right_values, dtype=np.int32)
-    weight = np.ascontiguousarray(weight_values, dtype=np.float32)
+    weight = np.ascontiguousarray(weight_values, dtype=np.float64)
 
     with open(path, "wb") as f:
         left.tofile(f)
@@ -57,7 +57,7 @@ def write_mst_edges(path: str | Path, mst_edges: NDArray[Any]) -> None:
 
 
 def write_single_linkage_tree(path: str | Path, tree: NDArray[Any]) -> None:
-    """Write linkage rows as left[int32], right[int32], distance[float32], size[int32]."""
+    """Write linkage rows as left[int32], right[int32], distance[float64], size[int32]."""
     ensure_parent_dir(path)
     linkage = np.asarray(tree)
 
@@ -80,7 +80,7 @@ def write_single_linkage_tree(path: str | Path, tree: NDArray[Any]) -> None:
 
     left = np.ascontiguousarray(left_values, dtype=np.int32)
     right = np.ascontiguousarray(right_values, dtype=np.int32)
-    distance = np.ascontiguousarray(distance_values, dtype=np.float32)
+    distance = np.ascontiguousarray(distance_values, dtype=np.float64)
     size = np.ascontiguousarray(size_values, dtype=np.int32)
 
     with open(path, "wb") as f:
@@ -90,10 +90,10 @@ def write_single_linkage_tree(path: str | Path, tree: NDArray[Any]) -> None:
         size.tofile(f)
 
 
-def load_dataset(path: str | Path, *, n_samples: int, n_features: int) -> NDArray[np.float32]:
+def load_dataset(path: str | Path, *, n_samples: int, n_features: int) -> NDArray[np.float64]:
     return np.memmap(
         path,
-        dtype=np.float32,
+        dtype=np.float64,
         mode="r",
         shape=(n_samples, n_features),
     )
@@ -155,9 +155,9 @@ def main() -> None:
     mst_edges = None
 
     if needs_distance:
-        distance_matrix = np.ascontiguousarray(sklearn_brute_distance_matrix(X), dtype=np.float32)
+        distance_matrix = np.ascontiguousarray(sklearn_brute_distance_matrix(X), dtype=np.float64)
         if args.distance_matrix_out:
-            write_float32_array(args.distance_matrix_out, distance_matrix)
+            write_float64_array(args.distance_matrix_out, distance_matrix)
 
     if needs_mreach:
         assert distance_matrix is not None
@@ -166,7 +166,7 @@ def main() -> None:
             min_samples=args.min_samples,
         )
         if args.mreach_matrix_out:
-            write_float32_array(args.mreach_matrix_out, mutual_reachability_matrix)
+            write_float64_array(args.mreach_matrix_out, mutual_reachability_matrix)
 
     if needs_mst:
         assert mutual_reachability_matrix is not None
