@@ -18,8 +18,7 @@ def import_runtime_deps():
 
 
 def run_kmeans_pp(X, K):
-    with threadpool_limits(limits=1):
-        centers, _ = kmeans_plusplus(X, n_clusters=K)
+    centers, _ = kmeans_plusplus(X, n_clusters=K)
     return centers
 
 
@@ -58,9 +57,16 @@ if __name__ == "__main__":
     else:
         X = None
 
-    runner.bench_func(
-        "kmeans_pp_py",
-        run_kmeans_pp,
-        X,
-        args.K,
-    )
+    def bench():
+        runner.bench_func(
+            "kmeans_pp_py",
+            run_kmeans_pp,
+            X,
+            args.K,
+        )
+
+    if getattr(args, "worker", False):
+        with threadpool_limits(limits=1):
+            bench()
+    else:
+        bench()

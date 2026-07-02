@@ -66,7 +66,7 @@ For SoA conversion, the conversion is the thing being measured. The raw AoS data
 
 For the isolated HDBSCAN `mreach` stage, the prepared distance matrix is treated as a reusable predecessor artifact. scikit-learn's dense mutual-reachability helper mutates its input in-place, so the Python reference copies the prepared distance matrix before calling that helper. The C++ isolated stage mirrors that staged contract by copying the prepared distance matrix into a preallocated scratch/output buffer and then running the same in-place mreach kernel used by the full C++ pipeline. The full HDBSCAN pipeline does not pay this preservation copy: after pairwise distances are computed, the distance matrix is overwritten with mutual-reachability values and consumed by the MST stage.
 
-For Python benchmarks, each `bench_*.py` script loads the shared binary inputs before calling `pyperf.Runner.bench_func(...)`. The measured function is the wrapped scikit-learn operation. For Lloyd and GMM, estimator construction and `.fit(...)` are inside the measured function because they are part of the operation being compared.
+For Python benchmarks, each `bench_*.py` script loads the shared binary inputs before calling `pyperf.Runner.bench_func(...)`. The measured function is the wrapped scikit-learn operation. For Lloyd and GMM, estimator construction and `.fit(...)` are inside the measured function because they are part of the operation being compared. Thread-pool limiting is established outside `bench_func(...)` in the pyperf worker, so `threadpoolctl.threadpool_limits(limits=1)` context-manager setup and teardown are not part of the measured callable.
 
 ### Fixed-cost reporting
 
@@ -79,7 +79,7 @@ The GMM fixed-cost plot should not be read as a full GMM-initialization benchmar
 
 The current C++ SIMD implementations are single-threaded.
 
-The benchmark is not intended to measure thread scaling, scheduling overhead, inter-thread reduction costs, or whatever other kind of thread-parallelism-related stuff. For Lloyd and GMM, the Python/scikit-learn benchmark functions wrap the measured `.fit(...)` call in `threadpoolctl.threadpool_limits(limits=1)`, so those comparisons are made against scikit-learn with supported native thread pools limited to one thread.
+The benchmark is not intended to measure thread scaling, scheduling overhead, inter-thread reduction costs, or other thread-parallelism effects. In Python benchmark workers, `threadpoolctl.threadpool_limits(limits=1)` wraps the `pyperf.Runner.bench_func(...)` call, so those comparisons are made against scikit-learn with supported native thread pools limited to one thread.
 
 Adding thread parallelism to the C++ implementations should be a separate benchmark regime rather than an implicit change to these results. The natural parallelization strategy would be similar in spirit to scikit-learn's: distribute independent sample-wise work across threads, then combine per-thread reductions for quantities such as cluster sums, responsibilities, or accumulated costs. If that is added, the benchmark should document the thread count and compare against scikit-learn under a matching thread policy.
 

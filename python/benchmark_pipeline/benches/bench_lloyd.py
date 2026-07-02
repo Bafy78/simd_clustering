@@ -21,16 +21,15 @@ def import_runtime_deps():
 
 
 def run_kmeans_lloyd(X, K, init_centers):
-    with threadpool_limits(limits=1):
-        kmeans = KMeans(
-            n_clusters=K,
-            init=init_centers,
-            n_init=1,
-            max_iter=300,
-            algorithm="lloyd",
-            tol=1e-4,
-        )
-        kmeans.fit(X)
+    kmeans = KMeans(
+        n_clusters=K,
+        init=init_centers,
+        n_init=1,
+        max_iter=300,
+        algorithm="lloyd",
+        tol=1e-4,
+    )
+    kmeans.fit(X)
     return kmeans
 
 
@@ -158,13 +157,20 @@ if __name__ == "__main__":
         X = None
         init_centers = None
 
-    runner.bench_func(
-        "kmeans_lloyd_py",
-        run_kmeans_lloyd,
-        X,
-        args.K,
-        init_centers,
-    )
+    def bench():
+        runner.bench_func(
+            "kmeans_lloyd_py",
+            run_kmeans_lloyd,
+            X,
+            args.K,
+            init_centers,
+        )
+
+    if getattr(args, "worker", False):
+        with threadpool_limits(limits=1):
+            bench()
+    else:
+        bench()
 
     if not getattr(args, "worker", False):
         import_runtime_deps()
@@ -172,7 +178,8 @@ if __name__ == "__main__":
         X = load_dataset(args)
         init_centers = load_init_centers(args)
 
-        final_kmeans = run_kmeans_lloyd(X, args.K, init_centers)
+        with threadpool_limits(limits=1):
+            final_kmeans = run_kmeans_lloyd(X, args.K, init_centers)
 
         import json as _json
 

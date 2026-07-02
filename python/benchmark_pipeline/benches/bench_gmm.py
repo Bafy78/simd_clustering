@@ -75,19 +75,18 @@ def load_gmm_precisions(args):
 
 
 def run_gmm_fit(X, K, covariance_type, weights, means, precisions):
-    with threadpool_limits(limits=1):
-        gmm = GaussianMixture(
-            n_components=K,
-            covariance_type=covariance_type,
-            tol=GMM_DEFAULT_TOL,
-            reg_covar=GMM_DEFAULT_REG_COVAR,
-            max_iter=GMM_DEFAULT_MAX_ITER,
-            n_init=GMM_DEFAULT_N_INIT,
-            weights_init=np.asarray(weights),
-            means_init=np.asarray(means),
-            precisions_init=np.asarray(precisions),
-        )
-        gmm.fit(X)
+    gmm = GaussianMixture(
+        n_components=K,
+        covariance_type=covariance_type,
+        tol=GMM_DEFAULT_TOL,
+        reg_covar=GMM_DEFAULT_REG_COVAR,
+        max_iter=GMM_DEFAULT_MAX_ITER,
+        n_init=GMM_DEFAULT_N_INIT,
+        weights_init=np.asarray(weights),
+        means_init=np.asarray(means),
+        precisions_init=np.asarray(precisions),
+    )
+    gmm.fit(X)
 
     return gmm
 
@@ -166,16 +165,23 @@ if __name__ == "__main__":
         means = None
         precisions = None
 
-    runner.bench_func(
-        "gmm_em_py",
-        run_gmm_fit,
-        X,
-        args.K,
-        args.covariance_type,
-        weights,
-        means,
-        precisions,
-    )
+    def bench():
+        runner.bench_func(
+            "gmm_em_py",
+            run_gmm_fit,
+            X,
+            args.K,
+            args.covariance_type,
+            weights,
+            means,
+            precisions,
+        )
+
+    if getattr(args, "worker", False):
+        with threadpool_limits(limits=1):
+            bench()
+    else:
+        bench()
 
     if not getattr(args, "worker", False):
         import_runtime_deps()
@@ -185,14 +191,15 @@ if __name__ == "__main__":
         means = load_gmm_means(args)
         precisions = load_gmm_precisions(args)
 
-        final_gmm = run_gmm_fit(
-            X,
-            args.K,
-            args.covariance_type,
-            weights,
-            means,
-            precisions,
-        )
+        with threadpool_limits(limits=1):
+            final_gmm = run_gmm_fit(
+                X,
+                args.K,
+                args.covariance_type,
+                weights,
+                means,
+                precisions,
+            )
 
         import json as _json
 
