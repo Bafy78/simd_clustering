@@ -69,6 +69,12 @@ struct static_lloyd_case {
         std::vector<SampleType> current_centroids = initial_centroids_;
         auto assignments = k_means(samples_, current_centroids, algorithm_iterations_);
 
+        final_inertia_ = compute_static_lloyd_total_inertia_simd(
+            samples_,
+            current_centroids,
+            assignments
+        );
+
         final_centroids_ = std::move(current_centroids);
         final_assignments_ = std::move(assignments);
     }
@@ -76,6 +82,7 @@ struct static_lloyd_case {
     void keep_alive() const {
         ankerl::nanobench::doNotOptimizeAway(final_centroids_.data());
         ankerl::nanobench::doNotOptimizeAway(final_assignments_.data());
+        ankerl::nanobench::doNotOptimizeAway(final_inertia_);
     }
 
     void write_outputs() const {
@@ -126,5 +133,6 @@ private:
 
     std::vector<SampleType> final_centroids_;
     kumi_kmeans_backend<SampleType>::assignment_vector final_assignments_;
+    double final_inertia_ = 0.0;
     int algorithm_iterations_ = 0;
 };

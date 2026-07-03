@@ -87,6 +87,12 @@ struct dynamic_lloyd_case {
             algorithm_iterations_
         );
 
+        final_inertia_ = compute_dynamic_lloyd_total_inertia_simd<D>(
+            samples_storage_.view(),
+            current_centroids,
+            assignments
+        );
+
         final_centroids_ = std::move(current_centroids);
         final_assignments_ = std::move(assignments);
     }
@@ -96,6 +102,7 @@ struct dynamic_lloyd_case {
         ankerl::nanobench::doNotOptimizeAway(final_centroids_.row_major.size());
         ankerl::nanobench::doNotOptimizeAway(final_assignments_.data());
         ankerl::nanobench::doNotOptimizeAway(final_assignments_.size());
+        ankerl::nanobench::doNotOptimizeAway(final_inertia_);
     }
 
     void write_outputs() const {
@@ -156,5 +163,6 @@ private:
 
     centroids_storage<D> final_centroids_;
     aligned_int_vector final_assignments_;
+    double final_inertia_ = 0.0;
     int algorithm_iterations_ = 0;
 };

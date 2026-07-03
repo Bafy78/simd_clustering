@@ -6,6 +6,7 @@ from benchmark_pipeline.gmm_covariance import SUPPORTED_GMM_COVARIANCE_TYPES
 
 threadpool_limits = None
 GaussianMixture = None
+FitOnlyGaussianMixture = None
 np = None
 json = None
 
@@ -17,14 +18,134 @@ GMM_DEFAULT_N_INIT = 1
 
 
 def import_runtime_deps():
-    global threadpool_limits, GaussianMixture, np
+    global threadpool_limits, GaussianMixture, FitOnlyGaussianMixture, np
+
+    import warnings as _warnings
 
     import numpy as _np
+    import sklearn as _sklearn
+    from sklearn.base import _fit_context
+    from sklearn.exceptions import ConvergenceWarning
     from sklearn.mixture import GaussianMixture as _GaussianMixture
+    from sklearn.utils import check_random_state
+    from sklearn.utils._array_api import get_namespace
+    from sklearn.utils.validation import validate_data
     from threadpoolctl import threadpool_limits as _threadpool_limits
+
+    if _sklearn.__version__ != "1.8.0":
+        raise RuntimeError(
+            "FitOnlyGaussianMixture copies sklearn.mixture.BaseMixture.fit_predict "
+            "control flow and is only audited for scikit-learn==1.8.0."
+        )
+
+    class _FitOnlyGaussianMixture(_GaussianMixture):
+        @_fit_context(prefer_skip_nested_validation=True)
+        def fit(self, X, y=None):
+            """
+            scikit-learn 1.8.0 GaussianMixture.fit_predict(), copied for benchmarking,
+            except that the final fit_predict-only E-step + argmax tail is removed.
+
+            This keeps:
+              - sklearn input validation
+              - parameter validation
+              - initialization
+              - EM loop ordering
+              - convergence warning behavior
+              - final parameter/state assignment
+
+            This removes:
+              - final _e_step(X)
+              - argmax(log_resp)
+            """
+            xp, _ = get_namespace(X)
+            X = validate_data(
+                self,
+                X,
+                dtype=[xp.float64, xp.float32],
+                ensure_min_samples=2,
+            )
+
+            if X.shape[0] < self.n_components:
+                raise ValueError(
+                    "Expected n_samples >= n_components "
+                    f"but got n_components = {self.n_components}, "
+                    f"n_samples = {X.shape[0]}"
+                )
+
+            self._check_parameters(X, xp=xp)
+
+            # Same warm_start / n_init handling as sklearn 1.8.0.
+            do_init = not (self.warm_start and hasattr(self, "converged_"))
+            n_init = self.n_init if do_init else 1
+
+            max_lower_bound = -xp.inf
+            best_lower_bounds = []
+            self.converged_ = False
+
+            random_state = check_random_state(self.random_state)
+
+            for init in range(n_init):
+                self._print_verbose_msg_init_beg(init)
+
+                if do_init:
+                    self._initialize_parameters(X, random_state, xp=xp)
+
+                lower_bound = -xp.inf if do_init else self.lower_bound_
+                current_lower_bounds = []
+
+                if self.max_iter == 0:
+                    best_params = self._get_parameters()
+                    best_n_iter = 0
+                else:
+                    converged = False
+
+                    for n_iter in range(1, self.max_iter + 1):
+                        prev_lower_bound = lower_bound
+
+                        log_prob_norm, log_resp = self._e_step(X, xp=xp)
+                        self._m_step(X, log_resp, xp=xp)
+                        lower_bound = self._compute_lower_bound(
+                            log_resp,
+                            log_prob_norm,
+                        )
+                        current_lower_bounds.append(lower_bound)
+
+                        change = lower_bound - prev_lower_bound
+                        self._print_verbose_msg_iter_end(n_iter, change)
+
+                        if abs(change) < self.tol:
+                            converged = True
+                            break
+
+                    self._print_verbose_msg_init_end(lower_bound, converged)
+
+                    if lower_bound > max_lower_bound or max_lower_bound == -xp.inf:
+                        max_lower_bound = lower_bound
+                        best_params = self._get_parameters()
+                        best_n_iter = n_iter
+                        best_lower_bounds = current_lower_bounds
+                        self.converged_ = converged
+
+            if not self.converged_ and self.max_iter > 0:
+                _warnings.warn(
+                    (
+                        "Best performing initialization did not converge. "
+                        "Try different init parameters, or increase max_iter, "
+                        "tol, or check for degenerate data."
+                    ),
+                    ConvergenceWarning,
+                )
+
+            self._set_parameters(best_params, xp=xp)
+            self.n_iter_ = best_n_iter
+            self.lower_bound_ = max_lower_bound
+            self.lower_bounds_ = best_lower_bounds
+
+            return self
 
     np = _np
     GaussianMixture = _GaussianMixture
+    FitOnlyGaussianMixture = _FitOnlyGaussianMixture
     threadpool_limits = _threadpool_limits
 
 
@@ -75,7 +196,7 @@ def load_gmm_precisions(args):
 
 
 def run_gmm_fit(X, K, covariance_type, weights, means, precisions):
-    gmm = GaussianMixture(
+    gmm = FitOnlyGaussianMixture(
         n_components=K,
         covariance_type=covariance_type,
         tol=GMM_DEFAULT_TOL,
