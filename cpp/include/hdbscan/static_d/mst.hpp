@@ -49,11 +49,14 @@ inline mst_step_result reduce_min_index_wide(hdbscan_wide distances, hdbscan_wid
     return mst_step_result{best_index, best_distance};
 }
 
-inline mst_step_result update_mst_candidates_and_select_next(
+__attribute__((always_inline)) inline mst_step_result update_mst_candidates_and_select_next(
     const double* current_row,
     std::span<double> best_distance,
+    std::span<std::uint8_t> selected_count_per_packet,
+    std::size_t& full_packet_count,
     std::size_t current,
-    std::size_t N
+    std::size_t N,
+    bool enable_packet_skip_time_gate
 ) {
     constexpr std::size_t card = hdbscan_wide::size();
     constexpr double selected_sentinel = -1.0;
@@ -64,39 +67,85 @@ inline mst_step_result update_mst_candidates_and_select_next(
     // compact active-state sentinel and avoids a separate attached[] stream.
     best_distance[current] = selected_sentinel;
 
+    const std::size_t packet_count = selected_count_per_packet.size();
+    const std::size_t current_packet = current / card;
+    ++selected_count_per_packet[current_packet];
+
+    // Only enable packet skipping once there are enough actually-full
+    // packets to justify paying the packet-count branch in the row scan.
+    const std::size_t tail_lanes = N % card;
+    const std::size_t current_packet_capacity =
+        (current_packet + 1 == packet_count && tail_lanes != 0)
+            ? tail_lanes
+            : card;
+
+    if (selected_count_per_packet[current_packet] == current_packet_capacity) {
+        ++full_packet_count;
+    }
+
+    const bool enable_packet_skip =
+        enable_packet_skip_time_gate
+        && (full_packet_count * 32 > packet_count);
+
     const hdbscan_wide_i lane_offsets = mst_lane_offsets();
+    double* const best_ptr = best_distance.data();
     hdbscan_wide vector_min_distances(infinity);
     hdbscan_wide_i vector_min_indices(0);
 
     auto process_block = [&](std::size_t j, auto ignore) {
         const auto candidates = eve::load[ignore](current_row + j);
-        const auto previous_best = eve::load[ignore](best_distance.data() + j);
+        const auto previous_best = eve::load[ignore](best_ptr  + j);
 
         const auto active = ignore.mask(eve::as<hdbscan_wide>()) && (previous_best >= hdbscan_wide_zero);
-        const auto updated_best = eve::if_else(
-            active && (candidates < previous_best),
-            candidates,
-            previous_best
-        );
-        eve::store[ignore](updated_best, best_distance.data() + j);
+        const auto updated_best = eve::min(candidates, previous_best);
+        eve::store[ignore](updated_best, best_ptr  + j);
 
         const auto selectable_distance = eve::if_else(active, updated_best, hdbscan_wide(infinity));
-        const hdbscan_wide_i candidate_indices = hdbscan_wide_i(static_cast<int>(j)) + lane_offsets;
-        const auto better = selectable_distance < vector_min_distances;
 
-        vector_min_distances = eve::if_else(better, selectable_distance, vector_min_distances);
-        vector_min_indices = eve::if_else(better, candidate_indices, vector_min_indices);
+        const auto better = selectable_distance < vector_min_distances;
+        if (eve::any(better)) {
+            const hdbscan_wide_i candidate_indices = hdbscan_wide_i(static_cast<int>(j)) + lane_offsets;
+            vector_min_distances = eve::if_else(better, selectable_distance, vector_min_distances);
+            vector_min_indices = eve::if_else(better, candidate_indices, vector_min_indices);
+        }
     };
 
+    auto process_packet_if_live = [&](std::size_t packet, std::size_t offset) {
+        if (!enable_packet_skip || selected_count_per_packet[packet] != card) {
+            process_block(offset, eve::ignore_none);
+        }
+    };
+
+    std::size_t packet_index = 0;
     std::size_t j = 0;
-    for (; j + card <= N; j += card) {
-        process_block(j, eve::ignore_none);
+
+    // Unroll-4 over full SIMD packets
+    for (; j + 4 * card <= N; j += 4 * card, packet_index += 4) {
+        process_packet_if_live(packet_index + 0, j + 0 * card);
+        process_packet_if_live(packet_index + 1, j + 1 * card);
+        process_packet_if_live(packet_index + 2, j + 2 * card);
+        process_packet_if_live(packet_index + 3, j + 3 * card);
     }
 
+    // Remaining unroll-2 chunk, if any
+    for (; j + 2 * card <= N; j += 2 * card, packet_index += 2) {
+        process_packet_if_live(packet_index + 0, j + 0 * card);
+        process_packet_if_live(packet_index + 1, j + 1 * card);
+    }
+
+    // Remaining full packet, if any
+    for (; j + card <= N; j += card, ++packet_index) {
+        process_packet_if_live(packet_index, j);
+    }
+
+    // Tail packet
     if (j < N) {
         const std::size_t valid_lanes = N - j;
-        const std::size_t ignored_lanes = card - valid_lanes;
-        process_block(j, eve::ignore_last(ignored_lanes));
+
+        if (!enable_packet_skip || selected_count_per_packet[packet_index] != valid_lanes) {
+            const std::size_t ignored_lanes = card - valid_lanes;
+            process_block(j, eve::ignore_last(ignored_lanes));
+        }
     }
 
     return reduce_min_index_wide(vector_min_distances, vector_min_indices);
@@ -121,6 +170,10 @@ inline void minimum_spanning_tree_edges(
         N,
         std::numeric_limits<double>::infinity()
     );
+    constexpr std::size_t card = hdbscan_wide::size();
+    const std::size_t packet_count = (N + card - 1) / card;
+    std::vector<std::uint8_t> selected_count_per_packet(packet_count, 0);
+    std::size_t full_packet_count = 0;
 
     // Match scikit-learn's dense private mst_from_mutual_reachability behavior:
     // the emitted endpoints are the previous selected vertex and the newly selected
@@ -129,11 +182,16 @@ inline void minimum_spanning_tree_edges(
     // the actual parent edge in the complete mutual-reachability graph.
     std::size_t current = 0;
     for (std::size_t edge_index = 0; edge_index + 1 < N; ++edge_index) {
+        const bool enable_packet_skip_time_gate = (edge_index + 1) > N / 4;
+
         const mst_step_result next_step = update_mst_candidates_and_select_next(
             mutual_reachability.data() + current * N,
             std::span<double>(best_distance.data(), best_distance.size()),
+            std::span<std::uint8_t>(selected_count_per_packet.data(), selected_count_per_packet.size()),
+            full_packet_count,
             current,
-            N
+            N,
+            enable_packet_skip_time_gate
         );
 
         if (!std::isfinite(next_step.distance)) {
