@@ -7,12 +7,13 @@ are identified by these three coordinates, together with the algorithm phase, st
 
 ## 🧩 Main supported algorithmic phases
 
-The project exposes four major phases:
+The project exposes five major phases:
 
 1. **SoA conversion**
 2. **K-Means++ initialization**
 3. **Lloyd / K-Means iterations**
 4. **GMM EM**
+5. **HDBSCAN**
 
 Each phase has a different level of support across C++, Python, metrics, parity checks, and reporting.
 
@@ -22,6 +23,7 @@ Each phase has a different level of support across C++, Python, metrics, parity 
 | K-Means++       |           ✅ |              ✅ | Timing only |                      ❌ | Timing summaries |
 | Lloyd / K-Means |           ✅ |              ✅ |         ✅ |                       ✅ |              ✅ |
 | GMM EM          |           ✅ |              ✅ |         ✅ |                       ✅ |              ✅ |
+| HDBSCAN         |           ✅ |              ✅ |         ✅ |                       ✅ |              ✅ |
 
 The pipeline is modular: phases can be enabled or disabled depending on what is currently being studied. The project should therefore be understood as a collection of reusable benchmark steps rather than a single permanently fixed experiment script.
 
@@ -62,7 +64,7 @@ The registry maps C++ benchmark case names, or `cpp_case` values, such as:
 to compile instructions, benchmark case headers, case types, mode-specific build options, and the semantic keys needed by artifact naming:
 
 * `phase_key`, such as `lloyd` or `gmm`;
-* `stage_key`, currently `full` for the existing phases;
+* `stage_key`, usually `full`; HDBSCAN also uses staged keys for `distance`, `mst`, `linkage`,... ;
 * `variant_key`, such as `static`, `dynamic`, or `auto`;
 * `primary_input_artifact_key`, which identifies which logical setup artifact is passed to the case;
 * GMM covariance support for cases that do not implement every covariance type.
@@ -82,7 +84,7 @@ Lifecycle:
    * `tasks.py` derives the task graph from the explicit config fields. To add or remove work, change the selected C++ cases and Python phase booleans in the config
 
 2. **Dataset generation:** [`python/benchmark_pipeline/tools/dataset_gen.py`](../python/benchmark_pipeline/tools/dataset_gen.py).
-   * Generate input data and initialization artifacts shared by C++ and Python. It is currently using `make_blobs` and K-Means++ initial centers. GMM initialization is generated only when at least one GMM task is enabled: weights and means are shared across covariance types, while precision files are generated only for the requested covariance types.
+   * Materialize each configured input dataset and initialization artifacts shared by C++ and Python. The dataset step supports synthetic `make_blobs` inputs plus configured real dataset sources such as local/URL dense arrays, OpenML, UCI, or Hugging Face. K-Means++ initial centers are generated after materialization. GMM initialization is generated only when at least one GMM task is enabled: weights and means are shared across covariance types, while precision files are generated only for the requested covariance types.
 
 3. **C++ compilation**
    * Compile the required benchmark binaries for the selected cases and dimensions. As the pipeline is running the dimensions as the main loop, compilation is done once per dimension.

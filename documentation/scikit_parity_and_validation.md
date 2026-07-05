@@ -2,7 +2,7 @@
 
 This document describes what the project means by scikit-learn parity, which artifacts are compared, how C++ benchmark outputs are validated, and how to interpret parity failures.
 
-The short version is that scikit-learn is used as the behavioral reference for the Python side of the benchmark, but parity is not treated as a proof of mathematical optimality. It is an implementation-level check that the C++ kernels and the scikit-learn calls are solving the same configured problem from the same input artifacts and producing sufficiently close metrics.
+The short version is that scikit-learn is used as the behavioral reference for the Python side of the benchmark, but parity is not treated as a proof of mathematical optimality. It is an implementation-level check that the C++ implementations and the scikit-learn calls are solving the same configured problem from the same input artifacts and producing sufficiently close metrics.
 
 ## ✔️ Validation layers
 
@@ -24,17 +24,18 @@ The separation is intentional. Repeatability failures usually indicate nondeterm
 Not every benchmark phase has a scikit-learn parity check.
 
 | Phase           | scikit-learn reference | Metrics artifact | C++ repeat validation | C++/scikit-learn parity |
-| --------------- | ---------------------- | ---------------- | --------------------- | ----------------- |
-| SoA conversion  | ❌                    | ❌               | ❌                   | ❌                |
-| K-Means++       | ✅                    | ❌               | ❌                   | ❌                |
-| Lloyd / K-Means | ✅                    | ✅               | ✅                   | ✅                |
-| GMM EM          | ✅                    | ✅               | ✅                   | ✅                |
+| --------------- | ---------------------- | ---------------- | --------------------- | ----------------------- |
+| SoA conversion  | ❌                    | ❌               | ❌                   | ❌                      |
+| K-Means++       | ✅                    | ❌               | ❌                   | ❌                      |
+| Lloyd / K-Means | ✅                    | ✅               | ✅                   | ✅                      |
+| GMM EM          | ✅                    | ✅               | ✅                   | ✅                      |
+| HDBSCAN         | ✅                    | ✅               | ✅                   | ✅                      |
 
 SoA conversion is a C++ layout-preparation phase, not a scikit-learn algorithm phase.
 
 K-Means++ has C++ and Python timing support, but it currently does not emit a metrics artifact and does not participate in parity checks. This is especially important because the measured K-Means++ phase is stochastic today: the Python benchmark calls `sklearn.cluster.kmeans_plusplus` without `random_state`, while the C++ path uses a seed from `std::random_device`.
 
-Lloyd and GMM are the parity-bearing phases. They emit metrics files for both C++ and Python, and postprocessing compares those metrics with explicit thresholds.
+Lloyd, GMM, and HDBSCAN are the parity-bearing phases. Lloyd and GMM compare final algorithm metrics. HDBSCAN also compares metrics for staged outputs. They emit metrics files for both C++ and Python, and postprocessing compares those metrics with explicit thresholds.
 
 ## 🎯 Lloyd / K-Means parity
 
@@ -62,7 +63,7 @@ Postprocessing currently checks GMM parity with the thresholds in `GMM_PARITY_TH
 | `covariances_max_rel_diff`     | `1e-2`    | Maximum relative difference across materialized covariances.        |
 
 
-The covariance check uses relative error because covariance values can vary by scale. Weights and means use absolute error because their expected magnitudes are easier to interpret directly in this synthetic setup.
+The covariance check uses relative error because covariance values can vary by scale. Weights and means use absolute error because their expected magnitudes are easier to interpret directly.
 
 
 ### Full-covariance GMM and scikit-learn's centered covariance update
@@ -96,13 +97,34 @@ This means full-covariance parity should be interpreted carefully:
 
 I didn't bother including a diagnostic script here, but basically if you change the code to always run the fallback (setting `covariance_needs_stable_recompute[k] = 1` all the time), you will see that we lose about **half the performance** (each EM iteration is basically ran twice) but almost all the covariance parity pressure disappears.
 
+
 ## 🌲 HDBSCAN stage parity
 
 HDBSCAN uses a double-precision stage contract in this benchmark. The HDBSCAN references used for comparison are double-based at some places: scikit-learn and scikit-learn-contrib use double-precision MST data in their dense HDBSCAN paths, and ASL-hdbscan is implemented around `double` data and edge weights. Using `double` in our HDBSCAN path avoids comparing a `float32` specialization against double-precision references, or doing some upcasting and downcasting during between stages.
 
+The implemented Python reference keys are `sklearn_brute`, the primary reference, and `hdbscan_contrib`.
+
+The wrappers intentionally normalize a few reference differences before parity is computed:
+
+* the contrib internal `min_samples` convention is mapped to the project/scikit-learn convention;
+* contrib MST edge endpoint conventions are normalized to the staged C++ artifact convention;
+* MST/linkage tie ordering is canonicalized, because we can't really reproduce the tie behavior of `np.argsort`.
+
+HDBSCAN parity is staged. The supported stages are:
+
+* `distance`
+* `mreach`
+* `mst`
+* `linkage`
+* `select`
+* `full`
+
+For distance-like stages, parity compares compact numeric summaries of the flattened stage output, plus relevant structural checks such as zero diagonal and symmetry. For MST and linkage, parity compares compact summaries of the flattened edge/tree arrays. For `select` and `full`, parity compares label and probability summaries, plus noise count and cluster count.\
+This validates more than only final flat labels, because intermediate HDBSCAN stages participate in parity. But the current parity checks do not compare a full condensed-tree object, cluster stability scores, or a rich hierarchy representation beyond the single-linkage stage summary and the downstream label/probability outputs.
+
 ## ⏱️ C++ timing-process metrics validation
 
-C++ benchmark tasks are run once per configured timing process. Each process writes its own temporary timing JSON. For Lloyd and GMM, each process also writes its own temporary metrics file.
+C++ benchmark tasks are run once per configured timing process. Each process writes its own temporary timing JSON. For Lloyd, GMM, and HDBSCAN, each process also writes its own temporary metrics file.
 
 Before the final C++ metrics file is written, [`validate_cpp_timing_process_metrics(...)`](../python/benchmark_pipeline/metrics.py) compares the temporary metrics files.
 
@@ -116,14 +138,20 @@ For Lloyd, the repeated C++ metrics must agree on:
 
 For GMM, the repeated C++ metrics must agree on:
 
-* `phase`
-* `covariance_type`
 * `algorithm_iterations`
 * `lower_bound`
 * `lower_bounds`
 * `weights`
 * `means`
 * `covariances`
+
+For HDBSCAN, the repeated C++ metrics must agree on:
+
+* output `shape`
+* `min_samples`
+* diagonal and symmetry diagnostics when present
+* compact output summary counts and hash
+* compact scalar summaries and probe values
 
 Scalar and array comparisons use a tight internal helper, `assert_close(...)`, with default tolerances `rel_tol=1e-10` and `abs_tol=1e-8`. Some structural fields, such as cluster counts, iteration counts, phase names, and covariance type names, must match exactly.
 
@@ -135,14 +163,14 @@ The postprocessing entrypoint is [`python/postprocess_benchmarks.py`](../python/
 
 It performs four high-level steps:
 
-1. load Lloyd and GMM metrics artifacts;
+1. load algorithms metrics artifacts;
 2. load raw timing records from benchmark JSON files;
 3. build summary statistics, speedups, and parity records;
 4. write `benchmark_summary.json`.
 
 The postprocessor only computes parity for configurations that have the required C++ and Python metrics files. Missing metrics are treated as incomplete data, not as a successful comparison.
 
-Parity is computed per stage, C++ variant, and algorithm parameterization. For example, `lloyd_full_metrics_static_cpp_...json` and `lloyd_full_metrics_dynamic_cpp_...json` are both compared against the same `lloyd_full_metrics_reference_py_...json` scikit-learn reference.
+Parity is computed per phase, stage, C++ variant, reference, and algorithm parameterization. For example, `lloyd_full_metrics_static_cpp_...json` and `lloyd_full_metrics_dynamic_cpp_...json` are both compared against the same `lloyd_full_metrics_reference_py_...json` scikit-learn reference.
 
 In the final summary, each parity-bearing phase/stage entry gets a `parity` block containing:
 
@@ -156,7 +184,7 @@ This is deliberate. The summary should be self-describing enough that plots and 
 
 ## 🚨 How to interpret failures
 
-A parity failure does not automatically mean that the C++ kernel is wrong, but it does mean the corresponding benchmark result should not be treated as a clean scikit-learn-equivalent phase/stage speed comparison without further investigation.
+A parity failure does not automatically mean that the C++ implementation is wrong, but it does mean the corresponding benchmark result should not be treated as a clean scikit-learn-equivalent phase/stage speed comparison without further investigation.
 
 When a parity check fails, the first things to inspect are the raw metrics files, not the timing summary. The metrics files contain the actual algorithm outputs used to decide the parity status.
 
@@ -166,7 +194,7 @@ The project includes [`python/explain_gmm_diag_scikit_parity.py`](../python/expl
 
 This tool is meant to explain differences between the C++ diagonal GMM path and scikit-learn's diagonal covariance behavior. It can generate comparable data and initialization artifacts, run diagnostic C++ entry points, compare traces and score calculations, and inspect fixed-responsibility M-step behavior.
 
-After running it, it generates [a markdown file](../diagnostics_results/gmm_diag_scikit_parity_explainer/gmm_diag_scikit_parity_explanation.md) that argues if the specific tested config's difference with scikit-learn can be explained by one of its tested explanations. The main thing is that, in low-D high-N, the covariances diff with scikit-learn is generally huge, way past thresholds. But when rerunning the alg with a BLAS call in the M step, this difference disappears. And algebraically, our kernel is doing the same. So the difference in this case is very likely reduction semantics, that we won't be trying to match.
+After running it, it generates [a markdown file](../diagnostics_results/gmm_diag_scikit_parity_explainer/gmm_diag_scikit_parity_explanation.md) that argues if the specific tested config's difference with scikit-learn can be explained by one of its tested explanations. The main thing is that, in low-D high-N, the covariances diff with scikit-learn is generally huge, way past thresholds. But when rerunning the alg with a BLAS call in the M step, this difference disappears. And algebraically, our implementation is doing the same. So the difference in this case is very likely reduction semantics, that we won't be trying to match.
 
 ## 🚧 Non-goals and limits
 
@@ -176,4 +204,5 @@ The parity system has several limits:
 * It does not validate against every scikit-learn version or every platform.
 * It does not currently check K-Means++ output parity because I couldn't bother implementing it: it's not a priority.
 
-The thresholds are also part of the experimental contract. Changing them changes the meaning of a PASS result, so threshold changes should be documented with the benchmark results that use them.
+The thresholds are also part of the experimental contract. Changing them changes the meaning of a PASS result, so threshold changes should be documented with the benchmark results that use them. \
+The full limitations list/scope of this project is described in [🔭 Scope and non-goals](./limitations_and_future_work.md#-scope-and-non-goals)

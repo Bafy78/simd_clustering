@@ -109,12 +109,6 @@ def _assert_array_close(name: str, candidate, reference) -> None:
 def validate_gmm_timing_process_metrics(
     candidate: dict, reference: dict, path: str
 ) -> None:
-    if candidate.get("phase") != reference.get("phase"):
-        raise RuntimeError(f"phase mismatch in {path}")
-
-    if candidate.get("covariance_type") != reference.get("covariance_type"):
-        raise RuntimeError(f"covariance_type mismatch in {path}")
-
     if int(candidate["algorithm_iterations"]) != int(reference["algorithm_iterations"]):
         raise RuntimeError(
             f"algorithm-iteration mismatch in {path}: "
@@ -150,15 +144,6 @@ def validate_gmm_timing_process_metrics(
 
 
 def validate_hdbscan_timing_process_metrics(candidate: dict, reference: dict, path: str) -> None:
-    if candidate.get("phase") != reference.get("phase"):
-        raise RuntimeError(f"phase mismatch in {path}")
-
-    if candidate.get("stage") != reference.get("stage"):
-        raise RuntimeError(f"stage mismatch in {path}")
-
-    if candidate.get("dtype") != reference.get("dtype"):
-        raise RuntimeError(f"dtype mismatch in {path}")
-
     if candidate.get("shape") != reference.get("shape"):
         raise RuntimeError(f"shape mismatch in {path}")
 

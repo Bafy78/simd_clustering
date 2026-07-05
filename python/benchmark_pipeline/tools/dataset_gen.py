@@ -328,12 +328,31 @@ def _download_url(url: str, downloads_dir: str | Path, dataset: str) -> Path:
 
 
 def _load_blob_dataset(N: int, D: int, K: int) -> np.ndarray:
+    """Return the center-box half-width used for synthetic blob generation.
+
+    The scaling reduces the default make_blobs artifact where random center
+    distances grow with sqrt(D), while higher K makes centers denser in a
+    fixed box. The reference point D=10, K=10 preserves the old B=10 scale.
+    """
+    reference_D = 10
+    reference_K = 10
+    reference_B = 10.0
+
+    B = (
+        reference_B
+        * np.sqrt(reference_D / D)
+        * (K / reference_K) ** (1.0 / D)
+    )
+
     X, _, *_ = make_blobs(
         n_samples=N,
         n_features=D,
         centers=K,
+        cluster_std=1.0,
+        center_box=(-B, B),
         random_state=42,
     )
+
     return X
 
 

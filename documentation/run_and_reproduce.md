@@ -46,6 +46,8 @@ The requirements file covers the Python benchmark runners, dataset generation, p
 
 The sweep is controlled by `default_config()` in [`python/benchmark_pipeline/config.py`](../python/benchmark_pipeline/config.py).
 
+Synthetic sweeps are specified by `test_Ds`, `test_Ns`, and `test_Ks`; configured real-dataset cases live in `real_datasets` with explicit dataset keys, shapes, and source metadata.
+
 Use `exclusion_rules` when a D/N/K point should not be run for one or more phases or stages. Each rule is a `BenchmarkExclusionRule` with a user-facing `reason`; `phase_keys` and `stage_keys` can narrow the skip. The orchestrator writes the resolved skips to `datasets/benchmark_exclusions.json`, and postprocessing carries those messages into `benchmark_summary.json`.
 
 Cachegrind is controlled by `run_cachegrind`, `cachegrind_I1`, `cachegrind_D1`, `cachegrind_LL`, and `cachegrind_exclusion_rules`. Cachegrind-specific exclusions skip only profiling runs; they do not remove the normal timing tasks.
@@ -58,7 +60,7 @@ The runner executes the phases described in [Main supported algorithmic phases](
 python python/benchmark_orchestrator.py
 ```
 
-The orchestrator prepares the datasets directory, compiles the required C++ cases for each configured dimension, then executes the configured task graph for each `(D, N, K)` combination. When `run_cachegrind` is enabled, it also compiles the Callgrind entry points for each needed C++ case/dimension and runs one Cachegrind pass for each non-excluded `D/N/K × phase × stage × C++ case × parameterization` target.
+The orchestrator prepares the datasets directory, compiles the required C++ cases for each configured dimension, then executes the configured task graph for each configured dataset/`(D, N, K)` case. When `run_cachegrind` is enabled, it also compiles the Callgrind entry points for each needed C++ case/dimension and runs one Cachegrind pass for each non-excluded `dataset/D/N/K × phase × stage × C++ case × parameterization` target.
 
 Raw timing and metrics files are written under `datasets/`. Temporary binary input files are created during each configuration run and removed by the normal orchestrator. Running the orchestrator deletes the existing datasets directory before starting.
 
@@ -167,7 +169,7 @@ Place EVE and nanobench in the expected sibling directories or update the includ
 
 ### Postprocessing produces no parity records
 
-Postprocessing computes Lloyd and GMM parity only for configurations that have the required C++ and Python metrics files. See [Validation layers](scikit_parity_and_validation.md#validation-layers) and [How to interpret failures](scikit_parity_and_validation.md#how-to-interpret-failures) before treating a missing or failed parity record as a timing result.
+Postprocessing computes stage parity only for configurations that have the required C++ and Python metrics files. See [Validation layers](scikit_parity_and_validation.md#validation-layers) and [How to interpret failures](scikit_parity_and_validation.md#how-to-interpret-failures) before treating a missing or failed parity record as a timing result.
 
 ### Timings are unstable across runs or machines
 

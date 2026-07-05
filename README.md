@@ -1,6 +1,6 @@
 # ⚡ Clustering SIMD Benchmarks
 
-**C++20 SIMD implementations of clustering kernels benchmarked against scikit-learn references.**
+**C++20 SIMD implementations of clustering algorithms benchmarked against scikit-learn references.**
 
 This repository compares SIMD-oriented C++ clustering implementations using EVE against Python/scikit-learn baselines, with shared datasets, reproducible initialization, parity checks, and notebook-driven reporting.
 
@@ -13,6 +13,7 @@ The project currently covers:
 - (Greedy) K-Means++
 - Lloyd / K-Means
 - GMM EM
+- HDBSCAN
 
 The benchmark coordinates used throughout the repository are `D` for dimensions, `N` for samples, and `K` for clusters or mixture components.
 
