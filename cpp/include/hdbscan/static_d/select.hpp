@@ -5,13 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <map>
-#include <numeric>
-#include <queue>
 #include <span>
 #include <stdexcept>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "linkage.hpp"
@@ -28,83 +23,170 @@ struct condensed_tree_row {
     std::int32_t cluster_size;
 };
 
-struct tree_union_find_for_select {
-    std::vector<std::int32_t> parent;
-    std::vector<std::int32_t> rank;
+struct cluster_record {
+    double stability = 0.0;
+    double death = 0.0;
+    double birth = std::numeric_limits<double>::quiet_NaN();
+    double propagated_score = 0.0;
 
-    explicit tree_union_find_for_select(std::size_t n)
-        : parent(n), rank(n, 0) {
-        for (std::size_t i = 0; i < n; ++i) {
-            parent[i] = static_cast<std::int32_t>(i);
-        }
-    }
+    std::int32_t first_child = -1;
+    std::int32_t second_child = -1;
 
-    std::int32_t find(std::int32_t node) {
-        std::int32_t root = node;
-        while (parent[static_cast<std::size_t>(root)] != root) {
-            root = parent[static_cast<std::size_t>(root)];
-        }
-
-        while (parent[static_cast<std::size_t>(node)] != node) {
-            const std::int32_t next = parent[static_cast<std::size_t>(node)];
-            parent[static_cast<std::size_t>(node)] = root;
-            node = next;
-        }
-
-        return root;
-    }
-
-    void unite(std::int32_t left, std::int32_t right) {
-        std::int32_t left_root = find(left);
-        std::int32_t right_root = find(right);
-        if (left_root == right_root) {
-            return;
-        }
-
-        auto left_index = static_cast<std::size_t>(left_root);
-        auto right_index = static_cast<std::size_t>(right_root);
-        if (rank[left_index] < rank[right_index]) {
-            parent[left_index] = right_root;
-        } else if (rank[left_index] > rank[right_index]) {
-            parent[right_index] = left_root;
-        } else {
-            parent[right_index] = left_root;
-            ++rank[left_index];
-        }
-    }
+    std::int32_t owner = -1;
+    std::int32_t label = -1;
+    unsigned char keep_self = 0;
+    unsigned char selected = 0;
 };
 
-inline std::vector<std::int32_t> bfs_from_hierarchy(
-    std::span<const single_linkage_row> hierarchy,
-    std::int32_t bfs_root
+struct condensation_result {
+    // Only sample fall-out rows are stored here. Cluster-to-cluster structure
+    // and EOM state are carried by cluster_records.
+    std::vector<condensed_tree_row> rows;
+    std::vector<cluster_record> clusters;
+    std::int32_t smallest_cluster = 0;
+    std::int32_t largest_parent = 0;
+    std::int32_t max_node = 0;
+};
+
+inline void ensure_cluster_records_size(
+    condensation_result& result,
+    std::int32_t node
 ) {
-    const std::int32_t n_samples = static_cast<std::int32_t>(hierarchy.size() + 1);
-    std::vector<std::int32_t> result;
-    std::vector<std::int32_t> queue{bfs_root};
-
-    while (!queue.empty()) {
-        result.insert(result.end(), queue.begin(), queue.end());
-
-        std::vector<std::int32_t> next_queue;
-        for (const std::int32_t node : queue) {
-            if (node < n_samples) {
-                continue;
-            }
-            const std::int32_t row_index = node - n_samples;
-            if (row_index < 0 || static_cast<std::size_t>(row_index) >= hierarchy.size()) {
-                throw std::runtime_error("HDBSCAN select stage hierarchy node is out of range");
-            }
-            const single_linkage_row& row = hierarchy[static_cast<std::size_t>(row_index)];
-            next_queue.push_back(row.left_node);
-            next_queue.push_back(row.right_node);
-        }
-        queue = std::move(next_queue);
+    if (node < 0) {
+        return;
     }
 
-    return result;
+    const std::size_t needed = static_cast<std::size_t>(node + 1);
+    if (result.clusters.size() < needed) {
+        result.clusters.resize(needed);
+    }
 }
 
-inline std::vector<condensed_tree_row> condense_tree(
+inline void update_parent_condensation_metadata(
+    condensation_result& result,
+    std::int32_t parent,
+    std::int32_t child,
+    double lambda_value,
+    std::int32_t cluster_size
+) {
+    result.smallest_cluster = std::min(result.smallest_cluster, parent);
+    result.largest_parent = std::max(result.largest_parent, parent);
+    result.max_node = std::max(result.max_node, parent);
+    result.max_node = std::max(result.max_node, child);
+
+    ensure_cluster_records_size(result, std::max(parent, child));
+
+    cluster_record& parent_record = result.clusters[static_cast<std::size_t>(parent)];
+    parent_record.death = std::max(parent_record.death, lambda_value);
+    parent_record.stability +=
+        (lambda_value - parent_record.birth) * static_cast<double>(cluster_size);
+}
+
+inline void emit_point_condensed_tree_row(
+    condensation_result& result,
+    std::int32_t parent,
+    std::int32_t child,
+    double lambda_value
+) {
+    result.rows.push_back(condensed_tree_row{parent, child, lambda_value, 1});
+    update_parent_condensation_metadata(result, parent, child, lambda_value, 1);
+}
+
+inline void attach_cluster_child(
+    condensation_result& result,
+    std::int32_t parent,
+    std::int32_t child
+) {
+    ensure_cluster_records_size(result, std::max(parent, child));
+
+    cluster_record& parent_record = result.clusters[static_cast<std::size_t>(parent)];
+    if (parent_record.first_child < 0) {
+        parent_record.first_child = child;
+    } else if (parent_record.second_child < 0) {
+        parent_record.second_child = child;
+    } else {
+        throw std::runtime_error("HDBSCAN select binary cluster tree received more than two children");
+    }
+}
+
+inline void emit_cluster_tree_edge(
+    condensation_result& result,
+    std::int32_t parent,
+    std::int32_t child,
+    double lambda_value,
+    std::int32_t cluster_size
+) {
+    attach_cluster_child(result, parent, child);
+    update_parent_condensation_metadata(result, parent, child, lambda_value, cluster_size);
+
+    if (cluster_size > 1 && child >= 0) {
+        ensure_cluster_records_size(result, child);
+        result.clusters[static_cast<std::size_t>(child)].birth = lambda_value;
+    }
+}
+
+inline std::int32_t hierarchy_node_cluster_size(
+    std::span<const single_linkage_row> hierarchy,
+    std::int32_t node,
+    std::int32_t n_samples
+) {
+    if (node < n_samples) {
+        return 1;
+    }
+
+    const std::int32_t row_index = node - n_samples;
+    if (row_index < 0 || static_cast<std::size_t>(row_index) >= hierarchy.size()) {
+        throw std::runtime_error("HDBSCAN select stage hierarchy node is out of range");
+    }
+
+    return hierarchy[static_cast<std::size_t>(row_index)].cluster_size;
+}
+
+inline void emit_subtree_sample_leaves_bfs(
+    std::span<const single_linkage_row> hierarchy,
+    std::int32_t subtree_root,
+    std::int32_t n_samples,
+    std::int32_t parent_label,
+    double lambda_value,
+    condensation_result& result,
+    std::vector<std::int32_t>& queue
+) {
+    if (subtree_root < n_samples) {
+        emit_point_condensed_tree_row(result, parent_label, subtree_root, lambda_value);
+        return;
+    }
+
+    queue.clear();
+    queue.push_back(subtree_root);
+
+    for (std::size_t cursor = 0; cursor < queue.size(); ++cursor) {
+        const std::int32_t node = queue[cursor];
+        if (node < n_samples) {
+            emit_point_condensed_tree_row(result, parent_label, node, lambda_value);
+            continue;
+        }
+
+        const std::int32_t row_index = node - n_samples;
+        if (row_index < 0 || static_cast<std::size_t>(row_index) >= hierarchy.size()) {
+            throw std::runtime_error("HDBSCAN select stage hierarchy node is out of range while emitting leaves");
+        }
+
+        const single_linkage_row& row = hierarchy[static_cast<std::size_t>(row_index)];
+        if (row.left_node < n_samples) {
+            emit_point_condensed_tree_row(result, parent_label, row.left_node, lambda_value);
+        } else {
+            queue.push_back(row.left_node);
+        }
+
+        if (row.right_node < n_samples) {
+            emit_point_condensed_tree_row(result, parent_label, row.right_node, lambda_value);
+        } else {
+            queue.push_back(row.right_node);
+        }
+    }
+}
+
+inline condensation_result condense_tree(
     std::span<const single_linkage_row> hierarchy,
     std::size_t min_cluster_size
 ) {
@@ -116,19 +198,34 @@ inline std::vector<condensed_tree_row> condense_tree(
     const std::int32_t root = static_cast<std::int32_t>(2 * hierarchy.size());
     std::int32_t next_label = n_samples + 1;
 
-    const std::vector<std::int32_t> node_list = bfs_from_hierarchy(hierarchy, root);
     std::vector<std::int32_t> relabel(static_cast<std::size_t>(root + 1), 0);
-    std::vector<unsigned char> ignore(static_cast<std::size_t>(root + 1), 0);
     relabel[static_cast<std::size_t>(root)] = n_samples;
 
-    std::vector<condensed_tree_row> result;
-    result.reserve(hierarchy.size() + n_samples);
+    condensation_result result;
+    result.rows.reserve(n_samples);
+    result.smallest_cluster = n_samples;
+    result.largest_parent = n_samples;
+    result.max_node = n_samples;
+    result.clusters.resize(static_cast<std::size_t>(root + 1));
+    result.clusters[static_cast<std::size_t>(n_samples)].birth = 0.0;
 
-    for (const std::int32_t node : node_list) {
+    std::vector<std::int32_t> active_queue;
+    active_queue.reserve(hierarchy.size());
+    active_queue.push_back(root);
+
+    std::vector<std::int32_t> leaf_queue;
+    const std::size_t leaf_queue_reserve = std::min<std::size_t>(
+        n_samples,
+        min_cluster_size > 0 ? (2 * min_cluster_size + 2) : 2
+    );
+    leaf_queue.reserve(leaf_queue_reserve);
+
+    for (std::size_t active_cursor = 0; active_cursor < active_queue.size(); ++active_cursor) {
+        const std::int32_t node = active_queue[active_cursor];
         if (node < 0 || node > root) {
             throw std::runtime_error("HDBSCAN select stage node is out of range while condensing");
         }
-        if (ignore[static_cast<std::size_t>(node)] || node < n_samples) {
+        if (node < n_samples) {
             continue;
         }
 
@@ -140,12 +237,8 @@ inline std::vector<condensed_tree_row> condense_tree(
             ? 1.0 / distance
             : std::numeric_limits<double>::infinity();
 
-        const std::int32_t left_count = left >= n_samples
-            ? hierarchy[static_cast<std::size_t>(left - n_samples)].cluster_size
-            : 1;
-        const std::int32_t right_count = right >= n_samples
-            ? hierarchy[static_cast<std::size_t>(right - n_samples)].cluster_size
-            : 1;
+        const std::int32_t left_count = hierarchy_node_cluster_size(hierarchy, left, n_samples);
+        const std::int32_t right_count = hierarchy_node_cluster_size(hierarchy, right, n_samples);
 
         const bool left_large = static_cast<std::size_t>(left_count) >= min_cluster_size;
         const bool right_large = static_cast<std::size_t>(right_count) >= min_cluster_size;
@@ -153,242 +246,208 @@ inline std::vector<condensed_tree_row> condense_tree(
 
         if (left_large && right_large) {
             relabel[static_cast<std::size_t>(left)] = next_label++;
-            result.push_back(condensed_tree_row{
+            emit_cluster_tree_edge(
+                result,
                 parent_label,
                 relabel[static_cast<std::size_t>(left)],
                 lambda_value,
-                left_count,
-            });
+                left_count
+            );
+            if (left >= n_samples) {
+                active_queue.push_back(left);
+            }
 
             relabel[static_cast<std::size_t>(right)] = next_label++;
-            result.push_back(condensed_tree_row{
+            emit_cluster_tree_edge(
+                result,
                 parent_label,
                 relabel[static_cast<std::size_t>(right)],
                 lambda_value,
-                right_count,
-            });
+                right_count
+            );
+            if (right >= n_samples) {
+                active_queue.push_back(right);
+            }
         } else if (!left_large && !right_large) {
-            for (const std::int32_t sub_node : bfs_from_hierarchy(hierarchy, left)) {
-                if (sub_node < n_samples) {
-                    result.push_back(condensed_tree_row{parent_label, sub_node, lambda_value, 1});
-                }
-                if (sub_node >= 0 && sub_node <= root) {
-                    ignore[static_cast<std::size_t>(sub_node)] = 1;
-                }
-            }
-
-            for (const std::int32_t sub_node : bfs_from_hierarchy(hierarchy, right)) {
-                if (sub_node < n_samples) {
-                    result.push_back(condensed_tree_row{parent_label, sub_node, lambda_value, 1});
-                }
-                if (sub_node >= 0 && sub_node <= root) {
-                    ignore[static_cast<std::size_t>(sub_node)] = 1;
-                }
-            }
+            emit_subtree_sample_leaves_bfs(
+                hierarchy,
+                left,
+                n_samples,
+                parent_label,
+                lambda_value,
+                result,
+                leaf_queue
+            );
+            emit_subtree_sample_leaves_bfs(
+                hierarchy,
+                right,
+                n_samples,
+                parent_label,
+                lambda_value,
+                result,
+                leaf_queue
+            );
         } else if (!left_large) {
             relabel[static_cast<std::size_t>(right)] = parent_label;
-            for (const std::int32_t sub_node : bfs_from_hierarchy(hierarchy, left)) {
-                if (sub_node < n_samples) {
-                    result.push_back(condensed_tree_row{parent_label, sub_node, lambda_value, 1});
-                }
-                if (sub_node >= 0 && sub_node <= root) {
-                    ignore[static_cast<std::size_t>(sub_node)] = 1;
-                }
+            if (right >= n_samples) {
+                active_queue.push_back(right);
             }
+            emit_subtree_sample_leaves_bfs(
+                hierarchy,
+                left,
+                n_samples,
+                parent_label,
+                lambda_value,
+                result,
+                leaf_queue
+            );
         } else {
             relabel[static_cast<std::size_t>(left)] = parent_label;
-            for (const std::int32_t sub_node : bfs_from_hierarchy(hierarchy, right)) {
-                if (sub_node < n_samples) {
-                    result.push_back(condensed_tree_row{parent_label, sub_node, lambda_value, 1});
-                }
-                if (sub_node >= 0 && sub_node <= root) {
-                    ignore[static_cast<std::size_t>(sub_node)] = 1;
-                }
+            if (left >= n_samples) {
+                active_queue.push_back(left);
             }
+            emit_subtree_sample_leaves_bfs(
+                hierarchy,
+                right,
+                n_samples,
+                parent_label,
+                lambda_value,
+                result,
+                leaf_queue
+            );
         }
     }
 
     return result;
 }
 
-inline std::vector<double> compute_stability(
-    std::span<const condensed_tree_row> condensed_tree,
-    std::int32_t& smallest_cluster_out
+inline double cluster_children_propagated_score(
+    const std::vector<cluster_record>& clusters,
+    std::int32_t node
 ) {
-    if (condensed_tree.empty()) {
-        smallest_cluster_out = 0;
-        return {};
+    if (node < 0 || static_cast<std::size_t>(node) >= clusters.size()) {
+        return 0.0;
     }
 
-    std::int32_t largest_child = condensed_tree.front().child;
-    std::int32_t smallest_cluster = condensed_tree.front().parent;
-    std::int32_t largest_parent = condensed_tree.front().parent;
-    for (const condensed_tree_row& row : condensed_tree) {
-        largest_child = std::max(largest_child, row.child);
-        smallest_cluster = std::min(smallest_cluster, row.parent);
-        largest_parent = std::max(largest_parent, row.parent);
+    const cluster_record& record = clusters[static_cast<std::size_t>(node)];
+    double score = 0.0;
+
+    const std::int32_t first = record.first_child;
+    if (first >= 0 && static_cast<std::size_t>(first) < clusters.size()) {
+        score += clusters[static_cast<std::size_t>(first)].propagated_score;
     }
 
-    largest_child = std::max(largest_child, smallest_cluster);
-    std::vector<double> births(
-        static_cast<std::size_t>(largest_child + 1),
-        std::numeric_limits<double>::quiet_NaN()
+    const std::int32_t second = record.second_child;
+    if (second >= 0 && static_cast<std::size_t>(second) < clusters.size()) {
+        score += clusters[static_cast<std::size_t>(second)].propagated_score;
+    }
+
+    return score;
+}
+
+inline void eom_select_cluster_records(
+    std::vector<cluster_record>& clusters,
+    std::int32_t smallest_cluster,
+    std::int32_t largest_parent,
+    std::int32_t max_node
+) {
+    if (max_node < 0 || largest_parent <= smallest_cluster) {
+        return;
+    }
+
+    const std::int32_t bounded_largest_parent = std::min<std::int32_t>(
+        largest_parent,
+        static_cast<std::int32_t>(clusters.size()) - 1
     );
-    for (const condensed_tree_row& row : condensed_tree) {
-        births[static_cast<std::size_t>(row.child)] = row.lambda_value;
-    }
-    births[static_cast<std::size_t>(smallest_cluster)] = 0.0;
 
-    std::vector<double> stability(static_cast<std::size_t>(largest_parent + 1), 0.0);
-    for (const condensed_tree_row& row : condensed_tree) {
-        const double birth = births[static_cast<std::size_t>(row.parent)];
-        stability[static_cast<std::size_t>(row.parent)] +=
-            (row.lambda_value - birth) * static_cast<double>(row.cluster_size);
-    }
+    for (std::int32_t node = bounded_largest_parent; node > smallest_cluster; --node) {
+        cluster_record& record = clusters[static_cast<std::size_t>(node)];
+        const double child_score = cluster_children_propagated_score(clusters, node);
 
-    smallest_cluster_out = smallest_cluster;
-    return stability;
-}
-
-inline std::vector<condensed_tree_row> cluster_tree_rows(
-    std::span<const condensed_tree_row> condensed_tree
-) {
-    std::vector<condensed_tree_row> cluster_tree;
-    for (const condensed_tree_row& row : condensed_tree) {
-        if (row.cluster_size > 1) {
-            cluster_tree.push_back(row);
-        }
-    }
-    return cluster_tree;
-}
-
-inline std::vector<std::int32_t> bfs_from_cluster_tree(
-    std::span<const condensed_tree_row> cluster_tree,
-    std::int32_t bfs_root
-) {
-    std::vector<std::int32_t> result;
-    std::vector<std::int32_t> queue{bfs_root};
-
-    while (!queue.empty()) {
-        result.insert(result.end(), queue.begin(), queue.end());
-
-        std::vector<std::int32_t> next_queue;
-        for (const std::int32_t parent : queue) {
-            for (const condensed_tree_row& row : cluster_tree) {
-                if (row.parent == parent) {
-                    next_queue.push_back(row.child);
-                }
-            }
-        }
-        queue = std::move(next_queue);
-    }
-
-    return result;
-}
-
-inline std::vector<double> max_lambdas(
-    std::span<const condensed_tree_row> condensed_tree
-) {
-    if (condensed_tree.empty()) {
-        return {};
-    }
-
-    std::int32_t largest_parent = condensed_tree.front().parent;
-    for (const condensed_tree_row& row : condensed_tree) {
-        largest_parent = std::max(largest_parent, row.parent);
-    }
-
-    std::vector<double> deaths(static_cast<std::size_t>(largest_parent + 1), 0.0);
-    std::int32_t current_parent = condensed_tree.front().parent;
-    double max_lambda = condensed_tree.front().lambda_value;
-
-    for (std::size_t idx = 1; idx < condensed_tree.size(); ++idx) {
-        const condensed_tree_row& row = condensed_tree[idx];
-        if (row.parent == current_parent) {
-            max_lambda = std::max(max_lambda, row.lambda_value);
+        if (child_score > record.stability) {
+            record.propagated_score = child_score;
+            record.keep_self = 0;
         } else {
-            deaths[static_cast<std::size_t>(current_parent)] = max_lambda;
-            current_parent = row.parent;
-            max_lambda = row.lambda_value;
+            record.propagated_score = record.stability;
+            record.keep_self = 1;
         }
     }
-    deaths[static_cast<std::size_t>(current_parent)] = max_lambda;
-    return deaths;
+
+    std::int32_t next_label = 0;
+    const std::int32_t bounded_max_node = std::min<std::int32_t>(
+        max_node,
+        static_cast<std::int32_t>(clusters.size()) - 1
+    );
+
+    for (std::int32_t node = smallest_cluster; node <= bounded_max_node; ++node) {
+        cluster_record& record = clusters[static_cast<std::size_t>(node)];
+        const std::int32_t inherited_owner = record.owner;
+        const bool selected = node > smallest_cluster
+            && record.keep_self != 0
+            && inherited_owner < 0;
+
+        if (selected) {
+            record.selected = 1;
+            record.owner = node;
+            record.label = next_label++;
+        }
+
+        const std::int32_t owner_for_children = selected
+            ? node
+            : inherited_owner;
+
+        const std::int32_t first = record.first_child;
+        if (first >= 0 && static_cast<std::size_t>(first) < clusters.size()) {
+            clusters[static_cast<std::size_t>(first)].owner = owner_for_children;
+        }
+
+        const std::int32_t second = record.second_child;
+        if (second >= 0 && static_cast<std::size_t>(second) < clusters.size()) {
+            clusters[static_cast<std::size_t>(second)].owner = owner_for_children;
+        }
+    }
 }
 
-inline hdbscan_selection_result labels_and_probabilities_from_condensed_tree(
-    std::span<const condensed_tree_row> condensed_tree,
-    std::span<const condensed_tree_row> cluster_tree,
-    const std::unordered_set<std::int32_t>& clusters,
-    const std::map<std::int32_t, std::int32_t>& cluster_label_map,
+inline hdbscan_selection_result labels_and_probabilities_from_sample_rows(
+    std::span<const condensed_tree_row> sample_rows,
+    const std::vector<cluster_record>& clusters,
     std::size_t n_samples
 ) {
     hdbscan_selection_result result;
     result.labels.assign(n_samples, -1);
     result.probabilities.assign(n_samples, 0.0);
 
-    if (condensed_tree.empty()) {
-        return result;
-    }
-
-    std::int32_t root_cluster = condensed_tree.front().parent;
-    std::int32_t max_node = 0;
-    for (const condensed_tree_row& row : condensed_tree) {
-        root_cluster = std::min(root_cluster, row.parent);
-        max_node = std::max(max_node, row.parent);
-        max_node = std::max(max_node, row.child);
-    }
-
-    tree_union_find_for_select union_find(static_cast<std::size_t>(max_node + 1));
-    for (const condensed_tree_row& row : condensed_tree) {
-        if (clusters.find(row.child) == clusters.end()) {
-            union_find.unite(row.parent, row.child);
-        }
-    }
-
-    for (std::size_t sample = 0; sample < n_samples; ++sample) {
-        const std::int32_t cluster = union_find.find(static_cast<std::int32_t>(sample));
-        std::int32_t label = -1;
-        if (cluster != root_cluster) {
-            const auto it = cluster_label_map.find(cluster);
-            if (it != cluster_label_map.end()) {
-                label = it->second;
-            }
-        }
-        result.labels[sample] = label;
-    }
-
-    std::map<std::int32_t, std::int32_t> reverse_cluster_map;
-    for (const auto& [cluster, label] : cluster_label_map) {
-        reverse_cluster_map[label] = cluster;
-    }
-
-    const std::vector<double> deaths = max_lambdas(condensed_tree);
-    for (const condensed_tree_row& row : condensed_tree) {
-        const std::int32_t point = row.child;
-        if (point >= root_cluster || point < 0 || static_cast<std::size_t>(point) >= n_samples) {
+    for (const condensed_tree_row& row : sample_rows) {
+        if (row.parent < 0 || static_cast<std::size_t>(row.parent) >= clusters.size()) {
             continue;
         }
 
-        const std::int32_t cluster_num = result.labels[static_cast<std::size_t>(point)];
-        if (cluster_num == -1) {
+        const cluster_record& parent_record = clusters[static_cast<std::size_t>(row.parent)];
+        const std::int32_t owner = parent_record.owner;
+        if (owner < 0 || static_cast<std::size_t>(owner) >= clusters.size()) {
             continue;
         }
 
-        const auto reverse_it = reverse_cluster_map.find(cluster_num);
-        if (reverse_it == reverse_cluster_map.end()) {
+        const cluster_record& owner_record = clusters[static_cast<std::size_t>(owner)];
+        const std::int32_t label = owner_record.label;
+        if (label < 0) {
             continue;
         }
-        const std::int32_t cluster = reverse_it->second;
-        const double max_lambda = cluster >= 0 && static_cast<std::size_t>(cluster) < deaths.size()
-            ? deaths[static_cast<std::size_t>(cluster)]
-            : 0.0;
 
+        const std::int32_t child = row.child;
+        if (child < 0 || static_cast<std::size_t>(child) >= n_samples) {
+            continue;
+        }
+
+        const std::size_t point_idx = static_cast<std::size_t>(child);
+        result.labels[point_idx] = label;
+
+        const double max_lambda = owner_record.death;
         if (max_lambda == 0.0 || std::isinf(row.lambda_value)) {
-            result.probabilities[static_cast<std::size_t>(point)] = 1.0;
+            result.probabilities[point_idx] = 1.0;
         } else {
             const double lambda_value = std::min(row.lambda_value, max_lambda);
-            result.probabilities[static_cast<std::size_t>(point)] = lambda_value / max_lambda;
+            result.probabilities[point_idx] = lambda_value / max_lambda;
         }
     }
 
@@ -408,76 +467,24 @@ inline hdbscan_selection_result select_clusters_from_single_linkage_tree(
         return empty_result;
     }
 
-    std::vector<condensed_tree_row> condensed_tree = condense_tree(
+    condensation_result condensed = condense_tree(
         single_linkage_tree,
         min_cluster_size
     );
-    if (condensed_tree.empty()) {
+    if (condensed.rows.empty()) {
         return empty_result;
     }
 
-    std::int32_t smallest_cluster = 0;
-    std::vector<double> stability = compute_stability(condensed_tree, smallest_cluster);
-    std::vector<condensed_tree_row> cluster_tree = cluster_tree_rows(condensed_tree);
-
-    std::int32_t largest_parent = condensed_tree.front().parent;
-    for (const condensed_tree_row& row : condensed_tree) {
-        largest_parent = std::max(largest_parent, row.parent);
-    }
-
-    // EOM only, allow_single_cluster=False: process all stability keys except
-    // the root cluster, descending by cluster id.
-    std::map<std::int32_t, bool> is_cluster;
-    for (std::int32_t node = largest_parent; node > smallest_cluster; --node) {
-        is_cluster[node] = true;
-    }
-
-    for (auto it = is_cluster.rbegin(); it != is_cluster.rend(); ++it) {
-        const std::int32_t node = it->first;
-        double subtree_stability = 0.0;
-        for (const condensed_tree_row& row : cluster_tree) {
-            if (row.parent == node && row.child >= 0
-                && static_cast<std::size_t>(row.child) < stability.size()) {
-                subtree_stability += stability[static_cast<std::size_t>(row.child)];
-            }
-        }
-
-        if (subtree_stability > stability[static_cast<std::size_t>(node)]) {
-            it->second = false;
-            stability[static_cast<std::size_t>(node)] = subtree_stability;
-        } else {
-            for (const std::int32_t sub_node : bfs_from_cluster_tree(cluster_tree, node)) {
-                if (sub_node != node) {
-                    const auto sub_it = is_cluster.find(sub_node);
-                    if (sub_it != is_cluster.end()) {
-                        sub_it->second = false;
-                    }
-                }
-            }
-        }
-    }
-
-    std::vector<std::int32_t> selected_clusters_sorted;
-    for (const auto& [cluster, selected] : is_cluster) {
-        if (selected) {
-            selected_clusters_sorted.push_back(cluster);
-        }
-    }
-
-    std::unordered_set<std::int32_t> selected_clusters(
-        selected_clusters_sorted.begin(),
-        selected_clusters_sorted.end()
+    eom_select_cluster_records(
+        condensed.clusters,
+        condensed.smallest_cluster,
+        condensed.largest_parent,
+        condensed.max_node
     );
-    std::map<std::int32_t, std::int32_t> cluster_label_map;
-    for (std::size_t idx = 0; idx < selected_clusters_sorted.size(); ++idx) {
-        cluster_label_map[selected_clusters_sorted[idx]] = static_cast<std::int32_t>(idx);
-    }
 
-    return labels_and_probabilities_from_condensed_tree(
-        condensed_tree,
-        cluster_tree,
-        selected_clusters,
-        cluster_label_map,
+    return labels_and_probabilities_from_sample_rows(
+        condensed.rows,
+        condensed.clusters,
         n_samples
     );
 }
