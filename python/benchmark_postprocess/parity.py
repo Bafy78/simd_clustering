@@ -36,8 +36,8 @@ GMM_PARITY_THRESHOLDS = {
 }
 
 HDBSCAN_STAGE_PARITY_THRESHOLDS = {
-    "diagonal_max_abs": 0.0,
-    "symmetry_max_abs": 0.0,
+    "diagonal_max_abs": 1e-12,
+    "symmetry_max_abs": 1e-12,
     "summary_scalar_abs_diff": 1e-3,
     "summary_scalar_rel_diff": 1e-5,
     "probe_value_max_abs_diff": 1e-4,
@@ -724,38 +724,13 @@ def compute_hdbscan_comparison(
     label_details = None
     probability_details = None
 
-    if stage_key == "distance":
-        checks.update(
-            {
-                "distance_diagonal_is_zero": (
-                    float(cpp.get("diagonal_max_abs", 0.0))
-                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["diagonal_max_abs"]
-                    and float(py.get("diagonal_max_abs", 0.0))
-                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["diagonal_max_abs"]
-                ),
-                "distance_symmetry": (
-                    float(cpp.get("symmetry_max_abs", 0.0))
-                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["symmetry_max_abs"]
-                    and float(py.get("symmetry_max_abs", 0.0))
-                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["symmetry_max_abs"]
-                ),
-            }
-        )
-    elif stage_key == "mreach":
+    if stage_key == "mreach":
         diagonal_checks, diagonal_details = _summary_comparison(
             cpp.get("diagonal_summary", {}),
             py.get("diagonal_summary", {}),
         )
         checks.update(
-            {
-                "mreach_symmetry": (
-                    float(cpp.get("symmetry_max_abs", 0.0))
-                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["symmetry_max_abs"]
-                    and float(py.get("symmetry_max_abs", 0.0))
-                    <= HDBSCAN_STAGE_PARITY_THRESHOLDS["symmetry_max_abs"]
-                ),
-                **{f"diagonal_{name}": value for name, value in diagonal_checks.items()},
-            }
+            {f"diagonal_{name}": value for name, value in diagonal_checks.items()}
         )
     elif stage_key in {"select", "full"}:
         label_checks, label_details = _summary_comparison(

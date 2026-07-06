@@ -139,8 +139,8 @@ struct static_hdbscan_case {
                 N_,
                 mst_edges_
             );
-            single_linkage_tree_from_mst_edges(
-                std::span<const mst_edge>(mst_edges_.data(), mst_edges_.size()),
+            single_linkage_tree_from_mst_edges_inplace(
+                std::span<mst_edge>(mst_edges_.data(), mst_edges_.size()),
                 N_,
                 single_linkage_tree_
             );
