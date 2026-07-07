@@ -124,6 +124,29 @@ def _matrix64(values: ArrayLike) -> NDArray[np.float64]:
 
 
 
+
+
+def _distance_output_to_matrix_and_core(
+    values: object,
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
+    if hasattr(values, "distance_matrix") and hasattr(values, "core_distances"):
+        matrix = _matrix64(getattr(values, "distance_matrix"))
+        core = np.ascontiguousarray(getattr(values, "core_distances"), dtype=np.float64)
+    elif isinstance(values, tuple) and len(values) == 2:
+        matrix = _matrix64(values[0])
+        core = np.ascontiguousarray(values[1], dtype=np.float64)
+    else:
+        matrix = _matrix64(values)
+        core = None
+
+    if core is not None and core.shape != (matrix.shape[0],):
+        raise ValueError(
+            "Expected one HDBSCAN core distance per distance-matrix row, "
+            f"got core shape {core.shape} for matrix shape {matrix.shape}"
+        )
+    return matrix, core
+
+
 def _mst_edges_to_flat_float64(values: ArrayLike) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     edges = np.asarray(values)
 
@@ -297,9 +320,8 @@ def hdbscan_stage_metrics_payload(
             "probability_summary": _float64_summary(probabilities),
         }
 
-    matrix = _matrix64(values)
-
     if stage == "distance":
+        matrix, core_distances = _distance_output_to_matrix_and_core(values)
         payload = _base_payload(
             stage=stage,
             matrix=matrix,
@@ -307,16 +329,9 @@ def hdbscan_stage_metrics_payload(
             language=language,
         )
         payload["diagonal_max_abs"] = float(np.abs(np.diag(matrix)).max(initial=0.0))
-        return payload
-
-    if stage == "mreach":
-        payload = _base_payload(
-            stage=stage,
-            matrix=matrix,
-            min_samples=min_samples,
-            language=language,
-        )
-        payload["diagonal_summary"] = _float64_summary(np.diag(matrix))
+        if core_distances is not None:
+            payload["core_distance_shape"] = [int(core_distances.size)]
+            payload["core_distance_summary"] = _float64_summary(core_distances)
         return payload
 
     raise ValueError(f"Unsupported HDBSCAN metrics stage {stage!r}")

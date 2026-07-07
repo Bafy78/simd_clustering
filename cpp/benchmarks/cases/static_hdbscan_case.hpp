@@ -26,40 +26,62 @@ struct static_hdbscan_case {
 
     static std::string nanobench_usage(const char* program) {
         return std::string("Usage: ") + program
-            + " <stage> <input_bin> <N> <min_samples> <metrics_json_out>"
+            + " <stage> <input_bin...> <N> <min_samples> <metrics_json_out>"
               " <nanobench_json_out> <bench_epochs> <min_epoch_seconds>";
     }
 
     static std::string callgrind_usage(const char* program) {
         return std::string("Usage: ") + program
-            + " <stage> <input_bin> <N> <min_samples> <metrics_json_out>";
+            + " <stage> <input_bin...> <N> <min_samples> <metrics_json_out>";
     }
 
-    static static_hdbscan_case make_for_nanobench(int, char* argv[]) {
+    static static_hdbscan_case make_for_nanobench(int argc, char* argv[]) {
+        const int tail_argc = 6;
+        if (argc < 2 + 1 + tail_argc) {
+            throw std::invalid_argument("static_hdbscan_case nanobench invocation is missing input artifacts");
+        }
+
+        std::vector<std::string> input_bins;
+        input_bins.reserve(static_cast<std::size_t>(argc - 2 - tail_argc));
+        for (int i = 2; i < argc - tail_argc; ++i) {
+            input_bins.emplace_back(argv[i]);
+        }
+
         static_hdbscan_case out{
             argv[1],
-            argv[2],
-            static_cast<std::size_t>(std::stoull(argv[3])),
-            static_cast<std::size_t>(std::stoull(argv[4]))
+            input_bins,
+            static_cast<std::size_t>(std::stoull(argv[argc - 6])),
+            static_cast<std::size_t>(std::stoull(argv[argc - 5]))
         };
 
-        out.metrics_json_out_ = argv[5];
-        out.nanobench_json_out_ = argv[6];
-        out.bench_epochs_ = static_cast<std::size_t>(std::stoull(argv[7]));
-        out.min_epoch_seconds_ = std::stod(argv[8]);
+        out.metrics_json_out_ = argv[argc - 4];
+        out.nanobench_json_out_ = argv[argc - 3];
+        out.bench_epochs_ = static_cast<std::size_t>(std::stoull(argv[argc - 2]));
+        out.min_epoch_seconds_ = std::stod(argv[argc - 1]);
 
         return out;
     }
 
-    static static_hdbscan_case make_for_callgrind(int, char* argv[]) {
+    static static_hdbscan_case make_for_callgrind(int argc, char* argv[]) {
+        const int tail_argc = 3;
+        if (argc < 2 + 1 + tail_argc) {
+            throw std::invalid_argument("static_hdbscan_case callgrind invocation is missing input artifacts");
+        }
+
+        std::vector<std::string> input_bins;
+        input_bins.reserve(static_cast<std::size_t>(argc - 2 - tail_argc));
+        for (int i = 2; i < argc - tail_argc; ++i) {
+            input_bins.emplace_back(argv[i]);
+        }
+
         static_hdbscan_case out{
             argv[1],
-            argv[2],
-            static_cast<std::size_t>(std::stoull(argv[3])),
-            static_cast<std::size_t>(std::stoull(argv[4]))
+            input_bins,
+            static_cast<std::size_t>(std::stoull(argv[argc - 3])),
+            static_cast<std::size_t>(std::stoull(argv[argc - 2]))
         };
 
-        out.metrics_json_out_ = argv[5];
+        out.metrics_json_out_ = argv[argc - 1];
         return out;
     }
 
@@ -77,22 +99,10 @@ struct static_hdbscan_case {
 
     void run_once() {
         if (stage_ == "distance") {
-            euclidean_distance_matrix<D>(
+            squared_euclidean_distance_matrix_and_core_distances<D>(
                 samples_,
-                distance_matrix_
-            );
-            return;
-        }
-
-        if (stage_ == "mreach") {
-            std::copy(
-                distance_matrix_input_.begin(),
-                distance_matrix_input_.end(),
-                mutual_reachability_matrix_.begin()
-            );
-            mutual_reachability_matrix_inplace(
-                std::span<double>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
-                N_,
+                distance_matrix_,
+                core_distances_,
                 min_samples_
             );
             return;
@@ -100,7 +110,8 @@ struct static_hdbscan_case {
 
         if (stage_ == "mst") {
             minimum_spanning_tree_edges(
-                std::span<const double>(mutual_reachability_matrix_input_.data(), mutual_reachability_matrix_input_.size()),
+                std::span<const double>(distance_matrix_input_.data(), distance_matrix_input_.size()),
+                std::span<const double>(core_distances_input_.data(), core_distances_input_.size()),
                 N_,
                 mst_edges_
             );
@@ -125,17 +136,15 @@ struct static_hdbscan_case {
         }
 
         if (stage_ == "full") {
-            euclidean_distance_matrix<D>(
+            squared_euclidean_distance_matrix_and_core_distances<D>(
                 samples_,
-                distance_matrix_
-            );
-            mutual_reachability_matrix_inplace(
-                std::span<double>(distance_matrix_.data(), distance_matrix_.size()),
-                N_,
+                distance_matrix_,
+                core_distances_,
                 min_samples_
             );
             minimum_spanning_tree_edges(
                 std::span<const double>(distance_matrix_.data(), distance_matrix_.size()),
+                std::span<const double>(core_distances_.data(), core_distances_.size()),
                 N_,
                 mst_edges_
             );
@@ -143,6 +152,9 @@ struct static_hdbscan_case {
                 std::span<mst_edge>(mst_edges_.data(), mst_edges_.size()),
                 N_,
                 single_linkage_tree_
+            );
+            sqrt_linkage_distances_inplace(
+                std::span<single_linkage_row>(single_linkage_tree_.data(), single_linkage_tree_.size())
             );
             selection_result_ = select_clusters_from_single_linkage_tree(
                 std::span<const single_linkage_row>(single_linkage_tree_.data(), single_linkage_tree_.size()),
@@ -152,7 +164,7 @@ struct static_hdbscan_case {
         }
 
         throw std::invalid_argument(
-            "static_hdbscan_case only implements stages 'distance', 'mreach', 'mst', 'linkage', 'select', and 'full' for now"
+            "static_hdbscan_case only implements stages 'distance', 'mst', 'linkage', 'select', and 'full' for now"
         );
     }
 
@@ -160,9 +172,8 @@ struct static_hdbscan_case {
         if (stage_ == "distance") {
             ankerl::nanobench::doNotOptimizeAway(distance_matrix_.data());
             ankerl::nanobench::doNotOptimizeAway(distance_matrix_.size());
-        } else if (stage_ == "mreach") {
-            ankerl::nanobench::doNotOptimizeAway(mutual_reachability_matrix_.data());
-            ankerl::nanobench::doNotOptimizeAway(mutual_reachability_matrix_.size());
+            ankerl::nanobench::doNotOptimizeAway(core_distances_.data());
+            ankerl::nanobench::doNotOptimizeAway(core_distances_.size());
         } else if (stage_ == "mst") {
             ankerl::nanobench::doNotOptimizeAway(mst_edges_.data());
             ankerl::nanobench::doNotOptimizeAway(mst_edges_.size());
@@ -183,16 +194,7 @@ struct static_hdbscan_case {
             hdbscan_metrics::write_hdbscan_distance_metrics(
                 metrics_json_out_,
                 std::span<const double>(distance_matrix_.data(), distance_matrix_.size()),
-                N_,
-                min_samples_
-            );
-            return;
-        }
-
-        if (stage_ == "mreach") {
-            hdbscan_metrics::write_hdbscan_mreach_metrics(
-                metrics_json_out_,
-                std::span<const double>(mutual_reachability_matrix_.data(), mutual_reachability_matrix_.size()),
+                std::span<const double>(core_distances_.data(), core_distances_.size()),
                 N_,
                 min_samples_
             );
@@ -266,7 +268,7 @@ struct static_hdbscan_case {
 private:
     static_hdbscan_case(
         const std::string& stage,
-        const std::string& input_bin,
+        const std::vector<std::string>& input_bins,
         std::size_t N,
         std::size_t min_samples
     )
@@ -274,25 +276,39 @@ private:
           N_(N),
           min_samples_(min_samples),
           samples_(eve::algo::no_init, (stage == "distance" || stage == "full") ? N : 0) {
-        if (stage_ != "distance" && stage_ != "mreach" && stage_ != "mst" && stage_ != "linkage" && stage_ != "select" && stage_ != "full") {
+        if (stage_ != "distance" && stage_ != "mst" && stage_ != "linkage" && stage_ != "select" && stage_ != "full") {
             throw std::invalid_argument(
-                "static_hdbscan_case only implements stages 'distance', 'mreach', 'mst', 'linkage', 'select', and 'full' for now"
+                "static_hdbscan_case only implements stages 'distance', 'mst', 'linkage', 'select', and 'full' for now"
+            );
+        }
+
+        const std::size_t expected_inputs = expected_input_count_for_stage(stage_);
+        if (input_bins.size() != expected_inputs) {
+            throw std::invalid_argument(
+                "static_hdbscan_case stage '" + stage_ + "' expected "
+                + std::to_string(expected_inputs) + " input artifact(s), got "
+                + std::to_string(input_bins.size())
             );
         }
 
         if (stage_ == "distance" || stage_ == "full") {
-            const auto raw_aos_data = read_aos_f64(input_bin, N_, D);
+            const auto raw_aos_data = read_aos_f64(input_bins[0], N_, D);
             copy_aos_to_hdbscan_samples<D>(raw_aos_data, N_, samples_);
-        } else if (stage_ == "mreach") {
-            distance_matrix_input_ = read_binary_f64(input_bin, N_ * N_);
-            mutual_reachability_matrix_.resize(N_ * N_);
         } else if (stage_ == "mst") {
-            mutual_reachability_matrix_input_ = read_binary_f64(input_bin, N_ * N_);
+            distance_matrix_input_ = read_binary_f64(input_bins[0], N_ * N_);
+            core_distances_input_ = read_binary_f64(input_bins[1], N_);
         } else if (stage_ == "linkage") {
-            mst_edges_input_ = read_mst_edges(input_bin, N_);
+            mst_edges_input_ = read_mst_edges(input_bins[0], N_);
         } else if (stage_ == "select") {
-            single_linkage_tree_input_ = read_single_linkage_tree(input_bin, N_);
+            single_linkage_tree_input_ = read_single_linkage_tree(input_bins[0], N_);
         }
+    }
+
+    static std::size_t expected_input_count_for_stage(const std::string& stage) {
+        if (stage == "mst") {
+            return 2;
+        }
+        return 1;
     }
 
     static std::vector<single_linkage_row> read_single_linkage_tree(
@@ -383,11 +399,11 @@ private:
     std::size_t min_samples_ = 0;
     hdbscan_static_samples_soa_vector<D> samples_;
     std::vector<double> distance_matrix_input_;
-    std::vector<double> mutual_reachability_matrix_input_;
+    std::vector<double> core_distances_input_;
     std::vector<mst_edge> mst_edges_input_;
     std::vector<single_linkage_row> single_linkage_tree_input_;
     std::vector<double, eve::aligned_allocator<double>> distance_matrix_;
-    std::vector<double, eve::aligned_allocator<double>> mutual_reachability_matrix_;
+    std::vector<double, eve::aligned_allocator<double>> core_distances_;
     std::vector<mst_edge> mst_edges_;
     std::vector<single_linkage_row> single_linkage_tree_;
     hdbscan_selection_result selection_result_;

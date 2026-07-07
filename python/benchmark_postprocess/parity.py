@@ -721,16 +721,17 @@ def compute_hdbscan_comparison(
 
     checks = dict(summary_checks)
     diagonal_details = None
+    core_distance_details = None
     label_details = None
     probability_details = None
 
-    if stage_key == "mreach":
-        diagonal_checks, diagonal_details = _summary_comparison(
-            cpp.get("diagonal_summary", {}),
-            py.get("diagonal_summary", {}),
+    if stage_key == "distance":
+        core_distance_checks, core_distance_details = _summary_comparison(
+            cpp.get("core_distance_summary", {}),
+            py.get("core_distance_summary", {}),
         )
         checks.update(
-            {f"diagonal_{name}": value for name, value in diagonal_checks.items()}
+            {f"core_distance_{name}": value for name, value in core_distance_checks.items()}
         )
     elif stage_key in {"select", "full"}:
         label_checks, label_details = _summary_comparison(
@@ -778,10 +779,10 @@ def compute_hdbscan_comparison(
         "cpp_symmetry_max_abs": float(cpp.get("symmetry_max_abs", 0.0)),
         "python_symmetry_max_abs": float(py.get("symmetry_max_abs", 0.0)),
     }
-    if stage_key == "mreach" and diagonal_details is not None:
-        result["diagonal_summary_scalar_diffs"] = diagonal_details["scalar_diffs"]
-        result["diagonal_probe_value_max_abs_diff"] = diagonal_details["probe_value_max_abs_diff"]
-        result["diagonal_hash_equal"] = diagonal_details["hash_equal"]
+    if stage_key == "distance" and core_distance_details is not None:
+        result["core_distance_summary_scalar_diffs"] = core_distance_details["scalar_diffs"]
+        result["core_distance_probe_value_max_abs_diff"] = core_distance_details["probe_value_max_abs_diff"]
+        result["core_distance_hash_equal"] = core_distance_details["hash_equal"]
     if stage_key in {"select", "full"}:
         result["cpp_noise_count"] = int(cpp.get("noise_count", -1))
         result["python_noise_count"] = int(py.get("noise_count", -1))

@@ -4,6 +4,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <span>
 #include <vector>
 
@@ -201,6 +202,12 @@ inline void single_linkage_tree_from_mst_edges_inplace(
             distance_from_sortable_key(edge.distance_key),
             merged_size,
         };
+    }
+}
+
+inline void sqrt_linkage_distances_inplace(std::span<single_linkage_row> tree) {
+    for (single_linkage_row& row : tree) {
+        row.distance = std::sqrt(std::max(row.distance, 0.0));
     }
 }
 

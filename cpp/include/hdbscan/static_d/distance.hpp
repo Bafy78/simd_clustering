@@ -20,7 +20,7 @@
 #include "types.hpp"
 
 template<typename SimdSample, typename ScalarSample>
-hdbscan_wide euclidean_distance_to_sample(
+hdbscan_wide squared_euclidean_distance_to_sample(
     const SimdSample& samples,
     const ScalarSample& reference
 ) {
@@ -35,7 +35,7 @@ hdbscan_wide euclidean_distance_to_sample(
         reference
     );
 
-    return eve::sqrt(eve::max(squared_distance, hdbscan_wide_zero));
+    return eve::max(squared_distance, hdbscan_wide_zero);
 }
 
 template<std::size_t Dim>
@@ -68,7 +68,7 @@ void copy_aos_to_hdbscan_samples(
 }
 
 template<std::size_t Dim>
-void euclidean_distance_matrix(
+void squared_euclidean_distance_matrix(
     const hdbscan_static_samples_soa_vector<Dim>& samples,
     std::vector<double, eve::aligned_allocator<double>>& distances
 ) {
@@ -89,12 +89,12 @@ void euclidean_distance_matrix(
             [&](eve::algo::iterator auto it, eve::relative_conditional_expr auto ignore) {
                 auto [sample_it, out_it] = it;
                 const auto sample = eve::load[ignore](sample_it);
-                const auto distance = euclidean_distance_to_sample(sample, reference);
+                const auto distance = squared_euclidean_distance_to_sample(sample, reference);
                 eve::store[ignore](distance, out_it);
             }
         );
 
-        // Keep the diagonal exactly zero even if sqrt/fma details change later.
+        // Keep the diagonal exactly zero even if fma details change later.
         row_out[row] = 0.0;
     }
 }
@@ -219,7 +219,7 @@ inline void core_distances(
     std::vector<double, eve::aligned_allocator<double>>& core
 ) {
     if (distance_matrix.size() != N * N) {
-        throw std::runtime_error("HDBSCAN core stage expected a dense N x N distance matrix");
+        throw std::runtime_error("HDBSCAN core stage expected a dense N x N squared-distance matrix");
     }
     if (min_samples < 2 || min_samples > N) {
         throw std::runtime_error("HDBSCAN min_samples must be in [2, N]");
@@ -239,37 +239,43 @@ inline void core_distances(
     }
 }
 
-inline void mutual_reachability_matrix_inplace(
-    std::span<double> distance_or_mreach_matrix,
-    std::size_t N,
+template<std::size_t Dim>
+void squared_euclidean_distance_matrix_and_core_distances(
+    const hdbscan_static_samples_soa_vector<Dim>& samples,
+    std::vector<double, eve::aligned_allocator<double>>& distances,
+    std::vector<double, eve::aligned_allocator<double>>& core,
     std::size_t min_samples
 ) {
-    if (distance_or_mreach_matrix.size() != N * N) {
-        throw std::runtime_error("HDBSCAN mreach stage expected a dense N x N distance matrix");
+    const std::size_t N = samples.size();
+    if (min_samples < 2 || min_samples > N) {
+        throw std::runtime_error("HDBSCAN min_samples must be in [2, N]");
     }
 
-    // Compute core distances before overwriting the distance matrix. After this
-    // point the input buffer is deliberately reused as the mutual-reachability
-    // matrix, matching the dense scikit-learn full-pipeline contract.
-    std::vector<double, eve::aligned_allocator<double>> core;
-    core_distances(distance_or_mreach_matrix, N, min_samples, core);
+    const std::size_t matrix_size = N * N;
+    if (distances.size() != matrix_size) {
+        distances.resize(matrix_size);
+    }
+    if (core.size() != N) {
+        core.resize(N);
+    }
 
+    const std::size_t k_zero_based = min_samples - 1;
     for (std::size_t row = 0; row < N; ++row) {
-        const hdbscan_wide core_i(core[row]);
-        double* row_data = distance_or_mreach_matrix.data() + row * N;
+        const auto reference = samples.get(row);
+        auto* row_out = distances.data() + row * N;
+        auto row_out_range = eve::algo::as_range(row_out, row_out + N);
 
-        auto distance_range = eve::algo::as_range(row_data, row_data + N);
-        auto core_range = eve::algo::as_range(core.data(), core.data() + N);
-        auto input_range = eve::views::zip(distance_range, core_range);
-        auto out_range = eve::algo::as_range(row_data, row_data + N);
-
-        eve::algo::transform_to[eve::algo::force_cardinal<hdbscan_cardinal{}()>][eve::algo::no_unrolling](
-            input_range,
-            out_range,
-            [core_i](auto values) {
-                auto [distance, core_j] = values;
-                return eve::max(eve::max(distance, core_i), core_j);
+        eve::algo::transform_to
+        [eve::algo::force_cardinal<hdbscan_cardinal{}()>]
+        [eve::algo::no_unrolling](
+            samples,
+            row_out_range,
+            [reference](const auto& sample) {
+                return squared_euclidean_distance_to_sample(sample, reference);
             }
         );
+
+        row_out[row] = 0.0;
+        core[row] = kth_smallest_value_radix_float64(row_out, N, k_zero_based);
     }
 }

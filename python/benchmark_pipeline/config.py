@@ -109,7 +109,7 @@ def default_config() -> BenchmarkConfig:
             cpp_hdbscan_cases=("hdbscan_static",),
             run_python_hdbscan=True,
             hdbscan_references=("sklearn_brute", "hdbscan_contrib"),
-            hdbscan_stages=("distance", "mreach", "mst", "linkage", "select", "full",),
+            hdbscan_stages=("distance", "mst", "linkage", "select", "full",),
             run_cachegrind=False,
             cachegrind_I1="32768,8,64",
             cachegrind_D1="49152,12,64",
@@ -130,6 +130,14 @@ def default_config() -> BenchmarkConfig:
         ),
         real_datasets=(
             RealDatasetConfig(
+                key="letter",
+                source="openml",
+                data_id=6,
+                D=17,
+                N=20_000,
+                K=26,
+            ),
+            RealDatasetConfig(
                 key="mnist",
                 source="openml",
                 data_id=554,
@@ -143,7 +151,7 @@ def default_config() -> BenchmarkConfig:
                 dataset_id=116,
                 D=68,
                 N=2_458_285,
-                K=10,
+                K=27,
             ),
             RealDatasetConfig(
                 key="sift1m",

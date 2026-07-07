@@ -5,7 +5,6 @@ from benchmark_metadata import (
     FULL_STAGE_KEY,
     HDBSCAN_DISTANCE_STAGE_KEY,
     HDBSCAN_LINKAGE_STAGE_KEY,
-    HDBSCAN_MREACH_STAGE_KEY,
     HDBSCAN_MST_STAGE_KEY,
     HDBSCAN_SELECT_STAGE_KEY,
 )
@@ -151,8 +150,7 @@ CPP_CASES: dict[str, CppCase] = {
         display_name="HDBSCAN static C++",
         stage_keys=(
             HDBSCAN_DISTANCE_STAGE_KEY,
-            HDBSCAN_MREACH_STAGE_KEY,
-            HDBSCAN_MST_STAGE_KEY,
+                    HDBSCAN_MST_STAGE_KEY,
             HDBSCAN_LINKAGE_STAGE_KEY,
             HDBSCAN_SELECT_STAGE_KEY,
             FULL_STAGE_KEY,

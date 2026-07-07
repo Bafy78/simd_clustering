@@ -146,11 +146,15 @@ inline void write_double_vector_summary_json(
 inline void write_hdbscan_distance_metrics(
     const std::string& filename,
     std::span<const double> distance_matrix,
+    std::span<const double> core_distances,
     std::size_t N,
     std::size_t min_samples
 ) {
     if (distance_matrix.size() != N * N) {
         throw std::runtime_error("HDBSCAN distance metrics matrix size does not match N * N");
+    }
+    if (core_distances.size() != N) {
+        throw std::runtime_error("HDBSCAN distance metrics core-distance size does not match N");
     }
 
     double diagonal_max_abs = 0.0;
@@ -184,10 +188,14 @@ inline void write_hdbscan_distance_metrics(
     out << "  \"n_samples\": " << N << ",\n";
     out << "  \"min_samples\": " << min_samples << ",\n";
     out << "  \"shape\": [" << N << ", " << N << "],\n";
+    out << "  \"core_distance_shape\": [" << N << "],\n";
     out << "  \"diagonal_max_abs\": " << diagonal_max_abs << ",\n";
     out << "  \"symmetry_max_abs\": " << symmetry_max_abs << ",\n";
     out << "  \"summary\": {\n";
     write_double_vector_summary_json(out, distance_matrix, "    ");
+    out << "  },\n";
+    out << "  \"core_distance_summary\": {\n";
+    write_double_vector_summary_json(out, core_distances, "    ");
     out << "  }\n";
     out << "}\n";
 }

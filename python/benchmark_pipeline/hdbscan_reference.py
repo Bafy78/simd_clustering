@@ -1,11 +1,11 @@
 """HDBSCAN reference-stage wrappers.
 
-The wrappers in this module intentionally call implementation internals rather
-than reimplementing HDBSCAN stages in Python. The public reference contract is
-float64 at dense stage boundaries: input data, distance matrices, mutual-
-reachability matrices, MST edge weights, linkage distances, and probabilities
-are float64. This matches the dtype contract used by sklearn / hdbscan-contrib
-/ ASL-style HDBSCAN references.
+The wrappers in this module intentionally call implementation internals where
+possible, with small normalization layers around staged HDBSCAN boundaries. The
+dense staged contract keeps squared Euclidean weights through distance, core-
+distance, implicit mutual-reachability MST, and linkage stages. Before
+condensed-tree / selection logic, linkage distances are converted back to true-
+distance scale.
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ from sklearn.cluster._hdbscan.hdbscan import (
     HIERARCHY_dtype,
     MST_edge_dtype,
     _brute_mst,
-    mutual_reachability_graph,
     tree_to_labels,
 )
 from sklearn.cluster._hdbscan._linkage import make_single_linkage
+from sklearn.cluster._hdbscan._reachability import mutual_reachability_graph
 from sklearn.metrics import pairwise_distances
 
 from benchmark_metadata import (
@@ -30,13 +30,18 @@ from benchmark_metadata import (
     HDBSCAN_CONTRIB_REFERENCE,
     HDBSCAN_DISTANCE_STAGE_KEY,
     HDBSCAN_LINKAGE_STAGE_KEY,
-    HDBSCAN_MREACH_STAGE_KEY,
     HDBSCAN_MST_STAGE_KEY,
     HDBSCAN_SELECT_STAGE_KEY,
     HDBSCAN_STAGE_KEYS,
     REFERENCE_KEYS_BY_PHASE,
     SKLEARN_BRUTE_REFERENCE,
 )
+
+
+@dataclass(frozen=True)
+class HdbscanDistanceResult:
+    distance_matrix: NDArray[np.float64]
+    core_distances: NDArray[np.float64]
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,29 @@ def validate_stage_key(stage_key: str) -> str:
     return stage_key  # type: ignore[return-value]
 
 
+def sqrt_single_linkage_tree_distances(single_linkage_tree: ArrayLike) -> NDArray[Any]:
+    """Return a copy whose linkage edge weights are on true-distance scale."""
+    tree = np.asarray(single_linkage_tree)
+    if tree.dtype.names is not None:
+        out = tree.copy()
+        if "value" in out.dtype.names:
+            distance_name = "value"
+        elif "distance" in out.dtype.names:
+            distance_name = "distance"
+        else:
+            raise ValueError("Structured linkage tree has no value/distance field")
+        out[distance_name] = np.sqrt(
+            np.maximum(np.asarray(out[distance_name], dtype=np.float64), 0.0)
+        )
+        return out
+
+    if tree.ndim != 2 or tree.shape[1] < 4:
+        raise ValueError(f"Expected single linkage tree with at least 4 columns, got shape {tree.shape}")
+    out = np.asarray(tree, dtype=np.float64, order="C").copy()
+    out[:, 2] = np.sqrt(np.maximum(out[:, 2], 0.0))
+    return np.ascontiguousarray(out)
+
+
 # ---------------------------------------------------------------------------
 # scikit-learn brute reference
 # ---------------------------------------------------------------------------
@@ -86,10 +114,55 @@ def as_sklearn_brute_input(X: ArrayLike) -> NDArray[np.float64]:
 
 
 def sklearn_brute_distance_matrix(X: ArrayLike) -> NDArray[np.float64]:
-    """distance: X -> dense Euclidean distance matrix."""
+    """distance: X -> dense squared Euclidean distance matrix."""
     X64 = as_sklearn_brute_input(X)
-    distances = pairwise_distances(X64, metric="euclidean", n_jobs=1)
+    distances = pairwise_distances(X64, metric="sqeuclidean", n_jobs=1)
     return np.asarray(distances, dtype=np.float64, order="C")
+
+
+def core_distances_from_squared_distance_matrix(
+    distance_matrix: ArrayLike,
+    *,
+    min_samples: int,
+) -> NDArray[np.float64]:
+    """core: squared-distance matrix -> squared core-distance vector."""
+    distances = np.asarray(distance_matrix, dtype=np.float64, order="C")
+    if distances.ndim != 2 or distances.shape[0] != distances.shape[1]:
+        raise ValueError(f"Expected a square distance matrix, got shape {distances.shape}")
+    validate_min_samples(min_samples, distances.shape[0])
+    k_zero_based = min_samples - 1
+    return np.ascontiguousarray(
+        np.partition(distances, kth=k_zero_based, axis=1)[:, k_zero_based],
+        dtype=np.float64,
+    )
+
+
+def sklearn_brute_core_distances(
+    distance_matrix: ArrayLike,
+    *,
+    min_samples: int,
+) -> NDArray[np.float64]:
+    return core_distances_from_squared_distance_matrix(
+        distance_matrix,
+        min_samples=min_samples,
+    )
+
+
+def sklearn_brute_distance_stage_output(
+    X: ArrayLike,
+    *,
+    min_samples: int,
+) -> HdbscanDistanceResult:
+    """distance: X -> squared distance matrix plus squared core distances."""
+    distance_matrix = sklearn_brute_distance_matrix(X)
+    core_distances = sklearn_brute_core_distances(
+        distance_matrix,
+        min_samples=min_samples,
+    )
+    return HdbscanDistanceResult(
+        distance_matrix=distance_matrix,
+        core_distances=core_distances,
+    )
 
 
 def sklearn_brute_mutual_reachability_matrix(
@@ -97,17 +170,10 @@ def sklearn_brute_mutual_reachability_matrix(
     *,
     min_samples: int,
 ) -> NDArray[np.float64]:
-    """mreach: distance matrix -> mutual reachability matrix.
+    """mreach: squared-distance matrix -> squared mutual reachability matrix.
 
-    This stage includes scikit-learn's internal core-distance computation. The
-    private helper stores those core distances on the diagonal of the returned
-    mutual-reachability matrix.
-
-    scikit-learn's dense helper mutates its input in-place. The isolated stage
-    benchmark treats the prepared distance matrix as a reusable predecessor
-    artifact, so the wrapper copies before calling the helper. The full staged
-    reference uses the same helper in-place because the distance matrix is
-    disposable after mreach.
+    The helper stores squared core distances on the diagonal of the returned
+    mutual-reachability matrix, matching the staged dense C++ contract.
     """
     distances = np.asarray(distance_matrix, dtype=np.float64, order="C").copy()
     return sklearn_brute_mutual_reachability_matrix_inplace(
@@ -121,19 +187,24 @@ def sklearn_brute_mutual_reachability_matrix_inplace(
     *,
     min_samples: int,
 ) -> NDArray[np.float64]:
-    """Overwrite a dense distance matrix with sklearn mutual reachability."""
+    """Overwrite a dense squared-distance matrix with sklearn squared mreach.
+
+    sklearn's reachability kernel is scale-agnostic once the dense distance
+    matrix is supplied: it selects core values with np.partition and applies
+    max(core_i, core_j, distance_ij). Feeding squared distances therefore
+    yields the staged squared mutual-reachability contract directly.
+    """
     if (
         distance_or_mreach_matrix.dtype != np.float64
         or not distance_or_mreach_matrix.flags.c_contiguous
     ):
         raise ValueError(
-            "Expected a C-contiguous float64 distance matrix for in-place mreach"
+            "Expected a C-contiguous float64 squared-distance matrix for in-place mreach"
         )
     validate_min_samples(min_samples, distance_or_mreach_matrix.shape[0])
     result = mutual_reachability_graph(
         distance_or_mreach_matrix,
         min_samples=min_samples,
-        max_distance=0.0,
     )
     return np.asarray(result, dtype=np.float64, order="C")
 
@@ -303,16 +374,17 @@ def sklearn_brute_select_clusters(
 
 def sklearn_brute_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult:
     """full: X -> labels and probabilities via the staged float64 reference."""
-    distance_matrix = sklearn_brute_distance_matrix(X)
-    mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix_inplace(
-        distance_matrix,
+    distance_output = sklearn_brute_distance_stage_output(X, min_samples=min_samples)
+    mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
+        distance_output.distance_matrix,
         min_samples=min_samples,
     )
     mst_edges = sklearn_brute_mst_edges(
         mutual_reachability_matrix,
         min_samples=min_samples,
     )
-    single_linkage_tree = sklearn_brute_single_linkage_tree(mst_edges)
+    squared_single_linkage_tree = sklearn_brute_single_linkage_tree(mst_edges)
+    single_linkage_tree = sqrt_single_linkage_tree_distances(squared_single_linkage_tree)
     labels, probabilities = sklearn_brute_select_clusters(
         single_linkage_tree,
         min_samples=min_samples,
@@ -358,10 +430,38 @@ def as_hdbscan_contrib_input(X: ArrayLike) -> NDArray[np.float64]:
 
 
 def hdbscan_contrib_distance_matrix(X: ArrayLike) -> NDArray[np.float64]:
-    """distance: X -> dense Euclidean distance matrix for contrib/generic."""
+    """distance: X -> dense squared Euclidean distance matrix for contrib/generic."""
     X64 = as_hdbscan_contrib_input(X)
-    distances = pairwise_distances(X64, metric="euclidean", n_jobs=1)
+    distances = pairwise_distances(X64, metric="sqeuclidean", n_jobs=1)
     return np.asarray(distances, dtype=np.float64, order="C")
+
+
+def hdbscan_contrib_core_distances(
+    distance_matrix: ArrayLike,
+    *,
+    min_samples: int,
+) -> NDArray[np.float64]:
+    return core_distances_from_squared_distance_matrix(
+        distance_matrix,
+        min_samples=min_samples,
+    )
+
+
+def hdbscan_contrib_distance_stage_output(
+    X: ArrayLike,
+    *,
+    min_samples: int,
+) -> HdbscanDistanceResult:
+    """distance: X -> squared distance matrix plus squared core distances."""
+    distance_matrix = hdbscan_contrib_distance_matrix(X)
+    core_distances = hdbscan_contrib_core_distances(
+        distance_matrix,
+        min_samples=min_samples,
+    )
+    return HdbscanDistanceResult(
+        distance_matrix=distance_matrix,
+        core_distances=core_distances,
+    )
 
 
 def hdbscan_contrib_mutual_reachability_matrix(
@@ -369,9 +469,14 @@ def hdbscan_contrib_mutual_reachability_matrix(
     *,
     min_samples: int,
 ) -> NDArray[np.float64]:
-    """mreach: distance matrix -> hdbscan-contrib mutual reachability matrix."""
-    distances = np.asarray(distance_matrix, dtype=np.float64, order="C")
-    validate_min_samples(min_samples, distances.shape[0])
+    """mreach: squared-distance matrix -> squared mutual reachability matrix.
+
+    hdbscan-contrib's dense reachability kernel is also scale-agnostic for
+    alpha=1.0: it selects core values from the supplied matrix and applies
+    max(core_i, core_j, distance_ij). The project does not support alpha != 1.
+    """
+    validate_min_samples(min_samples, np.asarray(distance_matrix).shape[0])
+    distances = np.asarray(distance_matrix, dtype=np.float64, order="C").copy()
     hdbscan_contrib = _contrib_hdbscan_module()
     result = hdbscan_contrib.mutual_reachability(
         distances,
@@ -528,16 +633,17 @@ def hdbscan_contrib_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult
     X64 = as_hdbscan_contrib_input(X)
     validate_min_samples(min_samples, X64.shape[0])
 
-    distance_matrix = hdbscan_contrib_distance_matrix(X64)
+    distance_output = hdbscan_contrib_distance_stage_output(X64, min_samples=min_samples)
     mutual_reachability_matrix = hdbscan_contrib_mutual_reachability_matrix(
-        distance_matrix,
+        distance_output.distance_matrix,
         min_samples=min_samples,
     )
     mst_edges = hdbscan_contrib_mst_edges(
         mutual_reachability_matrix,
         min_samples=min_samples,
     )
-    single_linkage_tree = hdbscan_contrib_single_linkage_tree(mst_edges)
+    squared_single_linkage_tree = hdbscan_contrib_single_linkage_tree(mst_edges)
+    single_linkage_tree = sqrt_single_linkage_tree_distances(squared_single_linkage_tree)
     labels, probabilities = hdbscan_contrib_select_clusters(
         single_linkage_tree,
         min_samples=min_samples,
@@ -565,18 +671,13 @@ def run_sklearn_brute_stage(
     stage_key = validate_stage_key(stage_key)
 
     if stage_key == HDBSCAN_DISTANCE_STAGE_KEY:
-        return sklearn_brute_distance_matrix(X)
+        return sklearn_brute_distance_stage_output(X, min_samples=min_samples)
 
     if stage_key == FULL_STAGE_KEY:
         return sklearn_brute_full(X, min_samples=min_samples)
 
-    distance_matrix = sklearn_brute_distance_matrix(X)
-
-    if stage_key == HDBSCAN_MREACH_STAGE_KEY:
-        return sklearn_brute_mutual_reachability_matrix(
-            distance_matrix,
-            min_samples=min_samples,
-        )
+    distance_output = sklearn_brute_distance_stage_output(X, min_samples=min_samples)
+    distance_matrix = distance_output.distance_matrix
 
     mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
         distance_matrix,
@@ -597,7 +698,8 @@ def run_sklearn_brute_stage(
     if stage_key == HDBSCAN_LINKAGE_STAGE_KEY:
         return sklearn_brute_single_linkage_tree(mst_edges)
 
-    single_linkage_tree = sklearn_brute_single_linkage_tree(mst_edges)
+    squared_single_linkage_tree = sklearn_brute_single_linkage_tree(mst_edges)
+    single_linkage_tree = sqrt_single_linkage_tree_distances(squared_single_linkage_tree)
 
     if stage_key == HDBSCAN_SELECT_STAGE_KEY:
         return sklearn_brute_select_clusters(single_linkage_tree, min_samples=min_samples)
@@ -615,18 +717,13 @@ def run_hdbscan_contrib_stage(
     stage_key = validate_stage_key(stage_key)
 
     if stage_key == HDBSCAN_DISTANCE_STAGE_KEY:
-        return hdbscan_contrib_distance_matrix(X)
+        return hdbscan_contrib_distance_stage_output(X, min_samples=min_samples)
 
     if stage_key == FULL_STAGE_KEY:
         return hdbscan_contrib_full(X, min_samples=min_samples)
 
-    distance_matrix = hdbscan_contrib_distance_matrix(X)
-
-    if stage_key == HDBSCAN_MREACH_STAGE_KEY:
-        return hdbscan_contrib_mutual_reachability_matrix(
-            distance_matrix,
-            min_samples=min_samples,
-        )
+    distance_output = hdbscan_contrib_distance_stage_output(X, min_samples=min_samples)
+    distance_matrix = distance_output.distance_matrix
 
     mutual_reachability_matrix = hdbscan_contrib_mutual_reachability_matrix(
         distance_matrix,
@@ -647,7 +744,8 @@ def run_hdbscan_contrib_stage(
     if stage_key == HDBSCAN_LINKAGE_STAGE_KEY:
         return hdbscan_contrib_single_linkage_tree(mst_edges)
 
-    single_linkage_tree = hdbscan_contrib_single_linkage_tree(mst_edges)
+    squared_single_linkage_tree = hdbscan_contrib_single_linkage_tree(mst_edges)
+    single_linkage_tree = sqrt_single_linkage_tree_distances(squared_single_linkage_tree)
 
     if stage_key == HDBSCAN_SELECT_STAGE_KEY:
         return hdbscan_contrib_select_clusters(single_linkage_tree, min_samples=min_samples)
@@ -685,13 +783,14 @@ def prepare_hdbscan_reference_stage_input(
     if stage_key in {HDBSCAN_DISTANCE_STAGE_KEY, FULL_STAGE_KEY}:
         return (X,)
 
-    distance_matrix = reference_distance_matrix(reference_key, X)
-    if stage_key == HDBSCAN_MREACH_STAGE_KEY:
-        return (distance_matrix,)
-
+    distance_output = reference_distance_stage_output(
+        reference_key,
+        X,
+        min_samples=min_samples,
+    )
     mutual_reachability_matrix = reference_mutual_reachability_matrix(
         reference_key,
-        distance_matrix,
+        distance_output.distance_matrix,
         min_samples=min_samples,
     )
     if stage_key == HDBSCAN_MST_STAGE_KEY:
@@ -705,9 +804,9 @@ def prepare_hdbscan_reference_stage_input(
     if stage_key == HDBSCAN_LINKAGE_STAGE_KEY:
         return (mst_edges,)
 
-    single_linkage_tree = reference_single_linkage_tree(reference_key, mst_edges)
+    squared_single_linkage_tree = reference_single_linkage_tree(reference_key, mst_edges)
     if stage_key == HDBSCAN_SELECT_STAGE_KEY:
-        return (single_linkage_tree,)
+        return (sqrt_single_linkage_tree_distances(squared_single_linkage_tree),)
 
     raise AssertionError(f"Unhandled HDBSCAN stage {stage_key!r}")
 
@@ -725,13 +824,9 @@ def run_prepared_hdbscan_reference_stage(
 
     if stage_key == HDBSCAN_DISTANCE_STAGE_KEY:
         (X,) = prepared_input
-        return reference_distance_matrix(reference_key, X)
-
-    if stage_key == HDBSCAN_MREACH_STAGE_KEY:
-        (distance_matrix,) = prepared_input
-        return reference_mutual_reachability_matrix(
+        return reference_distance_stage_output(
             reference_key,
-            distance_matrix,
+            X,
             min_samples=min_samples,
         )
 
@@ -768,6 +863,20 @@ def reference_distance_matrix(reference_key: str, X: ArrayLike) -> NDArray[np.fl
         return sklearn_brute_distance_matrix(X)
     if reference_key == HDBSCAN_CONTRIB_REFERENCE:
         return hdbscan_contrib_distance_matrix(X)
+    raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")
+
+
+def reference_distance_stage_output(
+    reference_key: str,
+    X: ArrayLike,
+    *,
+    min_samples: int,
+) -> HdbscanDistanceResult:
+    reference_key = validate_hdbscan_reference_key(reference_key)
+    if reference_key == SKLEARN_BRUTE_REFERENCE:
+        return sklearn_brute_distance_stage_output(X, min_samples=min_samples)
+    if reference_key == HDBSCAN_CONTRIB_REFERENCE:
+        return hdbscan_contrib_distance_stage_output(X, min_samples=min_samples)
     raise AssertionError(f"Unhandled HDBSCAN reference {reference_key!r}")
 
 

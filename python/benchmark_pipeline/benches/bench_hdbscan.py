@@ -143,7 +143,7 @@ def main() -> None:
             args.min_samples,
         )
 
-        if args.stage in {"distance", "mreach", "mst", "linkage", "select", "full"}:
+        if args.stage in {"distance", "mst", "linkage", "select", "full"}:
             write_hdbscan_stage_metrics(
                 args.metrics_file,
                 args.stage,

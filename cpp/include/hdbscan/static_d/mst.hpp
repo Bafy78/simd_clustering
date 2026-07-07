@@ -50,7 +50,8 @@ inline mst_step_result reduce_min_index_wide(hdbscan_wide distances, hdbscan_wid
 }
 
 __attribute__((always_inline)) inline mst_step_result update_mst_candidates_and_select_next(
-    const double* current_row,
+    const double* current_distance_row,
+    std::span<const double> core_distances,
     std::span<double> best_distance,
     std::span<std::uint8_t> selected_count_per_packet,
     std::size_t& full_packet_count,
@@ -62,9 +63,9 @@ __attribute__((always_inline)) inline mst_step_result update_mst_candidates_and_
     constexpr double selected_sentinel = -1.0;
     const double infinity = std::numeric_limits<double>::infinity();
 
-    // Selected vertices are encoded directly in best_distance. Mutual reachability
-    // distances for Euclidean HDBSCAN are non-negative, so a negative value is a
-    // compact active-state sentinel and avoids a separate attached[] stream.
+    // Selected vertices are encoded directly in best_distance. Squared mutual
+    // reachability weights are non-negative, so a negative value is a compact
+    // active-state sentinel and avoids a separate attached[] stream.
     best_distance[current] = selected_sentinel;
 
     const std::size_t packet_count = selected_count_per_packet.size();
@@ -88,17 +89,27 @@ __attribute__((always_inline)) inline mst_step_result update_mst_candidates_and_
         && (full_packet_count * 32 > packet_count);
 
     const hdbscan_wide_i lane_offsets = mst_lane_offsets();
+    const hdbscan_wide current_core(core_distances[current]);
+    const double* const core_ptr = core_distances.data();
     double* const best_ptr = best_distance.data();
     hdbscan_wide vector_min_distances(infinity);
     hdbscan_wide_i vector_min_indices(0);
 
     auto process_block = [&](std::size_t j, auto ignore) {
-        const auto candidates = eve::load[ignore](current_row + j);
-        const auto previous_best = eve::load[ignore](best_ptr  + j);
+        const auto previous_best = eve::load[ignore](best_ptr + j);
+        const auto core_j = eve::load[ignore](core_ptr + j);
+        const auto core_bound = eve::max(current_core, core_j);
 
         const auto active = ignore.mask(eve::as<hdbscan_wide>()) && (previous_best >= hdbscan_wide_zero);
-        const auto updated_best = eve::min(candidates, previous_best);
-        eve::store[ignore](updated_best, best_ptr  + j);
+        const auto can_improve_without_distance = active && (core_bound < previous_best);
+
+        auto updated_best = previous_best;
+        if (eve::any(can_improve_without_distance)) {
+            const auto raw_distance = eve::load[ignore](current_distance_row + j);
+            const auto candidate = eve::max(core_bound, raw_distance);
+            updated_best = eve::min(candidate, previous_best);
+            eve::store[ignore](updated_best, best_ptr + j);
+        }
 
         const auto selectable_distance = eve::if_else(active, updated_best, hdbscan_wide(infinity));
 
@@ -152,12 +163,16 @@ __attribute__((always_inline)) inline mst_step_result update_mst_candidates_and_
 }
 
 inline void minimum_spanning_tree_edges(
-    std::span<const double> mutual_reachability,
+    std::span<const double> distance_matrix,
+    std::span<const double> core_distances,
     std::size_t N,
     std::vector<mst_edge>& edges
 ) {
-    if (mutual_reachability.size() != N * N) {
-        throw std::runtime_error("HDBSCAN MST stage expected a dense N x N mutual reachability matrix");
+    if (distance_matrix.size() != N * N) {
+        throw std::runtime_error("HDBSCAN MST stage expected a dense N x N squared-distance matrix");
+    }
+    if (core_distances.size() != N) {
+        throw std::runtime_error("HDBSCAN MST stage expected N squared core distances");
     }
 
     edges.clear();
@@ -175,17 +190,23 @@ inline void minimum_spanning_tree_edges(
     std::vector<std::uint8_t> selected_count_per_packet(packet_count, 0);
     std::size_t full_packet_count = 0;
 
-    // Match scikit-learn's dense private mst_from_mutual_reachability behavior:
-    // the emitted endpoints are the previous selected vertex and the newly selected
-    // vertex, while the emitted distance is the current best crossing-edge weight.
-    // The endpoint pair is therefore an implementation-stage edge list, not always
-    // the actual parent edge in the complete mutual-reachability graph.
+    // Match scikit-learn's dense private mst_from_mutual_reachability traversal
+    // convention while computing mutual reachability lazily from the raw squared
+    // distance matrix and squared core distances:
+    //
+    //     w(u, v) = max(core_sq[u], core_sq[v], dist_sq[u, v])
+    //
+    // The emitted endpoints are the previous selected vertex and the newly
+    // selected vertex, while the emitted distance is the current best crossing
+    // edge weight. The endpoint pair is therefore an implementation-stage edge
+    // list, not always the actual parent edge in the complete graph.
     std::size_t current = 0;
     for (std::size_t edge_index = 0; edge_index + 1 < N; ++edge_index) {
         const bool enable_packet_skip_time_gate = (edge_index + 1) > N / 4;
 
         const mst_step_result next_step = update_mst_candidates_and_select_next(
-            mutual_reachability.data() + current * N,
+            distance_matrix.data() + current * N,
+            core_distances,
             std::span<double>(best_distance.data(), best_distance.size()),
             std::span<std::uint8_t>(selected_count_per_packet.data(), selected_count_per_packet.size()),
             full_packet_count,
