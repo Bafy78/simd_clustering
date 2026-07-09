@@ -95,22 +95,22 @@ def default_config() -> BenchmarkConfig:
         ],
         test_Ks=[10, 25, 50],
         pipeline=PipelineOptions(
-            timing_processes=5,
-            timing_values=5,
+            timing_processes=8,
+            timing_values=8,
             timing_min_time=0.05,
             gmm_covariance_types=("spherical", "diag", "full",),
-            cpp_soa_cases=(),
-            cpp_pp_cases=(),
-            run_python_pp=False,
-            cpp_lloyd_cases=(),
-            run_python_lloyd=False,
-            cpp_gmm_cases=(),
-            run_python_gmm=False,
+            cpp_soa_cases=("soa_static", "soa_dynamic",),
+            cpp_pp_cases=("pp_static", "pp_dynamic",),
+            run_python_pp=True,
+            cpp_lloyd_cases=("lloyd_static", "lloyd_dynamic", "lloyd_auto",),
+            run_python_lloyd=True,
+            cpp_gmm_cases=("gmm_static", "gmm_dynamic",),
+            run_python_gmm=True,
             cpp_hdbscan_cases=("hdbscan_static",),
             run_python_hdbscan=True,
             hdbscan_references=("sklearn_brute", "hdbscan_contrib"),
             hdbscan_stages=("distance", "mst", "linkage", "select", "full",),
-            run_cachegrind=False,
+            run_cachegrind=True,
             cachegrind_I1="32768,8,64",
             cachegrind_D1="49152,12,64",
             cachegrind_LL="100663296,24,64",
@@ -198,10 +198,18 @@ def default_config() -> BenchmarkConfig:
             BenchmarkExclusionRule(
                 phase_keys=("hdbscan",),
                 min_samples=5000,
+                max_samples=19_999,
                 reason=(
                     "Too high for hdbscan quadratic complexity"
                 ),
             ),
+            BenchmarkExclusionRule(
+                phase_keys=("hdbscan",),
+                min_samples=20_001,
+                reason=(
+                    "Too high for hdbscan quadratic complexity"
+                ),
+            ), # hack to run the letter dataset on hdbscan anyway
             BenchmarkExclusionRule(
                 phase_keys=("pp","gmm","lloyd",),
                 max_samples=4000,
