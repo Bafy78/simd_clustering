@@ -108,7 +108,7 @@ def default_config() -> BenchmarkConfig:
             run_python_gmm=True,
             cpp_hdbscan_cases=("hdbscan_static",),
             run_python_hdbscan=True,
-            hdbscan_references=("sklearn_brute", "hdbscan_contrib"),
+            hdbscan_references=("sklearn_brute", "hdbscan_contrib",),
             hdbscan_stages=("distance", "mst", "linkage", "select", "full",),
             run_cachegrind=True,
             cachegrind_I1="32768,8,64",
@@ -123,6 +123,9 @@ def default_config() -> BenchmarkConfig:
                 ),
                 CachegrindExclusionRule(
                     min_samples=500_000,
+                    reason=("Too slow and we can infer from the rest of the data well enough"),
+                ),
+                CachegrindExclusionRule(
                     min_dimensions=50,
                     reason=("Too slow and we can infer from the rest of the data well enough"),
                 )
@@ -211,7 +214,7 @@ def default_config() -> BenchmarkConfig:
                 ),
             ), # hack to run the letter dataset on hdbscan anyway
             BenchmarkExclusionRule(
-                phase_keys=("pp","gmm","lloyd",),
+                phase_keys=("pp", "gmm", "lloyd",),
                 max_samples=4000,
                 reason=(
                     "Too small to matter for these algorithms"

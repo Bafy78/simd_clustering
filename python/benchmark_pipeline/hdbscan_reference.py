@@ -80,27 +80,48 @@ def validate_stage_key(stage_key: str) -> str:
     return stage_key  # type: ignore[return-value]
 
 
+def sqrt_single_linkage_tree_distances_inplace(
+    single_linkage_tree: NDArray[Any],
+) -> NDArray[Any]:
+    """Convert linkage edge weights to true-distance scale in place."""
+    tree = np.asarray(single_linkage_tree)
+    if not tree.flags.writeable:
+        raise ValueError("Expected a writable single-linkage tree for in-place sqrt")
+
+    if tree.dtype.names is not None:
+        if "value" in tree.dtype.names:
+            distance_name = "value"
+        elif "distance" in tree.dtype.names:
+            distance_name = "distance"
+        else:
+            raise ValueError("Structured linkage tree has no value/distance field")
+        tree[distance_name] = np.sqrt(
+            np.maximum(np.asarray(tree[distance_name], dtype=np.float64), 0.0)
+        )
+        return tree
+
+    if tree.ndim != 2 or tree.shape[1] < 4:
+        raise ValueError(f"Expected single linkage tree with at least 4 columns, got shape {tree.shape}")
+    if tree.dtype != np.float64 or not tree.flags.c_contiguous:
+        raise ValueError(
+            "Expected a C-contiguous float64 single-linkage tree for in-place sqrt"
+        )
+    tree[:, 2] = np.sqrt(np.maximum(tree[:, 2], 0.0))
+    return tree
+
+
 def sqrt_single_linkage_tree_distances(single_linkage_tree: ArrayLike) -> NDArray[Any]:
     """Return a copy whose linkage edge weights are on true-distance scale."""
     tree = np.asarray(single_linkage_tree)
     if tree.dtype.names is not None:
         out = tree.copy()
-        if "value" in out.dtype.names:
-            distance_name = "value"
-        elif "distance" in out.dtype.names:
-            distance_name = "distance"
-        else:
-            raise ValueError("Structured linkage tree has no value/distance field")
-        out[distance_name] = np.sqrt(
-            np.maximum(np.asarray(out[distance_name], dtype=np.float64), 0.0)
-        )
-        return out
-
-    if tree.ndim != 2 or tree.shape[1] < 4:
-        raise ValueError(f"Expected single linkage tree with at least 4 columns, got shape {tree.shape}")
-    out = np.asarray(tree, dtype=np.float64, order="C").copy()
-    out[:, 2] = np.sqrt(np.maximum(out[:, 2], 0.0))
-    return np.ascontiguousarray(out)
+    else:
+        if tree.ndim != 2 or tree.shape[1] < 4:
+            raise ValueError(
+                f"Expected single linkage tree with at least 4 columns, got shape {tree.shape}"
+            )
+        out = np.asarray(tree, dtype=np.float64, order="C").copy()
+    return sqrt_single_linkage_tree_distances_inplace(out)
 
 
 # ---------------------------------------------------------------------------
@@ -197,9 +218,11 @@ def sklearn_brute_mutual_reachability_matrix_inplace(
     if (
         distance_or_mreach_matrix.dtype != np.float64
         or not distance_or_mreach_matrix.flags.c_contiguous
+        or not distance_or_mreach_matrix.flags.writeable
     ):
         raise ValueError(
-            "Expected a C-contiguous float64 squared-distance matrix for in-place mreach"
+            "Expected a writable C-contiguous float64 squared-distance matrix "
+            "for in-place mreach"
         )
     validate_min_samples(min_samples, distance_or_mreach_matrix.shape[0])
     result = mutual_reachability_graph(
@@ -233,6 +256,24 @@ def as_cpp_prim_order_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float64]:
     use the same endpoint convention as the C++ artifact being compared.
     """
     plain = as_float64_plain_mst_edges(mst_edges).copy()
+    return normalize_cpp_prim_order_mst_edges_inplace(plain)
+
+
+def normalize_cpp_prim_order_mst_edges_inplace(
+    mst_edges: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Normalize owned contrib MST edges to the C++ convention in place."""
+    plain = np.asarray(mst_edges)
+    if (
+        plain.dtype != np.float64
+        or plain.ndim != 2
+        or plain.shape[1] != 3
+        or not plain.flags.c_contiguous
+        or not plain.flags.writeable
+    ):
+        raise ValueError(
+            "Expected a writable C-contiguous float64 MST edge array with three columns"
+        )
     if plain.shape[0] == 0:
         return plain
 
@@ -374,17 +415,22 @@ def sklearn_brute_select_clusters(
 
 def sklearn_brute_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult:
     """full: X -> labels and probabilities via the staged float64 reference."""
-    distance_output = sklearn_brute_distance_stage_output(X, min_samples=min_samples)
-    mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix(
-        distance_output.distance_matrix,
+    # Match sklearn's brute fit ownership model: the full path creates one
+    # distance matrix, lets the reachability kernel overwrite it, and computes
+    # core distances only inside that kernel. The isolated distance/mreach
+    # helpers remain non-destructive because their predecessor artifacts may be
+    # reused by other staged benchmarks.
+    distance_matrix = sklearn_brute_distance_matrix(X)
+    mutual_reachability_matrix = sklearn_brute_mutual_reachability_matrix_inplace(
+        distance_matrix,
         min_samples=min_samples,
     )
     mst_edges = sklearn_brute_mst_edges(
         mutual_reachability_matrix,
         min_samples=min_samples,
     )
-    squared_single_linkage_tree = sklearn_brute_single_linkage_tree(mst_edges)
-    single_linkage_tree = sqrt_single_linkage_tree_distances(squared_single_linkage_tree)
+    single_linkage_tree = sklearn_brute_single_linkage_tree(mst_edges)
+    sqrt_single_linkage_tree_distances_inplace(single_linkage_tree)
     labels, probabilities = sklearn_brute_select_clusters(
         single_linkage_tree,
         min_samples=min_samples,
@@ -475,11 +521,32 @@ def hdbscan_contrib_mutual_reachability_matrix(
     alpha=1.0: it selects core values from the supplied matrix and applies
     max(core_i, core_j, distance_ij). The project does not support alpha != 1.
     """
-    validate_min_samples(min_samples, np.asarray(distance_matrix).shape[0])
     distances = np.asarray(distance_matrix, dtype=np.float64, order="C").copy()
+    return hdbscan_contrib_mutual_reachability_matrix_inplace(
+        distances,
+        min_samples=min_samples,
+    )
+
+
+def hdbscan_contrib_mutual_reachability_matrix_inplace(
+    distance_or_mreach_matrix: NDArray[np.float64],
+    *,
+    min_samples: int,
+) -> NDArray[np.float64]:
+    """Overwrite a dense squared-distance matrix with contrib squared mreach."""
+    if (
+        distance_or_mreach_matrix.dtype != np.float64
+        or not distance_or_mreach_matrix.flags.c_contiguous
+        or not distance_or_mreach_matrix.flags.writeable
+    ):
+        raise ValueError(
+            "Expected a writable C-contiguous float64 squared-distance matrix "
+            "for in-place contrib mreach"
+        )
+    validate_min_samples(min_samples, distance_or_mreach_matrix.shape[0])
     hdbscan_contrib = _contrib_hdbscan_module()
     result = hdbscan_contrib.mutual_reachability(
-        distances,
+        distance_or_mreach_matrix,
         min_points=contrib_internal_min_samples(min_samples),
         alpha=1.0,
     )
@@ -492,6 +559,14 @@ def as_float64_plain_mst_edges(mst_edges: ArrayLike) -> NDArray[np.float64]:
     The plain contrib representation is shape (n_edges, 3): left, right, weight.
     """
     edges = np.asarray(mst_edges)
+
+    if (
+        edges.dtype == np.float64
+        and edges.ndim == 2
+        and edges.shape[1] == 3
+        and edges.flags.c_contiguous
+    ):
+        return edges
 
     if edges.dtype.names is not None:
         left = edges["current_node"]
@@ -518,6 +593,14 @@ def as_float64_plain_single_linkage_tree(single_linkage_tree: ArrayLike) -> NDAr
     distance, cluster_size.
     """
     tree = np.asarray(single_linkage_tree)
+
+    if (
+        tree.dtype == np.float64
+        and tree.ndim == 2
+        and tree.shape[1] == 4
+        and tree.flags.c_contiguous
+    ):
+        return tree
 
     if tree.dtype.names is not None:
         left = tree["left_node"]
@@ -554,8 +637,8 @@ def hdbscan_contrib_mst_edges(
     validate_min_samples(min_samples, mutual_reachability.shape[0])
     hdbscan_contrib = _contrib_hdbscan_module()
     mst_edges = hdbscan_contrib.mst_linkage_core(mutual_reachability)
-
-    return as_cpp_prim_order_mst_edges(mst_edges)
+    owned_edges = as_float64_plain_mst_edges(mst_edges)
+    return normalize_cpp_prim_order_mst_edges_inplace(owned_edges)
 
 
 def hdbscan_contrib_single_linkage_tree(mst_edges: ArrayLike) -> NDArray[np.float64]:
@@ -633,17 +716,20 @@ def hdbscan_contrib_full(X: ArrayLike, *, min_samples: int) -> HdbscanFullResult
     X64 = as_hdbscan_contrib_input(X)
     validate_min_samples(min_samples, X64.shape[0])
 
-    distance_output = hdbscan_contrib_distance_stage_output(X64, min_samples=min_samples)
-    mutual_reachability_matrix = hdbscan_contrib_mutual_reachability_matrix(
-        distance_output.distance_matrix,
+    # Match contrib's generic fit ownership model: the full path owns its
+    # distance matrix, so mutual_reachability may overwrite it and compute core
+    # distances exactly once. Staged helpers keep their preservation copies.
+    distance_matrix = hdbscan_contrib_distance_matrix(X64)
+    mutual_reachability_matrix = hdbscan_contrib_mutual_reachability_matrix_inplace(
+        distance_matrix,
         min_samples=min_samples,
     )
     mst_edges = hdbscan_contrib_mst_edges(
         mutual_reachability_matrix,
         min_samples=min_samples,
     )
-    squared_single_linkage_tree = hdbscan_contrib_single_linkage_tree(mst_edges)
-    single_linkage_tree = sqrt_single_linkage_tree_distances(squared_single_linkage_tree)
+    single_linkage_tree = hdbscan_contrib_single_linkage_tree(mst_edges)
+    sqrt_single_linkage_tree_distances_inplace(single_linkage_tree)
     labels, probabilities = hdbscan_contrib_select_clusters(
         single_linkage_tree,
         min_samples=min_samples,
