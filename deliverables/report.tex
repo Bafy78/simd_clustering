@@ -1,0 +1,387 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{float}
+
+\geometry{margin=2.4cm}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black,
+  pdftitle={SIMD Clustering Algorithms with EVE in C++},
+  pdfauthor={Rémi Millerat--Gallot}
+}
+
+\lstdefinestyle{cppstyle}{
+  language=C++,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries\color{blue!60!black},
+  commentstyle=\itshape\color{gray!70!black},
+  stringstyle=\color{green!40!black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  breaklines=true,
+  frame=single,
+  columns=fullflexible
+}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\R}{\mathbb{R}}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+
+  \vspace*{1.2cm}
+
+  {\Huge\bfseries SIMD Clustering Algorithms with EVE in C++\par}
+
+  \vspace{0.6cm}
+
+  {\Large Internship Report\par}
+
+  \vspace{1.2cm}
+
+  {\large Rémi Millerat--Gallot\par}
+
+  \vspace{0.4cm}
+
+  {\large M1 MPRI --- Université Paris-Saclay\par}
+
+  \vspace{1.2cm}
+
+  \begin{tabular}{@{}r p{0.68\textwidth}@{}}
+    Host laboratory: & LISN --- Laboratoire Interdisciplinaire des Sciences du Numérique \\
+    Team: & ParSys \\
+    Laboratory supervisor: & Joël Falcou \\
+    Academic supervisor: & Burkhart Wolff \\
+    Internship period: & 20 April 2026 -- 17 July 2026 \\
+  \end{tabular}
+
+  \vspace{1.4cm}
+
+  {\Large\bfseries Abstract\par}
+
+    \vspace{0.4cm}
+    
+    \begin{minipage}{0.92\textwidth}
+      \setlength{\parindent}{0pt}
+      \setlength{\parskip}{0.65em}
+    
+      This report presents my internship work at LISN in the ParSys team on SIMD implementations of clustering algorithms in C++20 using the EVE library. The codebase covers Lloyd's K-Means, greedy K-Means++ initialization, Gaussian Mixture Models trained by Expectation-Maximization, and a dense Euclidean HDBSCAN pipeline.
+    
+      The main implementation effort compared these across different dimensional regimes; they were integrated into a validation and benchmarking pipeline against scikit-learn Python references.
+    
+      The experiments show that the effectiveness of SIMD optimization depends strongly on dimensionality, memory layout, register pressure, and the structure of the algorithm. \textbf{[Add one sentence summarizing the main measured performance and validation results.]}
+    \end{minipage}
+
+  \vfill
+
+  {\large Academic year 2025--2026\par}
+\end{titlepage}
+
+\pagenumbering{arabic}
+
+\section*{Acknowledgements}
+
+I would first like to thank Joël Falcou, without whom this internship wouldn't have gone that far. His technical ideas, guidance, and comments were central to the direction of the project, while still leaving me the freedom to explore the implementation choices and difficulties by  myself.
+
+I would also like to thank Alexis Aune, Joël Falcou's PhD student and my office-mate during the internship, and the rest of the ParSys team for their kindness and for contributing to a pleasant working environment at LISN.
+
+\section*{Use of Generative AI Tools}
+
+During this internship, I made extensive use of generative AI tools as programming and writing assistants. They were used throughout the project to help produce code, modify and debug implementations, write documentation, and structure this report. In practice, essentially all the code in the project was produced with substantial AI assistance, then reviewed, tested, selected, and integrated by me. This use of generative AI should therefore be understood as part of the working methodology of the internship, rather than as a minor editorial aid. The final responsibility for the submitted repository, experiments, documentation, and results remains mine; in particular, the scientific and technical work of understanding the clustering algorithms, choosing implementation directions, validating behavior, and interpreting benchmark results remains my responsibility.
+
+\section{Internship context and project overview}
+
+\subsection{Host laboratory and scientific environment}
+
+This internship took place at LISN, the Laboratoire Interdisciplinaire des Sciences du Numérique, within the ParSys team, as part of the first year of the MPRI master's program at Université Paris-Saclay. The internship ran from 20 April 2026 to 19 July 2026, under the supervision of Joël Falcou at LISN and Burkhart Wolff at Université Paris-Saclay.
+
+LISN provided the broader academic environment of the internship. The ParSys team, short for \emph{Systèmes Parallèles} and part of the ``Algorithmes, Apprentissage et Calcul'' research department, provided the more specific scientific setting. Its work on parallel systems, high-performance computing, and efficient implementation of algorithms on modern architectures was directly related to the subject of the internship. The project was therefore situated at the intersection of unsupervised learning and high-performance implementation: the algorithms considered come from data analysis and machine learning, while their implementation requires attention to memory layout, vectorization, register pressure, numerical stability, and the cost of data movement.
+
+\subsection{Internship organization and working mode}
+
+The work was mostly carried out independently, with comments and feedback from the laboratory supervisor. There was no detailed initial specification or fixed list of expected deliverables. This organization had an important influence on the nature of the work. A significant part of the internship consisted not only in writing optimized code, but also in defining the experimental perimeter itself: which algorithms were reasonable to study, which computations should be isolated as kernels, how Python and C++ implementations should be compared, what should be measured, and under which conditions a performance result could be considered meaningful.
+
+At the beginning of the internship, I had limited prior experience with C++ and SIMD programming. Apart from approximately twenty hours in Joël Falcou's C++ course, I had not previously developed a large C++ project or studied SIMD-oriented algorithms in depth. I had already encountered clustering algorithms in a previous course, but not from the point of view of low-level implementation. The internship was therefore also a learning process, in which the programming tools, the performance model, and the validation methodology had to be developed alongside the code itself.
+
+\subsection{Project overview and problem statement}
+
+The general topic of the internship was the implementation of performant clustering algorithms in C++20 using EVE. The project was not intended to produce code ready for immediate integration into EVE or to build a complete replacement for existing Python libraries such as scikit-learn \cite{pedregosa2011scikit}. The project instead became a benchmark and validation codebase for clustering-related algorithms and numerical kernels. Its central question was how data layout and kernel organization affect performance as the number of features, samples, and clusters varies.
+
+The code covers Lloyd's K-Means, greedy K-Means++ initialization, Gaussian Mixture Model estimation by Expectation-Maximization, and a dense Euclidean HDBSCAN pipeline. The code was designed to study how these computations behave under different dimensional regimes. It includes both static-D and dynamic-D variants; their respective data layouts and traversal strategies are described in the technical background below.
+
+\section{Theoretical and technical background}
+
+\subsection{Clustering algorithms}
+
+Clustering is an unsupervised learning task in which a set of observations \(x_1,\ldots,x_N \in \R^D\) is organized into groups without using external labels. In this project, clustering was mainly used as a source of numerical kernels with different computational structures: repeated Euclidean distance computations, reductions over points or clusters, probabilistic density evaluations, and nearest-neighbour or graph-based operations.
+
+Lloyd's K-Means algorithm seeks \(K\) centroids \(c_1,\ldots,c_K \in \R^D\) minimizing the within-cluster sum of squared distances
+\[
+  \sum_{i=1}^N \min_{1 \leq k \leq K} \|x_i - c_k\|_2^2.
+\]
+The standard iterative algorithm alternates between assigning each point to its nearest centroid and recomputing each centroid as the mean of its assigned points \cite{lloyd1982}. From an implementation point of view, the assignment step is the most relevant part for SIMD acceleration, since it requires many independent distance computations between points and centroids.
+
+K-Means++ modifies only the initialization step. In its original form, the first center is chosen uniformly at random, and each subsequent center is sampled with probability proportional to its squared distance from the nearest previously selected center \cite{arthur2007kmeanspp}. A greedy variant \cite{grunau2023greedy} draws \(\ell\) such candidates at each subsequent step and retains the one minimizing the updated potential
+\[  \Phi(C) = \sum_{i=1}^N \min_{c \in C} \|x_i-c\|_2^2 ; \]
+setting \(\ell=1\) recovers vanilla K-Means++. It increases initialization work by evaluating several candidates per selected center, but can yield a lower initial potential.
+
+Gaussian Mixture Models use a probabilistic formulation. Instead of assigning each point to a single cluster center, the data is modeled as a mixture of \(K\) Gaussian distributions with weights \(\pi_k\), means \(\mu_k\), and covariance matrices \(\Sigma_k\). Parameters are typically estimated by the Expectation-Maximization algorithm \cite{dempster1977em}. The E-step computes responsibilities, that is, soft assignments of points to mixture components, while the M-step updates the parameters from these responsibilities. For this internship, GMMs were interesting because they reuse distance-like computations but add more complex numerical issues: normalization, exponentials, covariance handling, and stronger sensitivity to floating-point differences.
+
+HDBSCAN is a density-based clustering method related to DBSCAN \cite{ester1996dbscan}, but it avoids selecting a single global density threshold. It builds a hierarchy using mutual-reachability distances derived from core distances, then extracts stable clusters from this hierarchy \cite{campello2013hdbscan,mcinnes2017hdbscan}. Compared with K-Means and GMMs, HDBSCAN has a less regular computational structure because it involves nearest-neighbour information and graph construction.
+
+\subsection{SIMD programming and EVE}
+
+Single Instruction Multiple Data (SIMD) programming is a form of data-level parallelism in which one instruction is applied simultaneously to several scalar values. Instead of executing the same arithmetic operation repeatedly on individual values, a processor applies it to a vector register containing several values. For example, a SIMD addition instruction can add several pairs of floating-point numbers in one machine instruction.
+
+SIMD is different from task parallelism. It does not mean that several independent threads execute different pieces of code. Rather, one instruction stream is kept, but each instruction operates on multiple data lanes. This makes SIMD particularly suitable for regular data-parallel computations.
+
+A SIMD register can be seen abstractly as a small fixed-size array:
+\[
+[x_0, x_1, x_2, \ldots, x_{w-1}],
+\]
+where \(w\) is the number of scalar lanes. The value of \(w\) depends on both the scalar type and the hardware vector width. For instance, a 256-bit SIMD register can hold eight 32-bit floats, four 64-bit doubles, or eight 32-bit integers. This is one reason why the choice between \code{float} and \code{double} has a direct impact on SIMD throughput: using single precision doubles the number of values processed per vector instruction \cite{intelIntrinsics}.
+
+SIMD programming occupies an intermediate position between scalar CPU programming and GPU programming. GPUs provide massive parallelism and are effective for large, regular workloads with high arithmetic intensity, but they introduce constraints such as device-memory transfers, kernel-launch overhead, a less direct integration with ordinary CPU code, and often higher power consumption. SIMD, by contrast, exploits parallelism already present inside the CPU. It targets a smaller scale of parallelism than GPUs, with only a limited number of lanes per core, but it has lower overhead, works naturally on CPU-resident data, and can be combined with cache-aware layouts, loop unrolling, compiler optimizations, and multithreading. In this sense, SIMD is often a first level of explicit performance engineering for numerical code on CPUs, rather than a replacement for GPU programming.
+
+At the hardware level, SIMD support is exposed through architecture-specific instruction sets. On x86 processors, common SIMD extensions include SSE, AVX, AVX2, and AVX-512, while on ARM processors similar roles are played by NEON and SVE. Programmers can access these instructions through CPU intrinsics, which are compiler-provided functions that map closely to individual machine instructions and allow explicit use of vector operations, shuffles, masks, comparisons, and reductions. However, intrinsics are verbose and difficult to make portable, because instruction sets differ in register width, supported operations, masking capabilities, and sometimes programming model. For example, AVX2 intrinsic code cannot in general be reused unchanged on an ARM processor, and AVX-512 code may need to be rewritten or specialized for machines that only support AVX2.
+
+Modern C++ SIMD libraries provide a higher-level abstraction over architecture-specific intrinsics. EVE is one such library \cite{penuchot2018}: it provides C++ types and functions for expressing SIMD operations portably, while still allowing the compiler to generate efficient machine-specific instructions. Instead of writing separate intrinsic code for each instruction set, the programmer writes vector code using EVE abstractions, which are then mapped to the appropriate SIMD backend when possible. This does not remove the need to reason about SIMD: memory access patterns, vector width, masks, reductions, and data layout remain important. However, EVE separates the algorithmic expression of vector operations from many low-level details, making it possible to write SIMD-oriented code that stays closer to ordinary C++ while still exposing explicit vectorization opportunities.
+
+In clustering algorithms, SIMD is naturally relevant because many operations are repeated over large collections of points. Distance computations, assignment steps, likelihood evaluations, and reductions all contain regular numerical kernels. The main difficulty is not only to identify these arithmetic operations, but also to organize the data so that values needed together are contiguous or easily loadable into SIMD registers. For this reason, SIMD programming is closely linked to the choice of data layout, which is discussed in the next subsection.
+
+\subsection{Data layout: AoS, SoA, static-D, and dynamic-D}
+
+A common preliminary question in SIMD implementations of dense numerical algorithms is how vector lanes should be interpreted. For a dataset represented as a dense array of shape $(N,D)$, with $N$ samples and ambient dimension $D$, SIMD can in principle be applied along different axes of the data. One possibility is to vectorize across the dimensions of a single sample. In that case, an array-of-structures layout, or ordinary row-major layout, is natural: the coordinates $x_{i,0},x_{i,1},\ldots,x_{i,D-1}$ of one sample are contiguous, so one SIMD load can contain several coordinates of the same point. This organization is often appropriate for kernels that behave like dot products or reductions over the coordinates of one object. Another possibility is to vectorize across samples while keeping the dimension fixed. Then a structure-of-arrays layout is more natural \cite{jubertie2018}: for a fixed coordinate $d$, the values $x_{0,d},x_{1,d},\ldots,x_{W-1,d}$ of several consecutive samples are contiguous and can be loaded into one SIMD register. This second convention, also used by Otsuka and Fukushima for AVX/AVX2 implementations of K-Means and K-Means++ \cite{otsuka2021}, is particularly useful in clustering kernels where the same centroid coordinate, threshold, or model parameter is applied to many samples independently. The static-dimensional and dynamic-dimensional layouts described below follow this lanes-as-samples convention, while differing in how the dimension axis itself is represented and traversed.
+
+When the dimension is small and fixed, one possible organization is to represent a block of samples as a fixed collection of SIMD vectors, with one vector per coordinate. For instance, in dimension three, loading one SIMD block of samples gives \[ \left( [x_0,x_1,\ldots], [y_0,y_1,\ldots], [z_0,z_1,\ldots] \right). \] The coordinates are then not traversed as an ordinary runtime loop: the computation can be expressed directly over this fixed collection of vectors. For example, a squared Euclidean distance to a point $c$ can be written as \[ (x-c_x)^2 + (y-c_y)^2 + (z-c_z)^2, \] where each term is itself a SIMD operation over several samples. This exposes the whole coordinate expression to the compiler and makes low-dimensional kernels compact and specialized.
+
+The cost of this organization is that all coordinates of the current block are live at the same time. In dimension $D$, this already requires $D$ SIMD registers before considering accumulators, masks, constants, candidate parameters, or other temporary values. As $D$ grows, the issue is therefore not the number of arithmetic operations alone, but the size of the live working set. If too many values have to be kept simultaneously, the compiler may run out of available registers and spill intermediate data to memory \cite{intelOptimizationManual}.
+
+An alternative organization is to store the data in dimension-major form and to traverse the coordinate axis progressively, for example \[ \text{samples}[d][n:n+W]. \] At a given point, the computation only needs the currently loaded coordinate vector, or a small block of such vectors, together with the intermediate quantities that are deliberately kept live. This does not imply scalar code: the coordinate traversal may still be specialized, unrolled, tiled, or blocked. The main design question is how much of the coordinate structure should be materialized at once. A fully materialized organization exposes the complete coordinate expression to the compiler, which is often attractive in low dimension. A streamed or blocked organization instead controls the live working set by processing coordinates in smaller pieces; even when the dimension is known, this can be preferable for larger dimensions or for kernels that require many accumulators, parameters, sample blocks, or candidate objects to remain live simultaneously.
+
+In all cases, the memory layout should match the chosen interpretation of SIMD lanes. When lanes represent samples, contiguous memory should provide the same coordinate for consecutive samples. When lanes represent coordinates, contiguous memory should provide consecutive coordinates of the same sample. The static-dimensional and dynamic-dimensional layouts introduced later in the implementation chapter are two concrete points in this broader design space, not universal categories.
+
+\section{Implementation and benchmark methodology}
+
+The implementation work was organized around a common benchmark architecture rather than around a single isolated kernel. Each benchmark case runs one configured C++ path and records algorithm-level metrics. This made it possible to benchmark several clustering algorithms under comparable conditions while still allowing each algorithm to use a specialized SIMD layout internally.
+
+\subsection{Implemented benchmark space}
+
+The repository contains benchmark cases for the four clustering algorithms considered, with multiple implementations for each, and layout conversion. Layout conversion is included because the optimized kernels do not operate directly on arbitrary row-major input arrays, but need data in the corresponding SIMD-oriented layouts described above.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+Case & implemented variants \\
+\midrule
+SoA conversion & static-D, dynamic-D \\
+Lloyd K-Means & static-D, dynamic-D, auto-dispatch \\
+K-Means++ & static-D, dynamic-D \\
+GMM & static-D, dynamic-D; spherical, diagonal, full covariance types \\
+HDBSCAN & static-D: distance, MST, linkage, selection, full pipeline \\
+\bottomrule
+\end{tabular}
+\caption{Implemented benchmark cases.}
+\label{tab:implemented-benchmark-space}
+\end{table}
+
+The Lloyd implementation uses a shared driver for the algorithmic structure: assigning samples, updating centers, repairing empty clusters, and recording metrics. The SIMD-specific work is concentrated in the assignment backends. The static-D and dynamic-D backends correspond to the previously explained strategies. The dynamic-D backend is itself split into two different assignments backends, with different tiling strategies.
+
+The GMM implementation follows the same lanes-as-samples convention as Lloyd, but its E-step requires scores for all components before responsibilities can be normalized. It therefore uses block-local score storage and immediately accumulates the sufficient statistics needed by the M-step. The covariance model is represented as a policy, allowing the same EM structure to support spherical, diagonal, and full covariance cases. The full-covariance path is the most demanding because its scoring and accumulation structure scales with \(D^2\) per component.
+
+The HDBSCAN implementation is a dense Euclidean staged pipeline in double precision. The full path computes the distance matrix, overwrites it with mutual-reachability distances, constructs a minimum spanning tree, converts it into a single-linkage hierarchy, and applies cluster selection. The same pipeline can also be run stage by stage, which was important for validation because the later HDBSCAN stages are less SIMD-regular and are more sensitive to data contracts and tie-breaking behavior than to arithmetic throughput alone. The optimized C/C++ implementation and report of Frey et al. served as a source of candidate optimizations, several of which were reimplemented with EVE and evaluated for our HDBSCAN path \cite{frey2021hdbscan}.
+
+\subsection{Benchmark and validation methodology}
+
+The benchmark methodology is designed to compare equivalent computations rather than merely comparable-looking timings. The C++ implementations and the Python reference paths therefore share materialized input artifacts whenever possible. Synthetic datasets are generated once, stored in a contiguous binary format, and reused by both sides. Lloyd and GMM benchmarks also reuse initialization artifacts: Lloyd starts from shared K-Means++ centers, while GMM derives its initial weights, means, and covariance or precision parameters from the same centers. This keeps the measured Lloyd and GMM runs deterministic for a fixed configuration and avoids attributing initialization differences to the implementation's performance.
+
+Setup work is kept outside the measured region when it is not part of the algorithm being evaluated. In C++, input loading, artifact loading, benchmark-case construction, and output writing are excluded from the timed body. The timed operation is the algorithm call itself, followed by a keep-alive step to prevent dead-code elimination. In Python, the same materialized inputs are loaded before entering the measured callable. For Lloyd and GMM, estimator construction and \code{fit} are included in the measured callable, matching the operation being compared with the C++ fit path. Native thread pools are restricted to one thread so that the results focus on single-thread SIMD effects rather than thread-level parallelism.
+
+C++ timings are collected with \href{https://github.com/martinus/nanobench}{ankerl::nanobench}, and Python timings with \href{https://github.com/psf/pyperf}{pyperf}. Postprocessing discards warmup and calibration values, groups repeated runs, and reports descriptive statistics for total time. For iterative algorithms, time per iteration is obtained by dividing the measured time by the recorded iteration count. Speedup is defined as
+\[
+  \text{speedup} = \frac{\text{Python reference time}}{\text{C++ time}},
+\]
+so values greater than one mean that the C++ implementation is faster under the benchmark contract.
+
+Validation is used before interpreting speedups. Repeated C++ timing processes must agree on recorded algorithm metrics before their timing files are merged. C++ outputs are then compared with Python reference outputs when the comparison is well-defined. Lloyd is checked through final inertia and iteration count. GMM is checked through EM iteration count, lower bound, weights, means, and covariance quantities. HDBSCAN is checked both through selected intermediate stages and through the full dense pipeline. K-Means++ is treated separately as a timing benchmark for the initialization procedure, because the measured Python and C++ paths do not use an identical sampled sequence. Configurations that do not pass the relevant parity checks may still be useful for debugging, but they are not presented as clean reference-equivalent speedups.
+
+The detailed artifact formats, HDBSCAN stage conventions, tolerance rules, and parity scripts are documented in \code{documentation/benchmark\_methodology.md}, \\
+and in \code{documentation/scikit\_parity\_and\_validation.md}.
+
+\subsection{Diagnostics}
+
+The same case-adapter mechanism can run selected configurations normally, through nanobench, through Valgrind's Callgrind with cache simulation enabled \cite{nethercote2007valgrind}, or through a spill-detection path. The spill detector compiles selected cases to assembly and scans for stack spill and reload patterns, but it is only a heuristic.
+The full benchmark pipeline also allows these tools to run after each performance measurements, so we can have a full overview of cache and register behavior.
+
+
+\section{Results and analysis}
+
+The complete tables, plots, raw timing summaries, parity logs, portability measurements, analysis and interpretations are provided in \code{documentation/performance\_results.md}.
+
+\subsection{Performance and speedup scaling by algorithm}
+
+
+
+\subsection{Portability across compilers and machines}
+
+The main benchmark tables above use one reference compiler, machine, and SIMD target. Additional runs were used to check whether the conclusions were stable across compilation and hardware conditions.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{llll}
+\toprule
+Comparison & Tested scope & Summary result & Interpretation \\
+\midrule
+Compiler & \textbf{[TODO: compilers and flags, e.g. GCC vs Clang]} & \textbf{[TODO: summarized value, e.g. speedups stayed within X--Y\% / backend choice changed in Z cases]} & \textbf{[TODO: stable / compiler-sensitive / affected by spills]} \\
+Microarchitecture & \textbf{[TODO: machines / CPUs / SIMD targets]} & \textbf{[TODO: summarized value, e.g. static-D remained best for low D; dynamic-D became preferable earlier/later]} & \textbf{[TODO: stable / threshold moved / bandwidth-limited]} \\
+Auto-dispatch & \textbf{[TODO: Lloyd auto cases]} & \textbf{[TODO: summarized value, e.g. avoided worst backend in X/Y representative cases]} & \textbf{[TODO: useful heuristic / too machine-dependent]} \\
+Parity & \textbf{[TODO: compared configurations]} & \textbf{[TODO: all passed / exceptions listed]} & \textbf{[TODO: timing comparison is valid / excluded where parity failed]} \\
+\bottomrule
+\end{tabular}
+\caption{Summary of compiler and microarchitecture sensitivity. Detailed per-configuration measurements are reported in \code{documentation/performance\_results.md}.}
+\label{tab:portability-summary}
+\end{table}
+
+The portability results should be read qualitatively. A result is stronger when the backend choices and automatic-dispatch conclusions drawn from the main benchmark tables remain stable across compilers, machines, targets, and flags, because this suggests that the speedup comes from the data layout and algorithmic structure rather than from a compiler accident. Conversely, when those conclusions change, the result is still useful but should be interpreted and stated as a portability limitation.
+
+\section{Limitations and future work}
+
+- actually make it into a clustering library with an API, estimators, broad input validation,...
+
+- reproduce more scikit-learn user behavior, more cases (non-denses,...)
+
+- more algorithms, all with parity validation
+
+- more stable perf accross compilers and architecture, and that scales better with it
+
+- better auto dispatch, and on all algorithms
+
+- more optimization in general
+
+- thread-level parallelism separately AND in addition to SIMD
+
+- bench against more reference implementations, and with more real datasets
+
+- have many different versions of the implementations, to attribute performance to specific optimizations (and see the impact of SIMD only);
+
+
+\begin{thebibliography}{99}
+
+\bibitem{pedregosa2011scikit}
+F. Pedregosa et al.
+\newblock Scikit-learn: Machine Learning in Python.
+\newblock \emph{Journal of Machine Learning Research}, 12:2825--2830, 2011.
+\newblock \url{https://jmlr.csail.mit.edu/papers/v12/pedregosa11a.html}.
+
+\bibitem{lloyd1982}
+S. P. Lloyd.
+\newblock Least squares quantization in PCM.
+\newblock \emph{IEEE Transactions on Information Theory}, 28(2):129--137, 1982.
+\newblock \url{https://doi.org/10.1109/TIT.1982.1056489}.
+
+\bibitem{arthur2007kmeanspp}
+D. Arthur and S. Vassilvitskii.
+\newblock k-means++: The advantages of careful seeding.
+\newblock In \emph{Proceedings of the Eighteenth Annual ACM-SIAM Symposium on Discrete Algorithms}, pages 1027--1035. SIAM, 2007.
+\newblock \url{https://theory.stanford.edu/~sergei/papers/kMeansPP-soda.pdf}.
+
+\bibitem{grunau2023greedy}
+C. Grunau, A. A. Özüdoğru, V. Rozhoň, and J. Tětek.
+\newblock A nearly tight analysis of greedy k-means++.
+\newblock In \emph{Proceedings of the 2023 Annual ACM-SIAM Symposium on Discrete Algorithms (SODA)}, pages 1012--1070. SIAM, 2023.
+\newblock \url{https://doi.org/10.1137/1.9781611977554.ch39}.
+
+\bibitem{dempster1977em}
+A. P. Dempster, N. M. Laird, and D. B. Rubin.
+\newblock Maximum likelihood from incomplete data via the EM algorithm.
+\newblock \emph{Journal of the Royal Statistical Society: Series B (Methodological)}, 39(1):1--38, 1977.
+\newblock \url{https://doi.org/10.1111/j.2517-6161.1977.tb01600.x}.
+
+\bibitem{ester1996dbscan}
+M. Ester, H.-P. Kriegel, J. Sander, and X. Xu.
+\newblock A density-based algorithm for discovering clusters in large spatial databases with noise.
+\newblock In \emph{Proceedings of the Second International Conference on Knowledge Discovery and Data Mining}, pages 226--231. AAAI Press, 1996.
+\newblock \url{https://doi.org/10.5555/3001460.3001507}.
+
+\bibitem{campello2013hdbscan}
+R. J. G. B. Campello, D. Moulavi, and J. Sander.
+\newblock Density-based clustering based on hierarchical density estimates.
+\newblock In \emph{Advances in Knowledge Discovery and Data Mining}, volume 7819 of \emph{Lecture Notes in Computer Science}, pages 160--172. Springer, 2013.
+\newblock \url{https://doi.org/10.1007/978-3-642-37456-2_14}.
+
+\bibitem{mcinnes2017hdbscan}
+L. McInnes, J. Healy, and S. Astels.
+\newblock hdbscan: Hierarchical density based clustering.
+\newblock \emph{Journal of Open Source Software}, 2(11):205, 2017.
+\newblock \url{https://doi.org/10.21105/joss.00205}.
+
+\bibitem{intelIntrinsics}
+Intel Corporation.
+\newblock Intel Intrinsics Guide, version 3.6.9.
+\newblock 2024.
+\newblock \url{https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html}.
+
+\bibitem{penuchot2018}
+J. Pénuchot, J. Falcou, and A. Khabou.
+\newblock Modern generative programming for optimizing small matrix-vector multiplication.
+\newblock In \emph{2018 International Conference on High Performance Computing \& Simulation (HPCS)}, pages 508--514, 2018.
+\newblock \url{https://doi.org/10.1109/HPCS.2018.00086}.
+
+\bibitem{jubertie2018}
+S. Jubertie, I. Masliah, and J. Falcou.
+\newblock Data layout and SIMD abstraction layers: decoupling interfaces from implementations.
+\newblock In \emph{2018 International Conference on High Performance Computing \& Simulation (HPCS)}, pages 531--538, 2018.
+\newblock \url{https://doi.org/10.1109/HPCS.2018.00089}.
+
+\bibitem{otsuka2021}
+T. Otsuka and N. Fukushima.
+\newblock Vectorized implementation of K-means.
+\newblock In \emph{International Workshop on Advanced Imaging Technology (IWAIT) 2021}, Proceedings of SPIE, volume 11766, article 1176631, 2021.
+\newblock \url{https://doi.org/10.1117/12.2590842}.
+
+\bibitem{intelOptimizationManual}
+Intel Corporation.
+\newblock \emph{Intel 64 and IA-32 Architectures Optimization Reference Manual}, Volume 1, Order No. 248966, revision 049.
+\newblock \url{https://cdrdv2-public.intel.com/814198/248966-Optimization-Reference-Manual-V1-049.pdf}.
+
+\bibitem{frey2021hdbscan}
+M. Frey, B. Hubmann, M. Tschechne, and R. Worreby.
+\newblock Hierarchical density based clustering.
+\newblock Project report, Advanced Systems Lab, ETH Zurich, 2021.
+\newblock \url{https://github.com/MartinTschechne/ASL-hdbscan/blob/master/33_report.pdf}.
+
+\bibitem{nethercote2007valgrind}
+N. Nethercote and J. Seward.
+\newblock Valgrind: a framework for heavyweight dynamic binary
+instrumentation.
+\newblock In \emph{Proceedings of the 28th ACM SIGPLAN Conference
+on Programming Language Design and Implementation (PLDI)}, pages
+89--100, 2007.
+\newblock \url{https://doi.org/10.1145/1250734.1250746}.
+
+\end{thebibliography}
+
+\end{document}

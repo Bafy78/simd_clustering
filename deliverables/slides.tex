@@ -1,0 +1,138 @@
+\documentclass [xcolor=x11names,t] {beamer} 
+
+\input{Cmd}
+
+\title[SIMD Clustering with EVE]{SIMD Clustering Algorithms with EVE in C++ \\ Internship Defense}
+\institute[]{LISN -- ParSys, \\Université Paris-Saclay}
+\titlegraphic{
+  \includegraphics[height=1.2cm]{logo_sciences_orsay.jpg}
+  \includegraphics[height=1.1cm]{logo_LISN}
+  }
+\author[Rémi Millerat-{}-Gallot]{
+	Rémi MILLERAT-{}-GALLOT
+	\\Supervised by Joël Falcou}
+\date{15 July 2026 \\ Internship from 20 April 2026 to 17 July 2026}
+
+
+\begin{document}
+\begin{frame}
+    \maketitle
+    \begin{tikzpicture}[remember picture,overlay]
+        \node at
+        ([xshift=-4.25cm,yshift=0cm]current page.center)
+        {\clustervisualization};
+        \node at
+        ([xshift=4.5cm,yshift=0cm]current page.center)
+        {\scalebox{0.9}{\simdvisualization}};
+    \end{tikzpicture}
+\end{frame}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Clustering Algorithms}
+
+    Comparison of the different clustering algorithms, in a table + images of their result and specificities (outliers, probabilities, complexity,...)? Include stuff that’s in the initial survey. Why were some algorithms “excluded”/deemed as not good targets?
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{The implementation was only the tip of the project}
+
+    “At first, I thought I was going to spend most of my time implementing and optimizing the algorithms in C++. But I soon realized that to be able to draw any conclusions about how good they were, I had to spend a lot of time creating a whole benchmarking pipeline, and not just run the programs a few times…” -> Iceberg. So this includes the fact that the initial brief was short, but also that it limited how many algorithms I could work on, and how extensively I could reproduce them (no sparse data, not all the api we could want,...)
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{A benchmark result is a distribution, not a number}
+
+    => repeated process and workers => clustered bootstrapping for CI, with example of its use with the runs on rocket lake that got disturbed
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Complete map of the benchmark pipeline}
+
+    A complete map of my final benchmark pipeline. “The benchmark infrastructure is itself a substantial deliverable”.
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{SIMD and data layout}
+
+    SIMD and data layout: static-D, dynamic-d, and blocked dynamic-D (with maybe 2 examples), maybe over 2 slides, mention how EVE algorithms are not used in dynamic-d
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Static-D vs dynamic-D results}
+
+    heatmaps, with register spills interpretation (spill detector)
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Where SIMD help or doesn’t help}
+
+    cache limitations (Lloyd) (show cachegrind results) equalizes, or… not! (GMM). But need to justify why we could fuse gmm here, and why scikit isn’t doing it.
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Kernel speedups vs full algorithm speedups}
+
+    show big speedups in simd-accelerated stage in hdbscan, but less in not simd accelerated stages (if supported by results) ?
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Fixed cost initialization graph and explanation}
+
+    
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Cross compiler and architecture testing}
+
+    what we did test and should have tested, and what it tells us.
+    WSL2 znver3 vs WSL2 znver5 with macro vs without macro vs compiled with -march=znver3. Then mention rocket lake.
+    And clang, and how the inline threshold varies results by a lot
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Algebraic vs numerical stuff}
+
+    gmm full covariance raw moments + fallback thing ?
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Optimization that failed}
+
+    triangular storage from ASL. They reported that they did it, but I couldn’t find it in the code, so I tried it, and it didn’t work for data alignment reasons.
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Conclusion}
+
+    Limitations? Future work? What could I have done differently? Scalar version to test SIMD only for ex. Conclusion.
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\end{document}

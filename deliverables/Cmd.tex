@@ -1,0 +1,344 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                %
+%                                                                %
+%                       PACKAGE                                  %
+%                                                                %
+%                                                                %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%  Basique :
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel} 
+\usepackage{hyperref}                           %référence
+%\usepackage[margin=1,25cm]{geometry}           %Géométrie
+
+% Mathématiques :
+\usepackage{cancel}                             %rayer 
+\usepackage{amsthm,amsmath,amsfonts,amssymb,dsfont}    %maths et joli....
+\usepackage{stmaryrd}                           %crochet entre autre
+
+% Mise en forme : 
+
+\usepackage[x11names]{xcolor}                   % inclus les couleurs
+\usepackage{enumitem}                           % Énumération avec label
+\usepackage{multicol}                           % Colonne
+\usepackage{graphicx}                           % Pour le bigcdot notamment
+\usepackage{tcolorbox}                          % Box
+\setlength{\fboxrule}{3pt}
+\setlength{\fboxsep}{1em}
+
+
+
+
+% Figure et Image :
+
+\usepackage{wrapfig}                            %pour inclure des figures dans le texte  
+
+%Lettres grecques :
+\usepackage{savesym}
+\usepackage{amsmath, amssymb}
+\savesymbol{iint}
+\usepackage{txfonts,, newtxmath}
+\restoresymbol{TXF}{iint}
+%\usepackage{mathptmx} %uses times fontv
+
+%Beamer
+\usepackage{booktabs, comment} 
+\usepackage[absolute, overlay]{textpos}
+\usepackage{pgfpages}
+\usepackage[font=footnotesize]{caption}
+\useoutertheme{infolines} 
+\usepackage{csquotes}
+\usepackage{textpos}
+\usepackage{tikz}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                %
+%                                                                %
+%                       Théorème                                 %
+%                                                                %
+%                                                                %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newtheorem*{remark}{Remark}
+
+\theoremstyle{plain}% default
+\newtheorem{Th}{Théorème}[section]
+\newtheorem{Lem}[Th]{Lemme}
+\newtheorem{Prop}[Th]{Proposition}
+\newtheorem*{Prop*}{Proposition}
+\newtheorem*{Cor}{Corollaire}
+\newtheorem*{Obj}{Objection}
+
+\theoremstyle{definition}
+\newtheorem{Df}{Définition}[section]
+\newtheorem*{Df*}{Définition}
+\newtheorem{Dfs}[Df]{Définitions}%[section]
+\newtheorem{conj}{conjecture}[section]
+\newtheorem{Ex}{Exemple}[section]
+\newtheorem*{Ex*}{Exemple}
+\newtheorem{Exs}[Ex]{Exemples}%[section]
+
+\theoremstyle{remark}
+\newtheorem*{NB}{Remarque}
+\newtheorem*{NBs}{Remarques}
+\newtheorem*{Gen}{Généralisation}
+\newtheorem*{nota}{Notation}
+\newtheorem*{Rap}{Rappel}
+
+
+\renewcommand{\proofname}{\textsc{Preuve}}
+
+\newtheoremstyle{exostyle}{\topsep}{\topsep}{}{}{\bfseries}{.}{ }{\thmname{#1}\thmnumber{ #2}\thmnote{. \normalfont{\textit{#3}} }}
+
+\theoremstyle{exostyle}
+\newtheorem{exercice}{Exercice} 
+
+\newtheoremstyle{exostyle}{\topsep}{\topsep}{}{}{\bfseries}{.}{ }{\thmname{#1}\thmnumber{ #2}\thmnote{. \normalfont{\textit{#3}}}}
+
+\theoremstyle{exostyle}
+\newtheorem*{preuve}{Preuve} 
+
+\newenvironment{questions}{\begin{enumerate}}{\end{enumerate}}
+\newenvironment{sousquestions}{\begin{enumerate}}{\end{enumerate}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                %
+%                                                                %
+%                       Code                                     %
+%                                                                %
+%                                                                %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\usepackage{color}
+\usepackage{listings}
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{mygray}{rgb}{0.5,0.5,0.5}
+\definecolor{mymauve}{rgb}{0.58,0,0.82}
+\definecolor{myorange}{rgb}{0.855,0.576,0.027}
+\lstset{
+language=Octave,
+frame=single,   
+morecomment = [l][\itshape\color{blue}]{\%},
+keywordstyle=\color{blue},
+commentstyle=\color{mygreen},
+breakatwhitespace=false,         
+breaklines=true,  
+numbers=left,
+numbersep=5pt,
+numberstyle=\tiny\color{mygray}, 
+showstringspaces=false,
+showtabs=false,                  
+tabsize=2,
+stringstyle=\color{myorange},
+title=\lstname,
+literate=
+{+}{{{\color{red}+}}}1
+{-}{{{\color{red}-}}}1
+{*}{{{\color{red}*}}}1
+{,}{{{\color{red},}}}1
+{=}{{{\color{red}=}}}1
+{(}{{{\color{black}(}}}1
+{)}{{{\color{red})}}}1
+{;}{{{\color{red};}}}1
+{:}{{{\color{red}:}}}1
+{[}{{{\color{red}[}}}1
+{]}{{{\color{red}]}}}1
+{>}{{{\color{red}>}}}1
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                %
+%                                                                %
+%                       Commandes                                %
+%                                                                %
+%                                                                %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\D}{\mathcal D}
+\newcommand{\Cl}{\mathcal C}
+\newcommand{\Sm}{S^m_{0,1}}
+\newcommand{\et}{\text{ ~et~ }}
+\newcommand{\ou}{\text{ ~ou~ }}
+\newcommand{\espace}{\vspace*{1cm}}
+\everymath{\displaystyle}
+\renewcommand{\Im}{\text{Im}}
+\renewcommand{\Re}{\text{Re}}
+\makeatletter
+\newcommand*\bigcdot{\mathpalette\bigcdot@{.4}}
+\newcommand*\bigcdot@[2]{\mathbin{\vcenter{\hbox{\scalebox{#2}{$\m@th#1\bullet$}}}}}
+\makeatother
+
+\newcommand{\framewithtitle}[1]{
+\begin{frame}[c]{  }
+\Huge{
+\begin{center}
+    \begin{tcolorbox}[arc=1ex, colback=myuniversity, colframe=myuniversity, left=3pt, right=3pt, top=3pt, bottom=2pt]
+    \emph{
+    \espace
+    \begin{center}
+        \textcolor{white}{#1}
+    \end{center}
+    \espace}
+    \end{tcolorbox}
+\end{center}}
+\end{frame}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                %
+%                                                                %
+%                       Beamer                                   %
+%                                                                %
+%                                                                %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+%% lien vers celui de janvier : https://fr.overleaf.com/8125717386bqbmvyhtchbt
+
+\definecolor{whitetxt}{RGB}{255,255,255}
+\definecolor{bluewhite}{RGB}{172,124,148}
+
+\setbeamercolor{title in head/foot}{bg=bluewhite, fg=whitetxt}
+\setbeamercolor{author in head/foot}{bg=myuniversity}
+
+\usetheme{Madrid}
+\definecolor{myuniversity}{RGB}{116,28,76}
+\definecolor{lisnMain}{HTML}{091F3D}
+\definecolor{lisnSecondary}{HTML}{F16222}
+\definecolor{lisnGold}{HTML}{FAA719}
+\definecolor{lisnTeal}{HTML}{0487A5}
+\usecolortheme[named=myuniversity]{structure}
+\usepackage{tikz}
+\setbeamertemplate{footline}{%
+  \leavevmode%
+  \hbox{%
+    \begin{beamercolorbox}[wd=.333333\paperwidth,ht=2.25ex,dp=1ex,center]{author in head/foot}%
+      \usebeamerfont{author in head/foot}\insertshortauthor
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.333333\paperwidth,ht=2.25ex,dp=1ex,center]{title in head/foot}%
+      \usebeamerfont{title in head/foot}\insertshorttitle
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.333333\paperwidth,ht=2.25ex,dp=1ex,center]{date in head/foot}%
+      \usebeamerfont{date in head/foot}%
+      \insertframenumber/\inserttotalframenumber
+    \end{beamercolorbox}%
+  }%
+}
+
+
+%\addtobeamertemplate{navigation symbols}{}{%
+%    \usebeamerfont{footline}%
+%    \usebeamercolor[fg]{footline}%
+%    \hspace{1em}%
+%    \insertframenumber/\inserttotalframenumber
+%}
+
+\logo{\includegraphics[height=1.0cm]{petitlogo.png}~%
+}
+
+\newcommand{\simdvisualization}{%
+\begin{tikzpicture}[
+    x=0.75cm,
+    y=0.75cm,
+    inputlane/.style={
+        rounded corners=2pt,
+        draw=myuniversity,
+        thick,
+        fill=white,
+        minimum width=0.62cm,
+        minimum height=0.52cm,
+        font=\small
+    },
+    resultlane/.style={
+        rounded corners=2pt,
+        draw=myuniversity,
+        thick,
+        fill=myuniversity,
+        text=white,
+        minimum width=0.62cm,
+        minimum height=0.52cm,
+        font=\small\bfseries
+    },
+    vectorgroup/.style={
+        rounded corners=3pt,
+        draw=myuniversity,
+        line width=1.1pt,
+        fill=myuniversity!7
+    }
+]
+    \draw[vectorgroup] (-2.15,2.76) rectangle (2.15,1.74);
+    \draw[vectorgroup] (-2.15,1.36) rectangle (2.15,0.34);
+    \draw[vectorgroup] (-2.15,-0.04) rectangle (2.15,-1.06);
+    \foreach \x/\a/\b/\c in {
+        -1.5/2/3/5,
+        -0.5/5/1/6,
+         0.5/1/4/5,
+         1.5/7/2/9
+    } {
+        \node[inputlane]  at (\x,2.25) {\a};
+        \node[inputlane]  at (\x,0.85) {\b};
+        \node[resultlane] at (\x,-0.55) {\c};
+    }
+    \node[
+        circle,
+        draw=myuniversity,
+        fill=myuniversity,
+        text=white,
+        line width=1pt,
+        inner sep=1.5pt,
+        font=\small\bfseries
+    ] at (0,1.55) {$+$};
+    \draw[->, myuniversity, line width=1.1pt] (0,0.28) -- (0,0);
+    \node[text=myuniversity, font=\scriptsize\bfseries] at (0,-1.35)
+    {one SIMD instruction};
+\end{tikzpicture}%
+}
+
+\newcommand{\clustervisualization}{%
+\begin{tikzpicture}[x=0.86cm,y=0.86cm]
+
+    % Large navy cluster — 20 points
+    \foreach \x/\y in {
+         0.13/0.01, -1.05/-0.24, -1.13/0.34, -0.31/-0.15,
+        -0.05/-0.10,  0.28/-0.19, -0.30/0.30,  0.10/-0.37,
+         0.41/0.03, -0.36/0.08, -0.45/0.57, -0.13/0.41,
+        -0.40/0.00, -0.59/-0.53, -0.37/0.30, -0.39/0.21,
+        -0.17/0.37, -1.24/-0.17, -0.10/0.23, -0.20/0.39
+    } {
+        \fill[lisnMain] (\x,\y) circle[radius=1.65pt];
+    }
+
+    % Medium orange cluster — 10 points
+    \foreach \x/\y in {
+        1.50/0.24, 1.29/0.06, 1.67/0.69, 1.44/0.10,
+        1.31/0.23, 1.06/0.11, 1.67/-0.20, 1.64/0.72,
+        0.99/0.19, 1.26/0.20
+    } {
+        \fill[lisnSecondary] (\x,\y) circle[radius=1.65pt];
+    }
+
+    % Small gold cluster — 6 points
+    \foreach \x/\y in {
+        -1.90/1.04, -1.62/1.06, -2.22/0.89,
+        -1.88/1.01, -2.12/0.93, -1.30/0.79
+    } {
+        \fill[lisnGold] (\x,\y) circle[radius=1.65pt];
+    }
+
+    % Small teal cluster — 4 points
+    \foreach \x/\y in {
+        0.51/-0.81, 0.25/-0.88, 0.23/-1.07, 0.22/-0.64
+    } {
+        \fill[lisnTeal] (\x,\y) circle[radius=1.65pt];
+    }
+
+\end{tikzpicture}%
+}
