@@ -9,7 +9,9 @@ import matplotlib.ticker as mtick
 import numpy as np
 import pandas as pd
 
+from benchmark_metadata import PHASE_DISPLAY_NAMES, PRIMARY_REFERENCE_KEY_BY_PHASE
 from benchmark_reporting.constants import *
+from benchmark_reporting.configuration_rectangles import compact_cartesian_rectangles
 from benchmark_reporting.io import (
     load_benchmark_data,
     load_benchmark_summary,
@@ -22,6 +24,7 @@ from benchmark_reporting.io import (
     load_spill_detection_summary,
 )
 from benchmark_reporting.plotting import plot_clustered_heatmap_grid
+from benchmark_reporting.transforms import filter_primary_references
 
 DEFAULT_SELECTED_REFERENCE_KEY = "sklearn_brute"
 DEFAULT_REFERENCE_FALLBACK_KEY = "reference"
@@ -346,6 +349,85 @@ def filter_reference(df: pd.DataFrame, reference_key: str) -> pd.DataFrame:
     return df[(keys == "") | (keys == reference_key)].copy()
 
 
+def _available_reference_keys_for_phase(
+    df: pd.DataFrame,
+    phase_display_name: str,
+) -> set[str]:
+    if df.empty or COL_PHASE not in df.columns:
+        return set()
+    phase_rows = df[df[COL_PHASE].astype("object") == phase_display_name]
+    return available_reference_keys(phase_rows)
+
+
+def resolve_reference_keys_by_phase(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    selected_key: str = DEFAULT_SELECTED_REFERENCE_KEY,
+    fallback_key: str = DEFAULT_REFERENCE_FALLBACK_KEY,
+) -> dict[str, str]:
+    """Resolve a shared reference independently for each benchmark phase.
+
+    ``selected_key`` is the preferred HDBSCAN reference. Other phases use
+    their primary reference from :mod:`benchmark_metadata`. The fallback is
+    considered within each phase rather than across the union of all phases.
+    """
+    resolved: dict[str, str] = {}
+
+    for phase_key, primary_key in PRIMARY_REFERENCE_KEY_BY_PHASE.items():
+        phase_display_name = PHASE_DISPLAY_NAMES[phase_key]
+        left_keys = _available_reference_keys_for_phase(left, phase_display_name)
+        right_keys = _available_reference_keys_for_phase(right, phase_display_name)
+        common_keys = left_keys & right_keys
+
+        requested_key = selected_key if phase_key == "hdbscan" else primary_key
+        candidates = [requested_key, fallback_key, primary_key]
+        selected = next((key for key in candidates if key in common_keys), None)
+        if selected is None:
+            selected = sorted(common_keys)[0] if common_keys else requested_key
+        resolved[phase_key] = selected
+
+    return resolved
+
+
+def _reference_resolution_table(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    *,
+    selected_key: str,
+    fallback_key: str,
+) -> pd.DataFrame:
+    resolved = resolve_reference_keys_by_phase(
+        left,
+        right,
+        selected_key=selected_key,
+        fallback_key=fallback_key,
+    )
+    rows = []
+    for phase_key, selected in resolved.items():
+        phase_display_name = PHASE_DISPLAY_NAMES[phase_key]
+        requested = (
+            selected_key
+            if phase_key == "hdbscan"
+            else PRIMARY_REFERENCE_KEY_BY_PHASE[phase_key]
+        )
+        rows.append(
+            {
+                COL_PHASE: phase_display_name,
+                COL_REQUESTED_REFERENCE_KEY: requested,
+                COL_FALLBACK_REFERENCE_KEY: fallback_key,
+                COL_SELECTED_REFERENCE_KEY: selected,
+                f"{COL_BASELINE} Reference Keys": _format_value_list(
+                    sorted(_available_reference_keys_for_phase(left, phase_display_name))
+                ),
+                f"{COL_CANDIDATE} Reference Keys": _format_value_list(
+                    sorted(_available_reference_keys_for_phase(right, phase_display_name))
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def add_parity_pressure(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if out.empty:
@@ -589,15 +671,21 @@ def compare_summary_compatibility(
 ) -> dict[str, pd.DataFrame]:
     """Build compact compatibility/context tables for two summaries."""
 
-    effective_reference_key = resolve_reference_key(
+    reference_keys_by_phase = resolve_reference_keys_by_phase(
         baseline.speedups,
         candidate.speedups,
         selected_key=selected_reference_key,
         fallback_key=fallback_reference_key,
     )
 
-    baseline_speedups = filter_reference(baseline.speedups, effective_reference_key)
-    candidate_speedups = filter_reference(candidate.speedups, effective_reference_key)
+    baseline_speedups = filter_primary_references(
+        baseline.speedups,
+        overrides=reference_keys_by_phase,
+    )
+    candidate_speedups = filter_primary_references(
+        candidate.speedups,
+        overrides=reference_keys_by_phase,
+    )
     speedup_points = compare_point_sets(
         baseline_speedups,
         candidate_speedups,
@@ -614,8 +702,8 @@ def compare_summary_compatibility(
         SPILL_MATCH_COLS,
     )
     parity_points = compare_point_sets(
-        filter_reference(baseline.parity, effective_reference_key),
-        filter_reference(candidate.parity, effective_reference_key),
+        filter_primary_references(baseline.parity, overrides=reference_keys_by_phase),
+        filter_primary_references(candidate.parity, overrides=reference_keys_by_phase),
         PARITY_MATCH_COLS,
     )
 
@@ -630,20 +718,11 @@ def compare_summary_compatibility(
 
     return {
         "overview": _overview_table(baseline, candidate),
-        "reference_resolution": pd.DataFrame(
-            [
-                {
-                    COL_REQUESTED_REFERENCE_KEY: selected_reference_key,
-                    COL_FALLBACK_REFERENCE_KEY: fallback_reference_key,
-                    COL_SELECTED_REFERENCE_KEY: effective_reference_key,
-                    f"{COL_BASELINE} Reference Keys": _format_value_list(
-                        sorted(available_reference_keys(baseline.speedups))
-                    ),
-                    f"{COL_CANDIDATE} Reference Keys": _format_value_list(
-                        sorted(available_reference_keys(candidate.speedups))
-                    ),
-                }
-            ]
+        "reference_resolution": _reference_resolution_table(
+            baseline.speedups,
+            candidate.speedups,
+            selected_key=selected_reference_key,
+            fallback_key=fallback_reference_key,
         ),
         "run_context": _run_context_table(baseline, candidate),
         "point_counts": point_counts,
@@ -708,14 +787,20 @@ def make_speedup_comparison(
 ) -> pd.DataFrame:
     """Compare Python/C++ speedups for exact matched benchmark points."""
 
-    effective_reference_key = resolve_reference_key(
+    reference_keys_by_phase = resolve_reference_keys_by_phase(
         baseline_speedups,
         candidate_speedups,
         selected_key=selected_reference_key,
         fallback_key=fallback_reference_key,
     )
-    baseline = filter_reference(baseline_speedups, effective_reference_key)
-    candidate = filter_reference(candidate_speedups, effective_reference_key)
+    baseline = filter_primary_references(
+        baseline_speedups,
+        overrides=reference_keys_by_phase,
+    )
+    candidate = filter_primary_references(
+        candidate_speedups,
+        overrides=reference_keys_by_phase,
+    )
 
     if baseline.empty or candidate.empty:
         return pd.DataFrame(columns=SPEEDUP_MATCH_COLS)
@@ -1135,7 +1220,7 @@ def make_parity_comparison(
     if baseline_parity.empty or candidate_parity.empty:
         return pd.DataFrame(columns=PARITY_MATCH_COLS)
 
-    effective_reference_key = resolve_reference_key(
+    reference_keys_by_phase = resolve_reference_keys_by_phase(
         baseline_parity,
         candidate_parity,
         selected_key=selected_reference_key,
@@ -1143,13 +1228,19 @@ def make_parity_comparison(
     )
     baseline = add_parity_pressure(
         _prepare_for_join(
-            filter_reference(baseline_parity, effective_reference_key),
+            filter_primary_references(
+                baseline_parity,
+                overrides=reference_keys_by_phase,
+            ),
             PARITY_MATCH_COLS,
         )
     )
     candidate = add_parity_pressure(
         _prepare_for_join(
-            filter_reference(candidate_parity, effective_reference_key),
+            filter_primary_references(
+                candidate_parity,
+                overrides=reference_keys_by_phase,
+            ),
             PARITY_MATCH_COLS,
         )
     )
@@ -1745,16 +1836,28 @@ def make_all_missing_hierarchy_summary(
 ) -> pd.DataFrame:
     """Build compact missing-point summaries for notebook compatibility output."""
 
-    effective_reference_key = resolve_reference_key(
+    reference_keys_by_phase = resolve_reference_keys_by_phase(
         baseline.speedups,
         candidate.speedups,
         selected_key=selected_reference_key,
         fallback_key=fallback_reference_key,
     )
-    baseline_speedups = filter_reference(baseline.speedups, effective_reference_key)
-    candidate_speedups = filter_reference(candidate.speedups, effective_reference_key)
-    baseline_parity = filter_reference(baseline.parity, effective_reference_key)
-    candidate_parity = filter_reference(candidate.parity, effective_reference_key)
+    baseline_speedups = filter_primary_references(
+        baseline.speedups,
+        overrides=reference_keys_by_phase,
+    )
+    candidate_speedups = filter_primary_references(
+        candidate.speedups,
+        overrides=reference_keys_by_phase,
+    )
+    baseline_parity = filter_primary_references(
+        baseline.parity,
+        overrides=reference_keys_by_phase,
+    )
+    candidate_parity = filter_primary_references(
+        candidate.parity,
+        overrides=reference_keys_by_phase,
+    )
 
     speedup_summary = make_missing_hierarchy_summary(
         baseline_speedups,
@@ -1914,48 +2017,31 @@ def _cartesian_missing_rows(
     if df.empty:
         return []
 
-    if _is_cartesian_product(df, residual_cols):
-        return [
-            _missing_summary_row(
-                point_set=point_set,
-                direction=direction,
-                key_cols=key_cols,
-                path_cols=path_cols,
-                path_values=path_values,
-                group_df=df,
-                missing_level=_missing_pattern_level(df, residual_cols),
-                missing_depth=len(path_cols),
-                missing_pattern="complete cartesian product",
-            )
-        ]
-
-    split_col = _choose_cartesian_split_column(df, residual_cols)
-    if split_col is None:
-        return [
-            _missing_summary_row(
-                point_set=point_set,
-                direction=direction,
-                key_cols=key_cols,
-                path_cols=path_cols,
-                path_values=path_values,
-                group_df=df,
-                missing_level="Grid pattern",
-                missing_depth=len(path_cols),
-                missing_pattern="partial grid slice",
-            )
-        ]
-
     rows: list[dict] = []
-    remaining_cols = [col for col in residual_cols if col != split_col]
-    for values, sub_df in _partition_by_projection(df, split_col, remaining_cols):
-        rows.extend(
-            _cartesian_missing_rows(
+    for rectangle in compact_cartesian_rectangles(df, residual_cols):
+        rectangle_path_cols = path_cols + [col for col, _ in rectangle.path]
+        rectangle_path_values = path_values + tuple(
+            value for _, value in rectangle.path
+        )
+        missing_pattern = (
+            "complete cartesian product"
+            if rectangle.is_complete
+            else "partial grid slice"
+        )
+        rows.append(
+            _missing_summary_row(
                 point_set=point_set,
                 direction=direction,
-                df=sub_df,
                 key_cols=key_cols,
-                path_cols=path_cols + [split_col],
-                path_values=path_values + (_compact_path_value(values),),
+                path_cols=rectangle_path_cols,
+                path_values=rectangle_path_values,
+                group_df=rectangle.frame,
+                missing_level=_missing_pattern_level(
+                    rectangle.frame,
+                    list(rectangle.residual_cols),
+                ),
+                missing_depth=len(rectangle_path_cols),
+                missing_pattern=missing_pattern,
             )
         )
     return rows
@@ -2011,136 +2097,6 @@ def _grid_context_cols(key_cols: list[str], grid_start: int) -> list[str]:
     if COL_PHASE in prefix:
         return [COL_PHASE]
     return prefix[:1]
-
-
-def _is_cartesian_product(df: pd.DataFrame, cols: list[str]) -> bool:
-    if df.empty:
-        return False
-    if not cols:
-        return len(df) <= 1
-
-    distinct = _distinct_keys(df, cols)
-    product = 1
-    for col in cols:
-        unique_count = len(_ordered_unique_values(distinct[col]))
-        if unique_count == 0:
-            return False
-        product *= unique_count
-        if product > len(distinct):
-            return False
-    return product == len(distinct)
-
-
-def _choose_cartesian_split_column(df: pd.DataFrame, residual_cols: list[str]) -> str | None:
-    candidates = []
-    cost_memo: dict[tuple, int] = {}
-
-    for index, col in enumerate(residual_cols):
-        values = _ordered_unique_values(df[col])
-        if len(values) <= 1:
-            continue
-
-        remaining_cols = [candidate_col for candidate_col in residual_cols if candidate_col != col]
-        partitions = _partition_by_projection(df, col, remaining_cols)
-        if len(partitions) <= 1:
-            continue
-
-        cost = sum(
-            _cartesian_cover_cost(partition_df, remaining_cols, memo=cost_memo)
-            for _, partition_df in partitions
-        )
-
-        candidates.append((cost, len(partitions), _cartesian_split_priority(col), index, col))
-
-    if not candidates:
-        return None
-    return min(candidates)[-1]
-
-
-def _cartesian_cover_cost(
-    df: pd.DataFrame,
-    residual_cols: list[str],
-    *,
-    memo: dict[tuple, int],
-) -> int:
-    distinct = _distinct_keys(df, residual_cols)
-    key = (
-        tuple(residual_cols),
-        tuple(sorted((_row_tuple(row, residual_cols) for _, row in distinct.iterrows()), key=repr)),
-    )
-    if key in memo:
-        return memo[key]
-
-    if distinct.empty or _is_cartesian_product(distinct, residual_cols):
-        memo[key] = 1
-        return 1
-
-    costs = []
-    for col in residual_cols:
-        if len(_ordered_unique_values(distinct[col])) <= 1:
-            continue
-        remaining_cols = [candidate_col for candidate_col in residual_cols if candidate_col != col]
-        partitions = _partition_by_projection(distinct, col, remaining_cols)
-        if len(partitions) <= 1:
-            continue
-        costs.append(
-            sum(
-                _cartesian_cover_cost(partition_df, remaining_cols, memo=memo)
-                for _, partition_df in partitions
-            )
-        )
-
-    cost = min(costs) if costs else 1
-    memo[key] = cost
-    return cost
-
-
-def _partition_by_projection(
-    df: pd.DataFrame,
-    split_col: str,
-    remaining_cols: list[str],
-) -> list[tuple[tuple, pd.DataFrame]]:
-    buckets: dict[frozenset, list[object]] = {}
-    first_value_order: dict[frozenset, int] = {}
-
-    normalized_split = df[split_col].map(_normalize_key_value)
-    ordered_values = _ordered_unique_values(normalized_split)
-
-    for order, value in enumerate(ordered_values):
-        value_df = df[normalized_split == value]
-        projection = frozenset(
-            _row_tuple(row, remaining_cols)
-            for _, row in _distinct_keys(value_df, remaining_cols).iterrows()
-        )
-        buckets.setdefault(projection, []).append(value)
-        first_value_order.setdefault(projection, order)
-
-    partitions = []
-    for projection in sorted(buckets, key=lambda key: first_value_order[key]):
-        values = tuple(buckets[projection])
-        value_set = set(values)
-        sub_df = df[normalized_split.isin(value_set)].copy()
-        partitions.append((values, sub_df))
-    return partitions
-
-
-def _compact_path_value(values: tuple):
-    if len(values) == 1:
-        return values[0]
-    return values
-
-
-def _cartesian_split_priority(col: str) -> int:
-    grid_priority = {
-        COL_SAMPLES: 0,
-        COL_CLUSTERS: 1,
-        COL_DIMENSIONS: 2,
-    }
-    if col in grid_priority:
-        return grid_priority[col]
-    if col in CONFIG_COLS:
-        return 10
-    return 20
 
 
 def _missing_pattern_level(df: pd.DataFrame, residual_cols: list[str]) -> str:

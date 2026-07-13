@@ -133,14 +133,6 @@ def default_config() -> BenchmarkConfig:
         ),
         real_datasets=(
             RealDatasetConfig(
-                key="letter",
-                source="openml",
-                data_id=6,
-                D=17,
-                N=20_000,
-                K=26,
-            ),
-            RealDatasetConfig(
                 key="mnist",
                 source="openml",
                 data_id=554,
@@ -196,6 +188,15 @@ def default_config() -> BenchmarkConfig:
                     "each component has fewer samples than dimensions (`N / K <= D`), "
                     "producing rank-deficient covariance matrices that are only marginally "
                     "regularized and can fail positive-definiteness checks."
+                ),
+            ),
+            BenchmarkExclusionRule(
+                phase_keys=("gmm",),
+                dimensions=(90,),
+                samples=(4_096,),
+                clusters=(25,),
+                reason=(
+                    "Somehow this one is ill-conditioned in full covariance too"
                 ),
             ),
             BenchmarkExclusionRule(

@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 from collections.abc import Callable
@@ -169,11 +170,25 @@ def style_facet_grid(
     title_y=1.02,
     x_log=False,
     sample_x_axis=False,
+    sample_ticks=None,
     titles_inside=False,
     grid_axis=None,
     integer_x_axis=False,
 ):
     """Apply common styling to a Seaborn FacetGrid or relplot result."""
+    if sample_ticks is not None and not sample_x_axis:
+        raise ValueError("sample_ticks requires sample_x_axis=True")
+
+    fixed_sample_ticks = None
+    if sample_ticks is not None:
+        fixed_sample_ticks = sorted(
+            {
+                float(value)
+                for value in sample_ticks
+                if pd.notna(value) and np.isfinite(float(value))
+            }
+        )
+
     if x_log:
         g.set(xscale="log")
 
@@ -197,6 +212,9 @@ def style_facet_grid(
             ax.xaxis.set_major_formatter(
                 mtick.FuncFormatter(lambda x, _: format_abbrev(x))
             )
+            if fixed_sample_ticks is not None:
+                ax.xaxis.set_major_locator(mtick.FixedLocator(fixed_sample_ticks))
+                ax.xaxis.set_minor_formatter(mtick.NullFormatter())
 
         if grid_axis is not None:
             ax.grid(axis=grid_axis, linestyle="--", alpha=0.7)

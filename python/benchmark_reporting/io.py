@@ -820,6 +820,7 @@ def load_lloyd_parity_summary(
 
                     records.append(
                         {
+                            COL_PHASE: PHASE_DISPLAY_NAMES["lloyd"],
                             COL_STAGE: stage_name,
                             COL_VARIANT: variant_name,
                             COL_PARAMS: params_name,
@@ -909,6 +910,7 @@ def load_gmm_parity_summary(
 
                     records.append(
                         {
+                            COL_PHASE: PHASE_DISPLAY_NAMES["gmm"],
                             COL_STAGE: stage_name,
                             COL_VARIANT: variant_name,
                             COL_PARAMS: params_name,
@@ -1022,6 +1024,7 @@ def load_hdbscan_parity_summary(
                     failure_reasons = parity.get("failure_reasons", [])
                     records.append(
                         {
+                            COL_PHASE: PHASE_DISPLAY_NAMES["hdbscan"],
                             COL_STAGE: stage_name,
                             COL_VARIANT: variant_name,
                             COL_PARAMS: params_name,

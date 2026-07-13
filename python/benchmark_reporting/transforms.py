@@ -1,6 +1,11 @@
 import pandas as pd
 import numpy as np
 
+from benchmark_metadata import (
+    PHASE_DISPLAY_NAMES,
+    PRIMARY_REFERENCE_KEY_BY_PHASE,
+    REFERENCE_VARIANT,
+)
 from benchmark_reporting.constants import *
 
 
@@ -48,6 +53,45 @@ def filter_bench(
             mask &= df[col] == value
 
     return df.loc[mask].copy()
+
+
+def filter_primary_references(df, *, overrides=None):
+    """Keep the primary Python reference for each benchmark phase.
+
+    ``overrides`` accepts benchmark phase keys (for example ``"hdbscan"``)
+    or their display names. Rows without a reference key, such as C++ timing
+    rows, are retained.
+    """
+    if df.empty or COL_REFERENCE_KEY not in df.columns:
+        return df.copy()
+    if COL_PHASE not in df.columns:
+        raise KeyError(f"Missing column {COL_PHASE!r}")
+
+    reference_by_display_phase = {
+        PHASE_DISPLAY_NAMES[phase_key]: reference_key
+        for phase_key, reference_key in PRIMARY_REFERENCE_KEY_BY_PHASE.items()
+    }
+
+    for phase, reference_key in (overrides or {}).items():
+        display_phase = PHASE_DISPLAY_NAMES.get(str(phase), str(phase))
+        if display_phase not in PHASE_DISPLAY_NAMES.values():
+            raise KeyError(f"Unknown benchmark phase {phase!r}")
+        reference_by_display_phase[display_phase] = str(reference_key)
+
+    expected_reference = (
+        df[COL_PHASE]
+        .astype("object")
+        .map(reference_by_display_phase)
+        .fillna(REFERENCE_VARIANT)
+        .astype(str)
+    )
+    actual_reference = df[COL_REFERENCE_KEY].fillna("").astype(str)
+    mask = actual_reference.eq("") | actual_reference.eq(expected_reference)
+
+    result = df.loc[mask].copy()
+    for col in result.select_dtypes(include="category").columns:
+        result[col] = result[col].cat.remove_unused_categories()
+    return result.reset_index(drop=True)
 
 
 def add_time_per_algorithm_iteration_columns(df):
