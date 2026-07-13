@@ -394,7 +394,7 @@ struct dynamic_full_gmm_micro_gemm_covariance {
                 auto& accumulator = sum_xx_w[k][triangle_offset(row, col)];
 
                 for (std::size_t sample_vector = 0; sample_vector < ACTIVE_N_VECTORS; ++sample_vector) {
-                    accumulator = eve::fma[ignore](
+                    accumulator = eve::fma[ignore.else_(accumulator)](
                         resp[sample_vector],
                         cache.x[row][sample_vector] * cache.x[col][sample_vector],
                         accumulator
@@ -646,7 +646,7 @@ private:
                 for (std::size_t col = 0; col <= row; ++col) {
                     auto& accumulator = stable_sum_xx_w[k][triangle_offset(row, col)];
 
-                    accumulator = eve::fma[ignore](
+                    accumulator = eve::fma[ignore.else_(accumulator)](
                         resp,
                         diff[row] * diff[col],
                         accumulator

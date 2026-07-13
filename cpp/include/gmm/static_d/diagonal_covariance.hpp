@@ -172,7 +172,9 @@ struct diagonal_covariance_model {
     ) {
         kumi::for_each_index(
             [&](auto index, auto) {
-                sum_x2_w[k][index] = eve::fma[ignore](
+                sum_x2_w[k][index] = eve::fma[
+                    ignore.else_(sum_x2_w[k][index])
+                ](
                     resp,
                     cache.x2[index],
                     sum_x2_w[k][index]

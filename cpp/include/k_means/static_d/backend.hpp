@@ -329,7 +329,11 @@ struct kumi_kmeans_backend {
                 kumi::for_each(
                     [&](auto x) {
                         total_squared_centered_norm_w =
-                            eve::fma[ignore](x, x, total_squared_centered_norm_w);
+                            eve::fma[ignore.else_(total_squared_centered_norm_w)](
+                                x,
+                                x,
+                                total_squared_centered_norm_w
+                            );
                     },
                     centered
                 );

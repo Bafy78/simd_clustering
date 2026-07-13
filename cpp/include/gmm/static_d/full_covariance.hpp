@@ -266,7 +266,11 @@ struct full_covariance_model {
         Ignore ignore
     ) {
         for (std::size_t t = 0; t < Tri; ++t) {
-            sum_xx_w[k][t] = eve::fma[ignore](resp, cache.xx[t], sum_xx_w[k][t]);
+            sum_xx_w[k][t] = eve::fma[ignore.else_(sum_xx_w[k][t])](
+                resp,
+                cache.xx[t],
+                sum_xx_w[k][t]
+            );
         }
     }
 
@@ -402,7 +406,11 @@ struct full_covariance_model {
                             const auto diff_product = diff[row] * diff[col];
                             auto& accumulator = stable_sum_xx_w[k][triangle_offset(row, col)];
 
-                            accumulator = eve::fma[ignore](resp, diff_product, accumulator);
+                            accumulator = eve::fma[ignore.else_(accumulator)](
+                                resp,
+                                diff_product,
+                                accumulator
+                            );
                         }
                     }
                 }

@@ -140,7 +140,11 @@ struct spherical_covariance_model {
         const sample_cache& cache,
         Ignore ignore
     ) {
-        sum_x2_w[k] = eve::fma[ignore](resp, cache.norm_sq, sum_x2_w[k]);
+        sum_x2_w[k] = eve::fma[ignore.else_(sum_x2_w[k])](
+            resp,
+            cache.norm_sq,
+            sum_x2_w[k]
+        );
     }
 
     void update_cluster_from_sufficient_statistics(

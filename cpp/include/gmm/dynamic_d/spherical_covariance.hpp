@@ -271,7 +271,7 @@ struct dynamic_spherical_gmm_micro_gemm_covariance {
         Ignore ignore
     ) {
         for (std::size_t sample_vector = 0; sample_vector < ACTIVE_N_VECTORS; ++sample_vector) {
-            sum_x2_w[k] = eve::fma[ignore](
+            sum_x2_w[k] = eve::fma[ignore.else_(sum_x2_w[k])](
                 resp[sample_vector],
                 cache.norm_sq[sample_vector],
                 sum_x2_w[k]

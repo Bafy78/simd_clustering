@@ -285,7 +285,7 @@ struct dynamic_diagonal_gmm_micro_gemm_covariance {
         const std::size_t i = offset(k, d);
 
         for (std::size_t sample_vector = 0; sample_vector < ACTIVE_N_VECTORS; ++sample_vector) {
-            sum_x2_w[i] = eve::fma[ignore](
+            sum_x2_w[i] = eve::fma[ignore.else_(sum_x2_w[i])](
                 resp[sample_vector],
                 x2[sample_vector],
                 sum_x2_w[i]

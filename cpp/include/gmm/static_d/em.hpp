@@ -134,7 +134,7 @@ struct static_gmm_em_state {
                 }
 
                 const auto log_prob_norm = max_score + eve::log(denom);
-                lower_bound_sum_w = eve::fma[ignore](
+                lower_bound_sum_w = eve::fma[ignore.else_(lower_bound_sum_w)](
                     log_prob_norm,
                     wide_f(1.0f),
                     lower_bound_sum_w
@@ -145,12 +145,18 @@ struct static_gmm_em_state {
                 for (std::size_t k = 0; k < K(); ++k) {
                     const auto resp = score_scratch[k] * inv_denom;
 
-                    N_k_w[k] = eve::fma[ignore](resp, wide_f(1.0f), N_k_w[k]);
+                    N_k_w[k] = eve::fma[ignore.else_(N_k_w[k])](
+                        resp,
+                        wide_f(1.0f),
+                        N_k_w[k]
+                    );
                     covariance.accumulate_second_order(k, resp, sample, sample_cache, ignore);
 
                     kumi::for_each_index(
                         [&](auto index, auto x) {
-                            sum_x_w[k][index] = eve::fma[ignore](
+                            sum_x_w[k][index] = eve::fma[
+                                ignore.else_(sum_x_w[k][index])
+                            ](
                                 resp,
                                 x,
                                 sum_x_w[k][index]

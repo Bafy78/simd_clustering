@@ -206,7 +206,7 @@ struct dynamic_gmm_micro_gemm_em_state {
         for (std::size_t sample_vector = 0; sample_vector < ACTIVE_N_VECTORS; ++sample_vector) {
             const auto log_prob_norm = max_score[sample_vector] + eve::log(denom[sample_vector]);
 
-            lower_bound_sum_w = eve::fma[ignore](
+            lower_bound_sum_w = eve::fma[ignore.else_(lower_bound_sum_w)](
                 log_prob_norm,
                 wide_f(1.0f),
                 lower_bound_sum_w
@@ -241,7 +241,7 @@ struct dynamic_gmm_micro_gemm_em_state {
 
                     resp_by_component[t][sample_vector] = resp;
 
-                    N_k_w[k] = eve::fma[ignore](
+                    N_k_w[k] = eve::fma[ignore.else_(N_k_w[k])](
                         resp,
                         wide_f(1.0f),
                         N_k_w[k]
@@ -275,7 +275,7 @@ struct dynamic_gmm_micro_gemm_em_state {
                     wide_f& sum_x = sum_x_w[mean_offset(k, d)];
 
                     for (std::size_t sample_vector = 0; sample_vector < ACTIVE_N_VECTORS; ++sample_vector) {
-                        sum_x = eve::fma[ignore](
+                        sum_x = eve::fma[ignore.else_(sum_x)](
                             resp_by_component[t][sample_vector],
                             x[sample_vector],
                             sum_x
