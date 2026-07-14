@@ -317,6 +317,21 @@ def _set_log_dimension_axis(ax, x_values) -> None:
     ax.xaxis.set_minor_formatter(mtick.NullFormatter())
 
 
+def _set_log_sample_axis(ax, x_values) -> None:
+    """Use the recorded sample counts as readable major ticks on a log-N axis."""
+    x_values = sorted(float(value) for value in x_values if np.isfinite(float(value)))
+    if not x_values:
+        return
+
+    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(mtick.FixedLocator(x_values))
+    ax.xaxis.set_major_formatter(
+        mtick.FuncFormatter(lambda value, _pos: format_abbrev(value))
+    )
+    ax.xaxis.set_minor_locator(mtick.LogLocator(base=10.0, subs=range(2, 10)))
+    ax.xaxis.set_minor_formatter(mtick.NullFormatter())
+
+
 def _line_label(variant, params=None, stage=None) -> str:
     parts = [str(variant)]
     if params is not None and str(params) != "Default":
@@ -526,38 +541,64 @@ def plot_spill_detection_by_phase(df):
     return figures
 
 
-def _cachegrind_metric_by_dimension(
-    df,
+def _lower_observed_median(values):
+    """Return the lower middle member of the sorted, observed numeric values."""
+    observed = sorted(
+        {
+            value
+            for value in values
+            if pd.notna(value) and np.isfinite(float(value))
+        },
+        key=float,
+    )
+    if not observed:
+        return None
+    return observed[(len(observed) - 1) // 2]
+
+
+def _format_cachegrind_config_value(column: str, value) -> str:
+    if column == COL_SAMPLES:
+        return format_abbrev(value)
+    return _format_dimension_tick(value)
+
+
+def _cachegrind_metric_sweep(
+    phase_df,
     metric_col: str,
     *,
+    x_col: str,
     scale_to_percent: bool = False,
 ):
-    value_cols = [
-        COL_PHASE,
-        COL_STAGE,
-        COL_VARIANT,
-        COL_PARAMS,
-        COL_DIMENSIONS,
-        metric_col,
+    fixed_cols = [
+        column
+        for column in (COL_DIMENSIONS, COL_SAMPLES, COL_CLUSTERS)
+        if column != x_col
     ]
-    metric_df = df[value_cols].dropna(subset=[metric_col]).copy()
+    fixed_values = {
+        column: _lower_observed_median(phase_df[column])
+        for column in fixed_cols
+    }
+    if any(value is None for value in fixed_values.values()):
+        return phase_df.iloc[0:0].copy(), fixed_values
 
-    if metric_df.empty:
-        return metric_df
+    sweep_df = phase_df.copy()
+    for column, value in fixed_values.items():
+        sweep_df = sweep_df[sweep_df[column] == value]
+
+    if sweep_df.empty:
+        return sweep_df, fixed_values
 
     if scale_to_percent:
-        metric_df[metric_col] = 100.0 * metric_df[metric_col].astype(float)
+        sweep_df[metric_col] = 100.0 * sweep_df[metric_col].astype(float)
 
-    return (
-        metric_df
-        .groupby(
-            [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS],
-            observed=True,
-            as_index=False,
-        )[metric_col]
+    group_cols = [COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, x_col]
+    sweep_df = (
+        sweep_df
+        .groupby(group_cols, observed=True, as_index=False)[metric_col]
         .median()
-        .sort_values([COL_PHASE, COL_STAGE, COL_VARIANT, COL_PARAMS, COL_DIMENSIONS])
+        .sort_values(group_cols)
     )
+    return sweep_df, fixed_values
 
 
 def plot_cachegrind_metric_by_phase(
@@ -569,20 +610,26 @@ def plot_cachegrind_metric_by_phase(
     scale_to_percent: bool = False,
     yscale: str | None = None,
 ):
-    """Plot one Cachegrind metric as phase-separated D-scaling figures."""
+    """Plot D and N sweeps with the other configuration values fixed."""
     if df.empty:
         return []
 
-    plot_df = _cachegrind_metric_by_dimension(
-        df,
+    value_cols = [
+        COL_PHASE,
+        COL_STAGE,
+        COL_VARIANT,
+        COL_PARAMS,
+        COL_DIMENSIONS,
+        COL_SAMPLES,
+        COL_CLUSTERS,
         metric_col,
-        scale_to_percent=scale_to_percent,
-    )
-    if plot_df.empty:
+    ]
+    metric_df = df[value_cols].dropna(subset=[metric_col]).copy()
+    if metric_df.empty:
         return []
 
     linestyle_cycle = ["-", "--", "-.", ":"]
-    params_order = list(dict.fromkeys(plot_df[COL_PARAMS].astype(str)))
+    params_order = list(dict.fromkeys(metric_df[COL_PARAMS].astype(str)))
     linestyle_map = {
         params: linestyle_cycle[i % len(linestyle_cycle)]
         for i, params in enumerate(params_order)
@@ -590,12 +637,13 @@ def plot_cachegrind_metric_by_phase(
 
     figures = []
 
-    for phase, stage in _ordered_present_phase_stage_pairs(plot_df):
-        phase_df = plot_df[(plot_df[COL_PHASE].astype(str) == phase) & (plot_df[COL_STAGE].astype(str) == stage)].copy()
+    for phase, stage in _ordered_present_phase_stage_pairs(metric_df):
+        phase_df = metric_df[
+            (metric_df[COL_PHASE].astype(str) == phase)
+            & (metric_df[COL_STAGE].astype(str) == stage)
+        ].copy()
         if phase_df.empty:
             continue
-
-        fig, ax = plt.subplots(figsize=(8, 4.5))
 
         variant_order = list(dict.fromkeys(phase_df[COL_VARIANT].astype(str)))
         color_map = {
@@ -603,42 +651,64 @@ def plot_cachegrind_metric_by_phase(
             for i, variant in enumerate(variant_order)
         }
 
-        for (variant, params), line_df in phase_df.groupby(
-            [COL_VARIANT, COL_PARAMS], sort=False, observed=True
-        ):
-            variant = str(variant)
-            params = str(params)
-            line_df = line_df.sort_values(COL_DIMENSIONS)
-
-            ax.plot(
-                line_df[COL_DIMENSIONS],
-                line_df[metric_col],
-                marker="o",
-                markersize=4,
-                linestyle=linestyle_map[params],
-                color=color_map[variant],
-                label=_line_label(variant, params),
+        for x_col in (COL_DIMENSIONS, COL_SAMPLES):
+            sweep_df, fixed_values = _cachegrind_metric_sweep(
+                phase_df,
+                metric_col,
+                x_col=x_col,
+                scale_to_percent=scale_to_percent,
             )
+            if sweep_df.empty:
+                continue
 
-        _set_log_dimension_axis(ax, phase_df[COL_DIMENSIONS].unique())
+            fig, ax = plt.subplots(figsize=(8, 4.5))
 
-        if yscale == "log":
-            values = phase_df[metric_col].dropna().astype(float)
-            if not values.empty and (values > 0).all():
-                ax.set_yscale("log")
+            for (variant, params), line_df in sweep_df.groupby(
+                [COL_VARIANT, COL_PARAMS], sort=False, observed=True
+            ):
+                variant = str(variant)
+                params = str(params)
+                line_df = line_df.sort_values(x_col)
+
+                ax.plot(
+                    line_df[x_col],
+                    line_df[metric_col],
+                    marker="o",
+                    markersize=4,
+                    linestyle=linestyle_map[params],
+                    color=color_map[variant],
+                    label=_line_label(variant, params),
+                )
+
+            if x_col == COL_DIMENSIONS:
+                _set_log_dimension_axis(ax, sweep_df[x_col].unique())
             else:
-                ax.set_yscale("symlog", linthresh=1)
-        elif yscale is not None:
-            ax.set_yscale(yscale)
+                _set_log_sample_axis(ax, sweep_df[x_col].unique())
 
-        ax.set_title(f"{title} — {_phase_stage_title(phase, stage)}")
-        ax.set_xlabel(COL_DIMENSIONS)
-        ax.set_ylabel(ylabel)
-        ax.grid(True, which="major", alpha=0.4)
-        ax.grid(True, which="minor", alpha=0.2)
-        ax.legend(title="Variant / Params")
+            if yscale == "log":
+                values = sweep_df[metric_col].dropna().astype(float)
+                if not values.empty and (values > 0).all():
+                    ax.set_yscale("log")
+                else:
+                    ax.set_yscale("symlog", linthresh=1)
+            elif yscale is not None:
+                ax.set_yscale(yscale)
 
-        figures.append(fig)
+            fixed_text = ", ".join(
+                f"{column}={_format_cachegrind_config_value(column, value)}"
+                for column, value in fixed_values.items()
+            )
+            ax.set_title(
+                f"{title} by {x_col} — {_phase_stage_title(phase, stage)}\n"
+                f"Fixed {fixed_text}"
+            )
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(ylabel)
+            ax.grid(True, which="major", alpha=0.4)
+            ax.grid(True, which="minor", alpha=0.2)
+            ax.legend(title="Variant / Params")
+
+            figures.append(fig)
 
     return figures
 
@@ -713,24 +783,32 @@ def plot_cachegrind_report(df, plot_specs=CACHEGRIND_REPORT_PLOTS):
     CACHEGRIND_EXTENDED_REPORT_PLOTS to include write misses, total data misses,
     data references, and miss-rate plots.
 
-    Each metric is summarized by median over the recorded N/K configurations for
-    the same phase, stage, variant, params, and compiled dimension. This mirrors the
-    report's executable-size and spill-detector D-scaling views while avoiding a
-    giant per-config counter table.
+    Only full-stage records are shown. Each metric gets a D sweep at the median
+    observed N/K values and an N sweep at the median observed D/K values. The
+    lower middle observed value is used when an axis has an even number of levels.
     """
     if df.empty:
+        return []
+
+    report_df = df
+    if COL_STAGE in report_df.columns:
+        report_df = report_df[
+            report_df[COL_STAGE].astype(str) == STAGE_ORDER[0]
+        ].copy()
+
+    if report_df.empty:
         return []
 
     figures = []
 
     for spec in plot_specs:
         metric_col = spec["metric_col"]
-        if metric_col not in df.columns:
+        if metric_col not in report_df.columns:
             continue
 
         figures.extend(
             plot_cachegrind_metric_by_phase(
-                df,
+                report_df,
                 metric_col,
                 title=spec["title"],
                 ylabel=spec["ylabel"],
