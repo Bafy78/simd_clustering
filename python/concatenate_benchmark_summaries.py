@@ -44,6 +44,9 @@ class MergeStats:
     cachegrind_records: int = 0
     cachegrind_planned_records: int = 0
     cachegrind_exclusions: int = 0
+    spill_detection_records: int = 0
+    spill_detection_scan_targets: int = 0
+    spill_detection_errors: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -598,6 +601,228 @@ def merge_cachegrind_summaries(
     stats.cachegrind_exclusions = len(exclusions)
     return merged
 
+
+def spill_detection_target_key(
+    entry: JsonDict,
+) -> tuple[str, int, str]:
+    covariance_type = entry.get("gmm_covariance_type")
+    return (
+        str(entry["cpp_case"]),
+        _required_int(entry, "D", "spill-detection target"),
+        "" if covariance_type is None else str(covariance_type),
+    )
+
+
+def _spill_detection_mapping(
+    spill: JsonDict,
+    field_name: str,
+) -> dict[tuple[str, int, str], JsonDict]:
+    entries = spill.get(field_name, []) or []
+    if not isinstance(entries, list):
+        raise ValueError(
+            f"Expected spill_detection.{field_name} to be a list, "
+            f"got {type(entries)}"
+        )
+
+    indexed: dict[tuple[str, int, str], JsonDict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Expected entries in spill_detection.{field_name} to be objects, "
+                f"got {type(entry)}"
+            )
+        indexed[spill_detection_target_key(entry)] = copy.deepcopy(entry)
+    return indexed
+
+
+def _spill_detection_errors(spill: JsonDict) -> list[JsonDict]:
+    raw_errors = spill.get("errors", []) or []
+    if not isinstance(raw_errors, list):
+        raise ValueError(
+            f"Expected spill_detection.errors to be a list, got {type(raw_errors)}"
+        )
+
+    errors: list[JsonDict] = []
+    for error in raw_errors:
+        if not isinstance(error, dict):
+            raise ValueError(
+                "Expected entries in spill_detection.errors to be objects, "
+                f"got {type(error)}"
+            )
+        errors.append(copy.deepcopy(error))
+
+    # Raw postprocessing errors predate the list form used by concatenated
+    # summaries. Convert the top-level error fields once so repeated merges do
+    # not lose them or duplicate an already-normalized error.
+    if not errors and (
+        spill.get("status") == "ERROR" or spill.get("error") is not None
+    ):
+        error = {
+            key: copy.deepcopy(spill[key])
+            for key in (
+                "error_type",
+                "error",
+                "exit_code",
+                "out_dir",
+                "compile_command_source",
+                "scan_target_count",
+                "scan_targets",
+            )
+            if key in spill
+        }
+        error.setdefault("error_type", "SpillDetectorError")
+        error.setdefault("error", "unknown error")
+        errors.append(error)
+
+    return errors
+
+
+def _deduplicate_spill_detection_errors(errors: Iterable[JsonDict]) -> list[JsonDict]:
+    deduplicated: dict[str, JsonDict] = {}
+    for error in errors:
+        signature = json.dumps(error, sort_keys=True, separators=(",", ":"))
+        deduplicated[signature] = copy.deepcopy(error)
+    return list(deduplicated.values())
+
+
+def _spill_detection_enabled(spill: JsonDict) -> bool:
+    if "enabled" in spill:
+        return bool(spill["enabled"])
+    return bool(spill)
+
+
+def _spill_detection_error_summary(errors: list[JsonDict]) -> tuple[str, str]:
+    if len(errors) == 1:
+        error = errors[0]
+        return (
+            str(error.get("error_type", "SpillDetectorError")),
+            str(error.get("error", "unknown error")),
+        )
+
+    descriptions = [
+        f"{error.get('error_type', 'SpillDetectorError')}: "
+        f"{error.get('error', 'unknown error')}"
+        for error in errors
+    ]
+    return (
+        "MultipleSpillDetectorErrors",
+        f"{len(errors)} spill-detection errors: " + "; ".join(descriptions),
+    )
+
+
+def merge_spill_detection_summaries(
+    low: JsonDict,
+    high: JsonDict,
+    stats: MergeStats,
+) -> JsonDict:
+    low_spill = low.get("spill_detection", {}) or {}
+    high_spill = high.get("spill_detection", {}) or {}
+
+    if not isinstance(low_spill, dict):
+        raise ValueError("Expected low-priority spill_detection to be a JSON object")
+    if not isinstance(high_spill, dict):
+        raise ValueError("Expected high-priority spill_detection to be a JSON object")
+
+    derived_fields = {
+        "enabled",
+        "status",
+        "scan_target_count",
+        "scan_targets",
+        "results",
+        "total_candidate_reload_pairs",
+        "errors",
+        "error_count",
+        "error_type",
+        "error",
+        "exit_code",
+    }
+    merged = {
+        key: copy.deepcopy(value)
+        for key, value in low_spill.items()
+        if key not in derived_fields
+    }
+    merged.update(
+        {
+            key: copy.deepcopy(value)
+            for key, value in high_spill.items()
+            if key not in derived_fields
+        }
+    )
+
+    # Results imply scan targets, including for legacy summaries that did not
+    # store scan_targets explicitly. High-priority duplicates replace their
+    # low-priority counterpart atomically.
+    targets_by_key = _spill_detection_mapping(low_spill, "scan_targets")
+    low_results = _spill_detection_mapping(low_spill, "results")
+    for key, result in low_results.items():
+        targets_by_key.setdefault(
+            key,
+            {
+                "cpp_case": result["cpp_case"],
+                "D": int(result["D"]),
+                "gmm_covariance_type": result.get("gmm_covariance_type"),
+            },
+        )
+
+    targets_by_key.update(_spill_detection_mapping(high_spill, "scan_targets"))
+    high_results = _spill_detection_mapping(high_spill, "results")
+    for key, result in high_results.items():
+        targets_by_key.setdefault(
+            key,
+            {
+                "cpp_case": result["cpp_case"],
+                "D": int(result["D"]),
+                "gmm_covariance_type": result.get("gmm_covariance_type"),
+            },
+        )
+
+    results_by_key = low_results
+    results_by_key.update(high_results)
+
+    errors = _deduplicate_spill_detection_errors(
+        [
+            *_spill_detection_errors(low_spill),
+            *_spill_detection_errors(high_spill),
+        ]
+    )
+    scan_targets = [targets_by_key[key] for key in sorted(targets_by_key)]
+    results = [results_by_key[key] for key in sorted(results_by_key)]
+    total_candidate_reload_pairs = sum(
+        int(result.get("candidate_reload_pairs", 0)) for result in results
+    )
+    enabled = bool(
+        _spill_detection_enabled(low_spill)
+        or _spill_detection_enabled(high_spill)
+        or scan_targets
+        or results
+        or errors
+    )
+
+    merged["enabled"] = enabled
+    merged["scan_targets"] = scan_targets
+    merged["scan_target_count"] = len(scan_targets)
+    merged["results"] = results
+    merged["errors"] = errors
+    merged["error_count"] = len(errors)
+    merged["total_candidate_reload_pairs"] = (
+        total_candidate_reload_pairs if results or not errors else None
+    )
+
+    if errors:
+        merged["status"] = "PARTIAL" if results else "ERROR"
+        error_type, error_message = _spill_detection_error_summary(errors)
+        merged["error_type"] = error_type
+        merged["error"] = error_message
+        if len(errors) == 1 and "exit_code" in errors[0]:
+            merged["exit_code"] = copy.deepcopy(errors[0]["exit_code"])
+    elif enabled:
+        merged["status"] = "PASS" if total_candidate_reload_pairs == 0 else "FAIL"
+
+    stats.spill_detection_records = len(results)
+    stats.spill_detection_scan_targets = len(scan_targets)
+    stats.spill_detection_errors = len(errors)
+    return merged
+
 def ensure_config_for_exclusion(
     configs: dict[tuple[str, int, int, int], JsonDict], exclusion: JsonDict
 ) -> JsonDict:
@@ -706,7 +931,8 @@ def merge_metadata(
             "Hierarchical merge by config, phase_key, variant_key, and params_key. "
             "Exact duplicate parameterization blocks are replaced atomically by "
             "the high-priority input. Active exclusions are omitted when concrete "
-            "phase data is present in the merged output."
+            "phase data is present in the merged output. Spill-detection targets "
+            "and results are merged by cpp_case, D, and gmm_covariance_type."
         ),
         "low_priority_input": str(low_path) if low_path is not None else None,
         "high_priority_input": str(high_path) if high_path is not None else None,
@@ -723,6 +949,9 @@ def merge_metadata(
             "cachegrind_records": stats.cachegrind_records,
             "cachegrind_planned_records": stats.cachegrind_planned_records,
             "cachegrind_exclusions": stats.cachegrind_exclusions,
+            "spill_detection_records": stats.spill_detection_records,
+            "spill_detection_scan_targets": stats.spill_detection_scan_targets,
+            "spill_detection_errors": stats.spill_detection_errors,
         },
         "low_priority_metadata": low_metadata,
         "high_priority_metadata": high_metadata,
@@ -758,12 +987,21 @@ def merge_benchmark_summaries(
     # Preserve unknown high-priority top-level fields with normal high-priority
     # override semantics, but rebuild the known summary containers explicitly.
     for key, value in high.items():
-        if key not in {"metadata", "configs", "exclusions", "compile_artifacts", "cachegrind"}:
+        if key not in {
+            "metadata",
+            "configs",
+            "exclusions",
+            "compile_artifacts",
+            "cachegrind",
+            "spill_detection",
+        }:
             merged[key] = copy.deepcopy(value)
 
     merged["exclusions"] = exclusions
     merged["compile_artifacts"] = merge_compile_artifacts(low, high, stats)
     merged["cachegrind"] = merge_cachegrind_summaries(low, high, stats)
+    if "spill_detection" in low or "spill_detection" in high:
+        merged["spill_detection"] = merge_spill_detection_summaries(low, high, stats)
     merged["metadata"] = merge_metadata(
         low,
         high,
@@ -804,6 +1042,9 @@ def main() -> None:
     print(f"Cachegrind records: {stats.cachegrind_records}")
     print(f"Cachegrind planned records: {stats.cachegrind_planned_records}")
     print(f"Cachegrind exclusions: {stats.cachegrind_exclusions}")
+    print(f"Spill-detection records: {stats.spill_detection_records}")
+    print(f"Spill-detection scan targets: {stats.spill_detection_scan_targets}")
+    print(f"Spill-detection errors: {stats.spill_detection_errors}")
 
 
 if __name__ == "__main__":
