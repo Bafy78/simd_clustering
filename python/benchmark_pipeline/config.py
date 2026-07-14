@@ -202,18 +202,10 @@ def default_config() -> BenchmarkConfig:
             BenchmarkExclusionRule(
                 phase_keys=("hdbscan",),
                 min_samples=5000,
-                max_samples=19_999,
                 reason=(
                     "Too high for hdbscan quadratic complexity"
                 ),
             ),
-            BenchmarkExclusionRule(
-                phase_keys=("hdbscan",),
-                min_samples=20_001,
-                reason=(
-                    "Too high for hdbscan quadratic complexity"
-                ),
-            ), # hack to run the letter dataset on hdbscan anyway
             BenchmarkExclusionRule(
                 phase_keys=("pp", "gmm", "lloyd",),
                 max_samples=4000,

@@ -26,6 +26,7 @@
 \usepackage{multicol}                           % Colonne
 \usepackage{graphicx}                           % Pour le bigcdot notamment
 \usepackage{tcolorbox}                          % Box
+\usepackage{array}
 \setlength{\fboxrule}{3pt}
 \setlength{\fboxsep}{1em}
 
@@ -35,6 +36,7 @@
 % Figure et Image :
 
 \usepackage{wrapfig}                            %pour inclure des figures dans le texte  
+\usepackage{subcaption}
 
 %Lettres grecques :
 \usepackage{savesym}
@@ -49,10 +51,12 @@
 \usepackage[absolute, overlay]{textpos}
 \usepackage{pgfpages}
 \usepackage[font=footnotesize]{caption}
+\captionsetup[figure]{labelformat=empty}
 \useoutertheme{infolines} 
 \usepackage{csquotes}
 \usepackage{textpos}
 \usepackage{tikz}
+\usepackage{animate}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                                                %
@@ -342,3 +346,17 @@ literate=
 
 \end{tikzpicture}%
 }
+
+\newcommand{\tablevisual}[1]{%
+  \makebox[\linewidth][c]{%
+    \raisebox{\dimexpr\ht\strutbox-\height\relax}[0pt][0pt]{%
+      \includegraphics[
+        width=1.9cm,
+        height=1.9cm,
+        keepaspectratio
+      ]{#1}%
+    }%
+  }%
+}
+
+\input{simd-layout-animations.tex}

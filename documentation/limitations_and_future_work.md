@@ -19,7 +19,7 @@ The main in-scope algorithmic work is:
 | K-Means++         | Greedy K-Means++ initialization benchmark, with current stochastic measured                       |
 | Lloyd / K-Means   | Lloyd-style K-Means with shared initial centers, Euclidean squared-distance assignment, and controlled iteration settings.                                                                                          |
 | GMM EM            | Gaussian mixture EM for `spherical`, `diag`, and `full` covariance types.                         |
-| HDBSCAN           | Dense Euclidean HDBSCAN stage benchmarking for distance, mutual reachability, MST, linkage, selection, and full pipeline stages.                                                                                    |
+| HDBSCAN           | Dense Euclidean HDBSCAN stage benchmarking for distance, MST, linkage, selection, and full pipeline stages.                                                                                    |
 | Layout conversion | AoS-to-SoA conversion costs used to interpret static-D and dynamic-D C++ layouts.                 |
 | References        | scikit-learn references for K-Means/K-Means++/GMM/HDBSCAN-brute, plus hdbscan-contrib for HDBSCAN.|
 | Inputs            | Dense, 2-D, numeric, finite arrays materialized into binary artifacts.                            |

@@ -90,7 +90,7 @@
     
       The main implementation effort compared these across different dimensional regimes; they were integrated into a validation and benchmarking pipeline against scikit-learn Python references.
     
-      The experiments show that the effectiveness of SIMD optimization depends strongly on dimensionality, memory layout, register pressure, and the structure of the algorithm. \textbf{[Add one sentence summarizing the main measured performance and validation results.]}
+      The observed performance gains depend on the fit between the vectorization strategy, memory layout, and algorithmic dataflow. Against the scikit-learn reference, validated end-to-end timings ranged from near parity to approximately 100× faster. Speedups of 5–15× were common in representative, non-extreme configurations, although the precise gain varied substantially with the algorithm and the values of N, D, and K.
     \end{minipage}
 
   \vfill
@@ -129,6 +129,8 @@ At the beginning of the internship, I had limited prior experience with C++ and 
 The general topic of the internship was the implementation of performant clustering algorithms in C++20 using EVE. The project was not intended to produce code ready for immediate integration into EVE or to build a complete replacement for existing Python libraries such as scikit-learn \cite{pedregosa2011scikit}. The project instead became a benchmark and validation codebase for clustering-related algorithms and numerical kernels. Its central question was how data layout and kernel organization affect performance as the number of features, samples, and clusters varies.
 
 The code covers Lloyd's K-Means, greedy K-Means++ initialization, Gaussian Mixture Model estimation by Expectation-Maximization, and a dense Euclidean HDBSCAN pipeline. The code was designed to study how these computations behave under different dimensional regimes. It includes both static-D and dynamic-D variants; their respective data layouts and traversal strategies are described in the technical background below.
+
+You can find the project's repository \href{https://github.com/Bafy78/simd_clustering}{on github}.
 
 \section{Theoretical and technical background}
 
@@ -217,7 +219,7 @@ The HDBSCAN implementation is a dense Euclidean staged pipeline in double precis
 
 The benchmark methodology is designed to compare equivalent computations rather than merely comparable-looking timings. The C++ implementations and the Python reference paths therefore share materialized input artifacts whenever possible. Synthetic datasets are generated once, stored in a contiguous binary format, and reused by both sides. Lloyd and GMM benchmarks also reuse initialization artifacts: Lloyd starts from shared K-Means++ centers, while GMM derives its initial weights, means, and covariance or precision parameters from the same centers. This keeps the measured Lloyd and GMM runs deterministic for a fixed configuration and avoids attributing initialization differences to the implementation's performance.
 
-Setup work is kept outside the measured region when it is not part of the algorithm being evaluated. In C++, input loading, artifact loading, benchmark-case construction, and output writing are excluded from the timed body. The timed operation is the algorithm call itself, followed by a keep-alive step to prevent dead-code elimination. In Python, the same materialized inputs are loaded before entering the measured callable. For Lloyd and GMM, estimator construction and \code{fit} are included in the measured callable, matching the operation being compared with the C++ fit path. Native thread pools are restricted to one thread so that the results focus on single-thread SIMD effects rather than thread-level parallelism.
+Setup work that is not part of the algorithm being evaluated (including input preparation and output handling) is excluded from the measured region; only the fitting computation is timed. Native thread pools are restricted to one thread so that the results focus on single-thread SIMD effects rather than thread-level parallelism.
 
 C++ timings are collected with \href{https://github.com/martinus/nanobench}{ankerl::nanobench}, and Python timings with \href{https://github.com/psf/pyperf}{pyperf}. Postprocessing discards warmup and calibration values, groups repeated runs, and reports descriptive statistics for total time. For iterative algorithms, time per iteration is obtained by dividing the measured time by the recorded iteration count. Speedup is defined as
 \[
@@ -238,54 +240,79 @@ The full benchmark pipeline also allows these tools to run after each performanc
 
 \section{Results and analysis}
 
-The complete tables, plots, raw timing summaries, parity logs, portability measurements, analysis and interpretations are provided in \code{documentation/performance\_results.md}.
+The complete tables, plots, raw timing summaries, parity logs, portability measurements, analysis and interpretations are provided in \code{/deliverables/latest\_results/}, \\
+and \code{documentation/performance\_results.md}.
 
 \subsection{Performance and speedup scaling by algorithm}
 
+The measured gains vary substantially by algorithm because the C++ paths do not benefit from the same optimizations or face the same bottlenecks. The following table summarizes the representative end-to-end results, measured on a Zen 5 CPU (AVX512) in WSL 2, with g++-15.
 
-
-\subsection{Portability across compilers and machines}
-
-The main benchmark tables above use one reference compiler, machine, and SIMD target. Additional runs were used to check whether the conclusions were stable across compilation and hardware conditions.
-
-\begin{table}[H]
+\begin{table}[htbp]
 \centering
-\small
-\begin{tabular}{llll}
-\toprule
-Comparison & Tested scope & Summary result & Interpretation \\
-\midrule
-Compiler & \textbf{[TODO: compilers and flags, e.g. GCC vs Clang]} & \textbf{[TODO: summarized value, e.g. speedups stayed within X--Y\% / backend choice changed in Z cases]} & \textbf{[TODO: stable / compiler-sensitive / affected by spills]} \\
-Microarchitecture & \textbf{[TODO: machines / CPUs / SIMD targets]} & \textbf{[TODO: summarized value, e.g. static-D remained best for low D; dynamic-D became preferable earlier/later]} & \textbf{[TODO: stable / threshold moved / bandwidth-limited]} \\
-Auto-dispatch & \textbf{[TODO: Lloyd auto cases]} & \textbf{[TODO: summarized value, e.g. avoided worst backend in X/Y representative cases]} & \textbf{[TODO: useful heuristic / too machine-dependent]} \\
-Parity & \textbf{[TODO: compared configurations]} & \textbf{[TODO: all passed / exceptions listed]} & \textbf{[TODO: timing comparison is valid / excluded where parity failed]} \\
-\bottomrule
+\begin{tabular}{l c p{0.5\textwidth}}
+\hline
+Algorithm & Representative speedup & Caveat \\
+\hline
+Lloyd & ~5–13× & The only main optimization not present in the reference is delta updates for the M step, which only provides around a 10 \% boost \\
+GMM EM & $\sim$15--70$\times$ & A substantial part of the speedup comes from fusing the E step with the accumulation of M-step statistics. \\
+HDBSCAN & $\sim$3--7$\times$ & I didn't implement the dynamic-D variant *yet*, so speedups aren't as good as they could be. \\
+K-Means++ & $\sim$10--35$\times$ & No formal parity check is currently available, so these results should not be interpreted too strongly. \\
+\hline
 \end{tabular}
-\caption{Summary of compiler and microarchitecture sensitivity. Detailed per-configuration measurements are reported in \code{documentation/performance\_results.md}.}
-\label{tab:portability-summary}
+\caption{Summary of performance and speedup scaling by algorithm.}
+\label{tab:performance-summary}
 \end{table}
 
-The portability results should be read qualitatively. A result is stronger when the backend choices and automatic-dispatch conclusions drawn from the main benchmark tables remain stable across compilers, machines, targets, and flags, because this suggests that the speedup comes from the data layout and algorithmic structure rather than from a compiler accident. Conversely, when those conclusions change, the result is still useful but should be interpreted and stated as a portability limitation.
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.95\linewidth]{lloyd_auto_speedup_heatmap_znver5.png}
+  \caption{Speedup of the `automatic` Lloyd variant over the scikit-learn reference on the AMD Zen~5 machine. The speedup depends on the number of samples \(N\), dimensions \(D\), and clusters \(K\).}
+  \label{fig:lloyd-auto-speedup-heatmap}
+\end{figure}
 
+Overall, the dynamic-D variants outperform the static-D variants in almost every tested configuration, including the low-dimensional regions in which the static-D representation should be most favorable. This is likely because the dynamic-D kernels are more aggressively optimized: they tile across samples and centroids, components, or candidates; reuse loaded data and coefficients; expose several independent accumulator chains; and explicitly control register pressure. By contrast, the static-D variants were intentionally designed as simpler, idiomatic EVE baselines, relying heavily on EVE algorithms and tuple traversal rather than explicit blocking across samples and clusters. They could be improved through multi-sample and multi-cluster tiling, multiple accumulators, register-aware blocking, and specialized low-dimensional microkernels. That was not the main purpose of these simple variants, but it is a natural direction for future work: a blocked static-D implementation might combine these optimizations with whole-dimension unrolling and better reuse of an in-register sample tuple, potentially allowing it to outperform the dynamic-D variants in the low-dimensional regimes where that representation is most advantageous.
+
+\newpage
+\subsection{Portability across compilers and machines}
+
+I ran the benchmarks on three different machines:
+\begin{table}[ht]
+    \centering
+    \caption{Speedup difference against the Zen 3 CPU baseline. Not performance difference: if both scikit and C++ scaled the same, the speedup difference stays 1.}
+    \label{tab:speedup-against-baseline}
+    \begin{tabular}{lcccc}
+        \toprule
+        \textbf{Machine} & \textbf{Lloyd K-means} & \textbf{K-means++} & \textbf{GMM EM} & \textbf{HDBSCAN} \\
+        \midrule
+        Zen 5 (AVX-512, WSL 2)      & 1.5 & 1.2 & 2.3 & 0.9   \\
+        Zen 3 (AVX2, WSL 2)         & 1.0 & 1.0 & 1.0 & 1.0 \\
+        Rocket Lake (native Linux)  & 1.6 & 1.0 & 0.6 & (not measured)   \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+I also ran the benchmarks with clang++ 18. At first performance was much lower, but increasing the \code{-inline-threshold} value did bring it up to g++'s level, except for GMM EM where it's only $0.85\times$ as fast.
+
+\newpage
 \section{Limitations and future work}
 
-- actually make it into a clustering library with an API, estimators, broad input validation,...
-
-- reproduce more scikit-learn user behavior, more cases (non-denses,...)
-
-- more algorithms, all with parity validation
-
-- more stable perf accross compilers and architecture, and that scales better with it
-
-- better auto dispatch, and on all algorithms
-
-- more optimization in general
-
-- thread-level parallelism separately AND in addition to SIMD
-
-- bench against more reference implementations, and with more real datasets
-
-- have many different versions of the implementations, to attribute performance to specific optimizations (and see the impact of SIMD only);
+\begin{itemize}
+    \item Turn the current codebase into a complete clustering library, with a stable API, estimator classes, and broad input validation.
+    
+    \item Reproduce a wider range of scikit-learn behavior and support additional use cases, including non-dense inputs.
+    
+    \item Implement more clustering algorithms, with parity validation for each implementation.
+    
+    \item Investigate and improve performance stability across compilers and architectures, as well as performance scaling across different hardware capabilities.
+    
+    \item Improve automatic dispatch and extend it to all supported algorithms.
+    
+    \item Add thread-level parallelism, both as a separate optimization and in combination with SIMD.
+    
+    \item Benchmark against additional reference implementations and on a broader range of real-world datasets.
+    
+    \item Maintain multiple versions of the implementations to isolate the effects of individual optimizations and, in particular, to measure the contribution of SIMD alone.
+\end{itemize}
 
 
 \begin{thebibliography}{99}

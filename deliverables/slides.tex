@@ -29,110 +29,293 @@
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Clustering Algorithms}
 
-    Comparison of the different clustering algorithms, in a table + images of their result and specificities (outliers, probabilities, complexity,...)? Include stuff that’s in the initial survey. Why were some algorithms “excluded”/deemed as not good targets?
-    
+\begin{frame}{Three algorithms, three computational structures}
+  \vspace{-0.5em}
+  \begingroup
+  \fontsize{6.35}{7.10}\selectfont
+  \setlength{\tabcolsep}{2.25pt}
+  \renewcommand{\arraystretch}{1.10}
+  \begin{tabular}{@{}>{\raggedright\arraybackslash}p{1.20cm}
+                       >{\raggedright\arraybackslash}p{2.50cm}
+                       >{\raggedright\arraybackslash}p{4.82cm}
+                       >{\centering\arraybackslash}p{3.0cm}@{}}
+    \toprule
+    \textbf{Method} & \textbf{Output and specificities} & \textbf{Dominant structure and complexities} & \textbf{Visual} \\
+    \midrule
+
+    \textbf{K-Means}\par \textcolor{myuniversity}{\textbf{Lloyd}}
+      & Hard labels; $K$ fixed. Centroid model: roughly convex, similarly
+        sized clusters.
+      & \textbf{Lloyd iteration:} $N\!\times\!K$ distances
+        ($D$-reduction) $\rightarrow\arg\min_K$; then segmented sums and
+        counts. Regular, sample-parallel assignment; less regular update
+        writes.\par\smallskip
+        \textcolor{myuniversity}{%
+          $T=\mathcal O(TNKD)$ \quad
+          $S=\mathcal O((N+K)D)$} \smallskip\smallskip\smallskip
+      & \tablevisual{kmeans_visual.png} \\
+
+    \midrule
+
+    \textbf{Gaussian}\par \textbf{mixture}\par \textcolor{myuniversity}{\textbf{EM}}
+      & Soft responsibilities and density model; $K$ fixed. Covariances
+        represent elliptical clusters.
+      & \textbf{EM:} E-step = Mahalanobis scores + exp/log-sum-exp; M-step =
+        weighted moments. Full covariance adds outer products and $K$ matrix
+        factorizations. Dense, regular, high I.\par\smallskip
+        \textcolor{myuniversity}{%
+          $T_{\mathrm{full}}/t=\mathcal O(NKD^2+KD^3)$;\quad
+          $T_{\mathrm{diag/sph}}/t=\mathcal O(NKD)$}\par
+        \textcolor{myuniversity}{%
+          $S_{\mathrm{stream,full}}=\mathcal O(ND+KD^2)$;
+          materialized responsibilities add $\mathcal O(NK)$} \smallskip
+      & \tablevisual{gmm_full_covariance_visual.png} \\
+
+    \midrule
+
+    \textbf{HDBSCAN}
+      & $k$ inferred from density/stability; non-convex, unequal-density
+        clusters. Explicit noise, hierarchy and membership strengths.
+      & \textbf{Pipeline:} pairwise/core distances $\rightarrow$ mutual-
+        reachability MST $\rightarrow$ hierarchy $\rightarrow$ stability
+        selection. Regular, reduction-heavy front end; dependent, irregular
+        graph/tree tail.\par\smallskip
+        \textcolor{myuniversity}{%
+          $T=\mathcal O(DN^2)$ ;\quad $S=\mathcal O(N^2)$ with the dense matrix} \smallskip
+      & \tablevisual{hdbscan_visual.png} \\
+
+    \bottomrule
+  \end{tabular}
+  \endgroup
+
+  \vspace{0.15em}
+  \centering
+  \tiny
+  \textcolor{myuniversity}{$N$: samples \quad $D$: dimensions \quad $K$: clusters \quad $T$: iterations}
 \end{frame}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{The implementation was only the tip of the project}
 
-    “At first, I thought I was going to spend most of my time implementing and optimizing the algorithms in C++. But I soon realized that to be able to draw any conclusions about how good they were, I had to spend a lot of time creating a whole benchmarking pipeline, and not just run the programs a few times…” -> Iceberg. So this includes the fact that the initial brief was short, but also that it limited how many algorithms I could work on, and how extensively I could reproduce them (no sparse data, not all the api we could want,...)
+\begin{frame}[s]{The implementation was only the tip of the project}
+    % “At first, I thought I was going to spend most of my time implementing and optimizing the algorithms in C++. But I soon realized that to be able to draw any conclusions about how good they were, I had to spend a lot of time creating a whole benchmarking pipeline, and not just run the programs a few times…” -> Iceberg. So this includes the fact that the initial brief was short, but also that it limited how many algorithms I could work on, and how extensively I could reproduce them (no sparse data, not all the api we could want,...)
     
+  \noindent
+  \vspace{-1.7em}
+  \hspace*{-4.5em}
+  \includegraphics[height=0.9\paperheight, keepaspectratio]{iceberg_eve_clustering_bigger.png}
 \end{frame}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \begin{frame}{A benchmark result is a distribution, not a number}
 
-    => repeated process and workers => clustered bootstrapping for CI, with example of its use with the runs on rocket lake that got disturbed
+  \vspace{-0.45em}
+  \centering
+  \begin{tikzpicture}[
+      x=1.1cm,
+      y=1.5cm,
+      line cap=round,
+      line join=round,
+      timing/.style={circle,inner sep=0pt,minimum size=3.1pt},
+      process/.style={rounded corners=1.5pt,draw=lisnMain!38,line width=.45pt,
+                      fill=lisnMain!4,minimum width=1.28cm,minimum height=.45cm},
+      drawbox/.style={rounded corners=1.2pt,minimum width=.58cm,
+                      minimum height=.34cm,font=\tiny\bfseries},
+      flow/.style={->,line width=.7pt,draw=lisnMain!60}
+    ]
+    \useasboundingbox (0,0) rectangle (10.0,5.25);
+
+    % 1 -- Raw timings from both implementations.
+    \node[font=\scriptsize\bfseries,text=lisnTeal] at (.77,4.82) {C++};
+    \node[font=\scriptsize\bfseries,text=lisnSecondary] at (2.25,4.82) {Reference};
+
+      \foreach \y in {4.18,3.53,2.88,2.23} {
+        \node[process] at (.77,\y) {};
+        \node[process] at (2.25,\y) {};
+      }
+      \foreach \p/\y in {1/4.18,2/3.53,3/2.88,4/2.23} {
+        \node[font=\tiny,text=lisnMain!60,anchor=east] at (.04,\y) {P\p};
+      }
+
+    \foreach \x/\y in {
+      .40/4.16,.64/4.24,.87/4.16,1.12/4.21,
+      .42/3.50,.67/3.59,.90/3.50,1.14/3.56,
+      .37/2.85,.62/2.94,.89/2.84,1.12/2.91,
+      .42/2.20,.66/2.28,.94/2.20,1.15/2.25}
+      \node[timing,fill=lisnTeal] at (\x,\y) {};
+
+    \foreach \x/\y in {
+      1.87/4.16,2.10/4.24,2.34/4.16,2.60/4.21,
+      1.89/3.50,2.13/3.59,2.38/3.50,2.62/3.56,
+      1.84/2.85,2.09/2.94,2.36/2.84,2.60/2.91,
+      1.89/2.20,2.13/2.28,2.41/2.20,2.63/2.25}
+      \node[timing,fill=lisnSecondary] at (\x,\y) {};
+
+    \node[font=\tiny,text=lisnMain!60,align=center] at (1.51,1.66)
+      {repeated timings from\\independent processes};
+
+      \draw[flow] (2.95,3.22) -- (3.38,3.22);
+
+      \node[font=\scriptsize\bfseries,text=lisnMain!78] at (4.52,4.82)
+        {One bootstrap draw};
+      \node[font=\tiny,text=lisnMain!60] at (4.52,4.49)
+        {resample whole processes};
+
+      \node[font=\tiny\bfseries,text=lisnTeal] at (4.13,4.16) {C++};
+      \node[font=\tiny\bfseries,text=lisnSecondary] at (4.91,4.16) {Reference};
+
+      \foreach \p/\y in {P3/3.80,P1/3.36,P3/2.92,P4/2.48} {
+        \node[drawbox,draw=lisnTeal!80,fill=lisnTeal!10,text=lisnTeal]
+          at (4.13,\y) {\p};
+      }
+      \foreach \p/\y in {P2/3.80,P4/3.36,P1/2.92,P2/2.48} {
+        \node[drawbox,draw=lisnSecondary!85,fill=lisnSecondary!12,
+              text=lisnSecondary!85!black] at (4.91,\y) {\p};
+      }
+
+      \node[font=\tiny,text=lisnMain!60] at (4.52,2.05) {with replacement};
+      \node[font=\tiny,align=center] at (4.52,1.54)
+        {$\textstyle S^{*(b)}=
+          \dfrac{\operatorname{median}T_{\mathrm{ref}}^{*(b)}}
+                {\operatorname{median}T_{\mathrm{C++}}^{*(b)}}$};
+
+      \draw[flow] (5.60,3.22) -- (6.02,3.22);
+
+      \node[font=\scriptsize\bfseries,text=lisnMain!78] at (8.47,4.82)
+        {Repeat the draw many times};
+      \node[font=\tiny,text=lisnMain!60] at (8.47,4.49)
+        {one speedup estimate per draw};
+
+      \path[fill=myuniversity!15]
+        (6.18,2.12)
+        -- plot[smooth] coordinates {
+          (6.28,2.13) (6.58,2.18) (6.85,2.39) (7.10,2.88)
+          (7.37,3.61) (7.65,4.05) (7.92,3.94) (8.19,3.47)
+          (8.48,2.92) (8.82,2.52) (9.18,2.29) (9.58,2.18)
+          (10.04,2.13) (10.48,2.12)}
+        -- (10.48,2.12) -- cycle;
+      \draw[myuniversity,line width=1.05pt]
+        plot[smooth] coordinates {
+          (6.28,2.13) (6.58,2.18) (6.85,2.39) (7.10,2.88)
+          (7.37,3.61) (7.65,4.05) (7.92,3.94) (8.19,3.47)
+          (8.48,2.92) (8.82,2.52) (9.18,2.29) (9.58,2.18)
+          (10.04,2.13) (10.48,2.12)};
+      \draw[flow] (6.18,2.12) -- (10.63,2.12);
+
+      \draw[myuniversity!90!black,line width=.9pt]
+        (7.80,2.12) -- (7.80,4.16);
+      \node[font=\tiny\bfseries,text=myuniversity!90!black,anchor=south west]
+        at (7.86,3.92) {median};
+
+      \draw[myuniversity,line width=1.1pt] (7.10,1.72) -- (9.04,1.72);
+      \draw[myuniversity,line width=1.1pt]
+        (7.10,1.63) -- (7.10,1.81) (9.04,1.63) -- (9.04,1.81);
+      \node[font=\tiny,text=myuniversity] at (8.07,1.43)
+        {95\% confidence interval};
+  \end{tikzpicture}
     
 \end{frame}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Complete map of the benchmark pipeline}
+\begin{frame}{Speedup CI example}
 
-    A complete map of my final benchmark pipeline. “The benchmark infrastructure is itself a substantial deliverable”.
+    \vspace{1em}
+    \begin{figure}[ht]
+      \includegraphics[width=1.0\linewidth]{speedup_ci_example.png}
+    \end{figure}
     
 \end{frame}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{SIMD and data layout}
+\begin{frame}{The benchmark infrastructure is itself a substantial deliverable}
 
-    SIMD and data layout: static-D, dynamic-d, and blocked dynamic-D (with maybe 2 examples), maybe over 2 slides, mention how EVE algorithms are not used in dynamic-d
+    \begin{figure}[ht]
+      \includegraphics[width=1.0\linewidth]{benchmark_pipeline_map.png}
+    \end{figure}
     
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Static-D: D grows the live set}
+  \centering
+  \SIMDStaticDAnimation
+\end{frame}
+
+\begin{frame}{Dynamic-D: stream dimensions, repeat the scan}
+  \centering
+  \SIMDDynamicDAnimation
+\end{frame}
+
+\begin{frame}{Micro-GEMM: reuse inside a bounded tile}
+  \centering
+  \SIMDMicroGemmAnimation
 \end{frame}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \begin{frame}{Static-D vs dynamic-D results}
 
-    heatmaps, with register spills interpretation (spill detector)
+    \begin{figure}[ht]
+      \includegraphics[width=1.0\linewidth]{speedup_heatmap_gmm_full_avx2_static_vs_dynamic.png}
+      \caption{Speedup heatmaps of the GMM EM EVE static-D (left) and Micro GEMM (right) implementations versus scikit-learn, in the `full` covariance type, on a ZEN 3 machine}
+    \end{figure}
+    
+\end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Spill detection}
+
+    \begin{figure}[ht]
+      \includegraphics[width=1.0\linewidth]{spill_detection_gmm.png}
+      \caption{Spill detection results for GMM on the ZEN 3 architecture}
+    \end{figure}
+    
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Fixed cost initialization}
+
+    \vspace{2.5em}
+    \begin{figure}[htbp]
+        \centering
+        \begin{subfigure}[b]{0.49\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{fixed_costs_spherical_dynamic.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.49\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{fixed_costs_full_dynamic.png}
+        \end{subfigure}
+    \caption{Scaling of fixed costs: GMM spherical dynamic-D vs GMM full dynamic-D}
+    \end{figure}
     
 \end{frame}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Where SIMD help or doesn’t help}
+\input{triangular_storage_slide}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    cache limitations (Lloyd) (show cachegrind results) equalizes, or… not! (GMM). But need to justify why we could fuse gmm here, and why scikit isn’t doing it.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{frame}{Limitations}
+
+    \begin{itemize}
+        \item - Performance attribution to SIMD
+        \item - Performance differences accross compilers and architectures
+    \end{itemize}
+
+    \centering
+    \begin{figure}[ht]
+      \includegraphics[width=0.5\linewidth]{speedup_heatmap_gmm_dynamic_full_avx512.png}
+      \caption{Speedup heatmap of the GMM EM EVE dynamic-D implementation versus scikit-learn, \\
+                in the `full` covariance type, on a ZEN 5 machine}
+    \end{figure}
     
 \end{frame}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Kernel speedups vs full algorithm speedups}
-
-    show big speedups in simd-accelerated stage in hdbscan, but less in not simd accelerated stages (if supported by results) ?
-    
-\end{frame}
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Fixed cost initialization graph and explanation}
-
-    
-    
-\end{frame}
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Cross compiler and architecture testing}
-
-    what we did test and should have tested, and what it tells us.
-    WSL2 znver3 vs WSL2 znver5 with macro vs without macro vs compiled with -march=znver3. Then mention rocket lake.
-    And clang, and how the inline threshold varies results by a lot
-    
-\end{frame}
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Algebraic vs numerical stuff}
-
-    gmm full covariance raw moments + fallback thing ?
-    
-\end{frame}
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Optimization that failed}
-
-    triangular storage from ASL. They reported that they did it, but I couldn’t find it in the code, so I tried it, and it didn’t work for data alignment reasons.
-    
-\end{frame}
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\begin{frame}{Conclusion}
-
-    Limitations? Future work? What could I have done differently? Scalar version to test SIMD only for ex. Conclusion.
-    
-\end{frame}
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 
 \end{document}

@@ -1,0 +1,335 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Animated SIMD data-layout illustrations
+%
+% Ready-to-use slide bodies:
+%
+% \begin{frame}{Static-D: reuse grows the live set}
+%   \centering\SIMDStaticDAnimation
+% \end{frame}
+%
+% \begin{frame}{Dynamic-D: stream dimensions, repeat the scan}
+%   \centering\SIMDDynamicDAnimation
+% \end{frame}
+%
+% \begin{frame}{Micro-GEMM: reuse inside a bounded tile}
+%   \centering\SIMDMicroGemmAnimation
+% \end{frame}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\makeatletter
+
+% Shared visual grammar.  The matrix geometry is deliberately identical in
+% all three animations.  Colour, persistence and motion carry the explanation:
+% teal = sample vectors, orange = centroid values, purple = accumulators.
+\tikzset{
+  simd/matrix cell/.style={
+    draw=lisnMain!38,
+    line width=.35pt,
+    rounded corners=.7pt,
+    fill=lisnMain!4,
+    minimum width=.69cm,
+    minimum height=.52cm,
+    inner sep=0pt
+  },
+  simd/sample active/.style={
+    draw=lisnTeal,
+    line width=.75pt,
+    rounded corners=.7pt,
+    fill=lisnTeal!72,
+    minimum width=.69cm,
+    minimum height=.52cm,
+    inner sep=0pt
+  },
+  simd/centroid idle/.style={
+    circle,
+    draw=lisnSecondary!55,
+    line width=.55pt,
+    fill=lisnSecondary!9,
+    text=lisnSecondary!75!black,
+    minimum size=.58cm,
+    inner sep=0pt,
+    font=\scriptsize\bfseries
+  },
+  simd/centroid active/.style={
+    circle,
+    draw=lisnSecondary!90!black,
+    line width=.85pt,
+    fill=lisnSecondary,
+    text=white,
+    minimum size=.62cm,
+    inner sep=0pt,
+    font=\scriptsize\bfseries
+  },
+  simd/shelf/.style={
+    draw=lisnMain!30,
+    fill=lisnMain!2,
+    line width=.45pt,
+    rounded corners=3pt
+  },
+  simd/sample register/.style={
+    draw=lisnTeal,
+    fill=lisnTeal!68,
+    line width=.65pt,
+    rounded corners=1.2pt
+  },
+  simd/centroid register/.style={
+    draw=lisnSecondary!90!black,
+    fill=lisnSecondary,
+    line width=.65pt,
+    rounded corners=1.2pt
+  },
+  simd/accumulator/.style={
+    draw=myuniversity,
+    fill=myuniversity!76,
+    line width=.65pt,
+    rounded corners=1.2pt
+  }
+}
+
+% A fixed canvas prevents the animation from shifting between frames.
+\newcommand{\simd@canvas}{%
+  \path[use as bounding box] (-1.35,-2.05) rectangle (11.85,6.62);%
+}
+
+% Centre x-coordinate of sample column #1.  A small gap separates the two
+% four-lane SIMD blocks.
+\newcommand{\simd@columnx}[2]{%
+  \pgfmathsetmacro{#2}{#1 + 0.30*int(#1/4)}%
+}
+
+% Centre y-coordinate of dimension row #1.
+\newcommand{\simd@rowy}[2]{%
+  \pgfmathsetmacro{#2}{5.45 - 0.72*#1}%
+}
+
+% Draw the neutral sample matrix.  #1 is its implementation-specific title.
+% #2 is a small piece of code executed once for
+% each cell, with \simdrow, \simdcol, \simdx and \simdy in scope.  It may
+% redraw selected cells using the active style.
+\newcommand{\simd@matrix}[2]{%
+  \begin{scope}[xshift=.50cm]
+  \node[text=lisnMain!78, font=\scriptsize\bfseries] at (3.65,6.38)
+    {#1};
+  \foreach \simdcol in {0,...,7}{%
+    \simd@columnx{\simdcol}{\simdx}%
+    \node[text=lisnMain!72, font=\tiny] at (\simdx,5.91)
+      {$n_{\the\numexpr\simdcol+1\relax}$};
+  }%
+  \foreach \simdrow in {0,...,5}{%
+    \simd@rowy{\simdrow}{\simdy}%
+    \node[anchor=east, text=lisnMain!72, font=\tiny]
+      at (-.47,\simdy) {$d_{\the\numexpr\simdrow+1\relax}$};
+    \foreach \simdcol in {0,...,7}{%
+      \simd@columnx{\simdcol}{\simdx}%
+      \node[simd/matrix cell] at (\simdx,\simdy) {};%
+      #2%
+    }%
+  }%
+  \end{scope}
+}
+
+\newcommand{\simd@centroids}[1]{%
+  \begin{scope}[xshift=.50cm]
+  \node[text=lisnMain!78, font=\scriptsize\bfseries] at (9.20,5.58)
+    {centroids};
+  \foreach \simdk in {0,...,2}{%
+    \pgfmathsetmacro{\simdcy}{4.75 - 1.05*\simdk}%
+    \ifnum\simdk=#1\relax
+      \node[simd/centroid active] at (9.20,\simdcy) {$\mu_{\the\numexpr\simdk+1\relax}$};
+    \else
+      \node[simd/centroid idle] at (9.20,\simdcy) {$\mu_{\the\numexpr\simdk+1\relax}$};
+    \fi
+  }%
+  \end{scope}
+}
+
+% Draw a four-lane register with pale internal lane separators.
+% #1 style, #2 left x, #3 centre y, #4 width, #5 height.
+\newcommand{\simd@registerwidth}{2.08}
+\newcommand{\simd@registerheight}{.46}
+
+\newcommand{\simd@register}[5]{%
+  \draw[#1] (#2,#3-#5/2) rectangle ++(#4,#5);
+  \foreach \simdlane in {1,2,3}{%
+    \pgfmathsetmacro{\simdsep}{#2 + #4*\simdlane/4}%
+    \draw[white, opacity=.55, line width=.28pt]
+      (\simdsep,#3-#5/2+.04) -- (\simdsep,#3+#5/2-.04);
+  }%
+}
+
+\newcommand{\simd@shelftitle}[1]{%
+  \node[
+    anchor=west,
+    fill=white,
+    inner xsep=2pt,
+    text=lisnMain!78,
+    font=\scriptsize\bfseries
+  ] at (-.18,#1) {live SIMD registers};
+}
+
+% -----------------------------------------------------------------
+% Static-D
+% The source-level EVE load materializes the complete D-field SIMD tuple at
+% once.  The tuple then remains live while the active centroid changes.
+% -----------------------------------------------------------------
+\newcommand{\simd@staticframe}[1]{%
+  \pgfmathtruncatemacro{\simdstep}{#1}%
+  \pgfmathtruncatemacro{\simdgroup}{int(\simdstep/8)}%
+  \pgfmathtruncatemacro{\simdphase}{mod(\simdstep,8)}%
+  \pgfmathtruncatemacro{\simdloaded}{0}%
+  \pgfmathtruncatemacro{\simdcentroid}{-1}%
+  \ifnum\simdphase>0\relax
+    \pgfmathtruncatemacro{\simdloaded}{6}%
+  \fi
+  \ifnum\simdphase>1\relax
+    \pgfmathtruncatemacro{\simdcentroid}{min(2,int((\simdphase-2)/2))}%
+  \fi
+  \begin{tikzpicture}[x=.90cm,y=.90cm]
+    \simd@canvas
+    \simd@matrix{EVE SoA product}{%
+      \pgfmathtruncatemacro{\simdcellgroup}{int(\simdcol/4)}%
+      \ifnum\simdcellgroup=\simdgroup\relax
+        \ifnum\simdrow<\simdloaded\relax
+          \node[simd/sample active] at (\simdx,\simdy) {};%
+        \fi
+      \fi
+    }
+    \simd@centroids{\simdcentroid}
+
+    \draw[simd/shelf] (-.35,-1.60) rectangle (11.10,.40);
+    \simd@shelftitle{.40}
+    \foreach \simdr in {0,...,5}{%
+      \ifnum\simdr<\simdloaded\relax
+        \pgfmathsetmacro{\simdsx}{-.02 + 2.40*mod(\simdr,3)}%
+        \pgfmathsetmacro{\simdsy}{-.28 - .66*int(\simdr/3)}%
+        \simd@register{simd/sample register}{\simdsx}{\simdsy}{\simd@registerwidth}{\simd@registerheight}%
+      \fi
+    }%
+    \ifnum\simdcentroid>-1\relax
+      \simd@register{simd/centroid register}{7.86}{-.28}{\simd@registerwidth}{\simd@registerheight}%
+      \simd@register{simd/accumulator}{7.86}{-.94}{\simd@registerwidth}{\simd@registerheight}%
+    \else
+      \draw[lisnSecondary!24, rounded corners=1.2pt, line width=.55pt]
+        (7.86,-.28-\simd@registerheight/2) rectangle ++(\simd@registerwidth,\simd@registerheight);
+      \draw[myuniversity!24, rounded corners=1.2pt, line width=.55pt]
+        (7.86,-.94-\simd@registerheight/2) rectangle ++(\simd@registerwidth,\simd@registerheight);
+    \fi
+    \node[text=lisnTeal!75!black, font=\scriptsize\bfseries]
+      at (3.12,-1.42) {$D$ sample vectors};
+    \node[text=lisnSecondary!82!black, font=\scriptsize\bfseries]
+      at (8.90,.13) {centroid broadcast};
+    \node[text=myuniversity, font=\scriptsize\bfseries]
+      at (8.90,-1.42) {score accumulator};
+  \end{tikzpicture}%
+}
+
+\newcommand{\SIMDStaticDAnimation}{%
+  \begin{animateinline}[autoplay,loop,poster=last]{3}%
+    \multiframe{16}{iSIMDFrame=0+1}{\simd@staticframe{\iSIMDFrame}}%
+  \end{animateinline}%
+}
+
+% -----------------------------------------------------------------
+% Basic dynamic-D
+% Only one row vector, one centroid broadcast and one score accumulator stay
+% live.  After six rows, the active centroid changes and the scan restarts;
+% after all three centroids, the second SIMD sample group is processed.
+% -----------------------------------------------------------------
+\newcommand{\simd@dynamicframe}[1]{%
+  \pgfmathtruncatemacro{\simdstep}{#1}%
+  \pgfmathtruncatemacro{\simdgroup}{int(\simdstep/18)}%
+  \pgfmathtruncatemacro{\simdlocalstep}{mod(\simdstep,18)}%
+  \pgfmathtruncatemacro{\simdrowactive}{mod(\simdlocalstep,6)}%
+  \pgfmathtruncatemacro{\simdcentroid}{int(\simdlocalstep/6)}%
+  \begin{tikzpicture}[x=.90cm,y=.90cm]
+    \simd@canvas
+    \simd@matrix{streamed flat SoA buffer}{%
+      \pgfmathtruncatemacro{\simdcellgroup}{int(\simdcol/4)}%
+      \ifnum\simdcellgroup=\simdgroup\relax
+        \ifnum\simdrow=\simdrowactive\relax
+          \node[simd/sample active] at (\simdx,\simdy) {};%
+        \fi
+      \fi
+    }
+    \simd@centroids{\simdcentroid}
+
+    \draw[simd/shelf] (-.35,-1.43) rectangle (11.10,.20);
+    \simd@shelftitle{.20}
+    \simd@register{simd/sample register}{.12}{-.60}{\simd@registerwidth}{\simd@registerheight}%
+    \simd@register{simd/centroid register}{3.10}{-.60}{\simd@registerwidth}{\simd@registerheight}%
+    \simd@register{simd/accumulator}{6.08}{-.60}{\simd@registerwidth}{\simd@registerheight}%
+    \node[text=lisnTeal!75!black, font=\scriptsize\bfseries]
+      at (1.16,-1.16) {sample vector};
+    \node[text=lisnSecondary!82!black, font=\scriptsize\bfseries]
+      at (4.14,-1.16) {centroid broadcast};
+    \node[text=myuniversity, font=\scriptsize\bfseries]
+      at (7.12,-1.16) {score accumulator};
+  \end{tikzpicture}%
+}
+
+\newcommand{\SIMDDynamicDAnimation}{%
+  \begin{animateinline}[autoplay,loop,poster=last]{3}%
+    \multiframe{36}{iSIMDFrame=0+1}{\simd@dynamicframe{\iSIMDFrame}}%
+  \end{animateinline}%
+}
+
+% -----------------------------------------------------------------
+% Micro-GEMM
+% Each active dimension provides two sample registers and three centroid
+% broadcasts.  A bounded 2x3 score-accumulator tile persists between dimensions.
+% -----------------------------------------------------------------
+\newcommand{\simd@microframe}[1]{%
+  \pgfmathtruncatemacro{\simdstep}{#1}%
+  \pgfmathtruncatemacro{\simdrowactive}{mod(int(\simdstep/2),6)}%
+  \begin{tikzpicture}[x=.90cm,y=.90cm]
+    \simd@canvas
+    \simd@matrix{tiled access to a flat SoA buffer}{%
+      \ifnum\simdrow=\simdrowactive\relax
+        \node[simd/sample active] at (\simdx,\simdy) {};%
+      \fi
+    }
+
+    % All centroid coefficients participate in every tile update.
+    \begin{scope}[xshift=.50cm]
+      \foreach \simdk in {0,...,2}{%
+        \pgfmathsetmacro{\simdcy}{4.75 - 1.05*\simdk}%
+        \node[simd/centroid active] at (9.20,\simdcy)
+          {$\mu_{\the\numexpr\simdk+1\relax}$};
+      }%
+      \node[text=lisnMain!78, font=\scriptsize\bfseries] at (9.20,5.58)
+        {centroids};
+    \end{scope}
+
+    \draw[simd/shelf] (-.35,-1.68) rectangle (11.10,1.14);
+    \simd@shelftitle{1.14}
+    \foreach \simdb in {0,1}{%
+      \pgfmathsetmacro{\simdsy}{-.34 - .68*\simdb}%
+      \simd@register{simd/sample register}{-.03}{\simdsy}{\simd@registerwidth}{\simd@registerheight}%
+    }%
+    \foreach \simdk in {0,1,2}{%
+      \pgfmathsetmacro{\simdbx}{3.00 + 2.35*\simdk}%
+      \simd@register{simd/centroid register}{\simdbx}{.53}{\simd@registerwidth}{\simd@registerheight}%
+    }%
+    \foreach \simdb in {0,1}{%
+      \foreach \simdk in {0,1,2}{%
+        \pgfmathsetmacro{\simdax}{3.00 + 2.35*\simdk}%
+        \pgfmathsetmacro{\simday}{-.34 - .68*\simdb}%
+        \simd@register{simd/accumulator}{\simdax}{\simday}{\simd@registerwidth}{\simd@registerheight}%
+      }%
+    }%
+    \node[text=lisnSecondary!82!black, font=\scriptsize\bfseries]
+      at (6.39,.94) {centroid broadcasts};
+    \node[text=lisnTeal!75!black, font=\scriptsize\bfseries]
+      at (1.01,-1.45) {2 sample vectors};
+    \node[text=myuniversity, font=\scriptsize\bfseries]
+      at (6.39,-1.45) {$2\times3$ score accumulator tile};
+  \end{tikzpicture}%
+}
+
+\newcommand{\SIMDMicroGemmAnimation}{%
+  \begin{animateinline}[autoplay,loop,poster=last]{3}%
+    \multiframe{12}{iSIMDFrame=0+1}{\simd@microframe{\iSIMDFrame}}%
+  \end{animateinline}%
+}
+
+\makeatother

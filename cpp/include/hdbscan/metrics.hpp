@@ -200,56 +200,6 @@ inline void write_hdbscan_distance_metrics(
     out << "}\n";
 }
 
-inline void write_hdbscan_mreach_metrics(
-    const std::string& filename,
-    std::span<const double> mutual_reachability_matrix,
-    std::size_t N,
-    std::size_t min_samples
-) {
-    if (mutual_reachability_matrix.size() != N * N) {
-        throw std::runtime_error("HDBSCAN mreach metrics matrix size does not match N * N");
-    }
-
-    double symmetry_max_abs = 0.0;
-    std::vector<double> diagonal;
-    diagonal.reserve(N);
-    for (std::size_t i = 0; i < N; ++i) {
-        diagonal.push_back(mutual_reachability_matrix[i * N + i]);
-        for (std::size_t j = i + 1; j < N; ++j) {
-            const double diff = std::abs(
-                static_cast<double>(mutual_reachability_matrix[i * N + j])
-                - static_cast<double>(mutual_reachability_matrix[j * N + i])
-            );
-            symmetry_max_abs = std::max(symmetry_max_abs, diff);
-        }
-    }
-
-    std::ofstream out(filename);
-    if (!out) {
-        throw std::runtime_error("Could not open HDBSCAN metrics output file: " + filename);
-    }
-
-    out << std::setprecision(std::numeric_limits<double>::max_digits10);
-    out << "{\n";
-    out << "  \"schema_version\": 1,\n";
-    out << "  \"phase\": \"hdbscan\",\n";
-    out << "  \"language\": \"cpp\",\n";
-    out << "  \"stage\": \"mreach\",\n";
-    out << "  \"dtype\": \"float64\",\n";
-    out << "  \"n_samples\": " << N << ",\n";
-    out << "  \"min_samples\": " << min_samples << ",\n";
-    out << "  \"shape\": [" << N << ", " << N << "],\n";
-    out << "  \"symmetry_max_abs\": " << symmetry_max_abs << ",\n";
-    out << "  \"summary\": {\n";
-    write_double_vector_summary_json(out, mutual_reachability_matrix, "    ");
-    out << "  },\n";
-    out << "  \"diagonal_summary\": {\n";
-    write_double_vector_summary_json(out, std::span<const double>(diagonal.data(), diagonal.size()), "    ");
-    out << "  }\n";
-    out << "}\n";
-}
-
-
 inline void write_hdbscan_mst_metrics(
     const std::string& filename,
     std::span<const double> flat_edges,

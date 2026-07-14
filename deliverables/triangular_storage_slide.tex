@@ -1,0 +1,166 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% One-slide illustration of dense vs packed triangular storage.
+% Ready to include inside slides.tex, after \begin{document}:
+%     \input{triangular_storage_slide}
+%
+% Requires TikZ and the deck colours defined in Cmd.tex:
+% lisnMain, lisnSecondary, lisnTeal, myuniversity.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{frame}{Symmetry saves storage, but fragments rows}
+  \vspace{-0.45em}
+  \centering
+  \begin{tikzpicture}[
+      x=.90cm,
+      y=1.18cm,
+      line cap=round,
+      line join=round,
+      matrixcell/.style={
+        draw=lisnMain!38,
+        line width=.42pt,
+        rounded corners=.7pt,
+        minimum width=.62cm,
+        minimum height=.62cm,
+        inner sep=0pt,
+        font=\scriptsize\bfseries
+      },
+      uppercell/.style={matrixcell,fill=lisnTeal!17,text=lisnMain},
+      lowercell/.style={matrixcell,fill=lisnMain!4,text=lisnMain!58},
+      diagcell/.style={matrixcell,fill=lisnMain!4,text=lisnMain!58},
+      pairupper/.style={matrixcell,fill=lisnSecondary!72,text=white,
+                        draw=lisnSecondary!90!black,line width=.75pt},
+      pairlower/.style={matrixcell,fill=lisnSecondary!17,text=lisnSecondary!90!black,
+                        draw=lisnSecondary!80!black,line width=.75pt},
+      memcell/.style={
+        draw=lisnMain!38,
+        line width=.45pt,
+        rounded corners=1.2pt,
+        minimum width=.54cm,
+        minimum height=.48cm,
+        inner sep=0pt,
+        font=\scriptsize\bfseries,
+        fill=lisnMain!4
+      },
+      selectedmem/.style={memcell,draw=lisnSecondary!90!black,
+                          fill=lisnSecondary!72,text=white,line width=.75pt},
+      rowcell/.style={memcell,fill=lisnTeal!18,draw=lisnTeal!85!black},
+      zero/.style={memcell,fill=lisnMain!4,text=lisnMain!58,draw=lisnMain!30},
+      flow/.style={->,draw=lisnMain!60,line width=.75pt},
+      groupbox/.style={draw=lisnMain!30,fill=lisnMain!2,
+                       line width=.45pt,rounded corners=3pt}
+    ]
+    \path[use as bounding box] (0,0) rectangle (12.25,6.18);
+
+    % ------------------------------------------------------------
+    % 1. The complete symmetric matrix.
+    % ------------------------------------------------------------
+      \node[font=\scriptsize\bfseries,text=lisnMain!78] at (3.31,5.88)
+        {dense: symmetric};
+
+      % Complete dense matrix, without row and column index labels.
+      \foreach \r/\c in {0/0,1/1,2/2,3/3} {
+        \pgfmathsetmacro{\xx}{2.20 + .74*\c}
+        \pgfmathsetmacro{\yy}{5.25 - .66*\r}
+        \node[diagcell] at (\xx,\yy) {0};
+      }
+      \foreach \r/\c/\v in {0/1/2,0/2/16,0/3/34,1/2/10,1/3/20,2/3/26} {
+        \pgfmathsetmacro{\xx}{2.20 + .74*\c}
+        \pgfmathsetmacro{\yy}{5.25 - .66*\r}
+        \ifnum\r=0\relax
+          \ifnum\c=2\relax
+            \node[pairupper] at (\xx,\yy) {\v};
+          \else
+            \node[uppercell] at (\xx,\yy) {\v};
+          \fi
+        \else
+          \node[uppercell] at (\xx,\yy) {\v};
+        \fi
+      }
+      \foreach \r/\c/\v in {1/0/2,2/0/16,3/0/34,2/1/10,3/1/20,3/2/26} {
+        \pgfmathsetmacro{\xx}{2.20 + .74*\c}
+        \pgfmathsetmacro{\yy}{5.25 - .66*\r}
+        \ifnum\r=2\relax
+          \ifnum\c=0\relax
+            \node[pairlower] at (\xx,\yy) {\v};
+          \else
+            \node[lowercell] at (\xx,\yy) {\v};
+          \fi
+        \else
+          \node[lowercell] at (\xx,\yy) {\v};
+        \fi
+      }
+
+      \draw[<->,draw=lisnSecondary!85!black,line width=.65pt]
+        (3.32,5.0) to[bend right=20] (2.55,4.2);
+      \node[font=\scriptsize\bfseries,text=lisnSecondary!90!black]
+        at (.66,4.78) {$\Delta_{ij}=\Delta_{ji}$};
+      \node[font=\small\bfseries,text=lisnMain!78] at (.66,4.08)
+        {\textbf{16} values};
+
+    % ------------------------------------------------------------
+    % 2. Keep the strict upper triangle; the diagonal is implicit.
+    % ------------------------------------------------------------
+      \draw[flow] (5.35,4.25) -- (6.90,4.25);
+      \node[font=\tiny\bfseries,text=lisnMain!68] at (6.125,4.58) {$i<j$};
+
+      \node[font=\scriptsize\bfseries,text=lisnMain!78] at (8.57,5.88)
+        {packed: one triangle};
+
+      \foreach \r/\c/\v in {0/1/2,0/2/16,0/3/34,1/2/10,1/3/20,2/3/26} {
+        \pgfmathsetmacro{\xx}{7.09 + .74*\c}
+        \pgfmathsetmacro{\yy}{5.25 - .66*\r}
+        \ifnum\r=0\relax
+          \ifnum\c=2\relax
+            \node[pairupper] at (\xx,\yy) {\v};
+          \else
+            \node[uppercell] at (\xx,\yy) {\v};
+          \fi
+        \else
+          \node[uppercell] at (\xx,\yy) {\v};
+        \fi
+      }
+
+      \node[font=\tiny,text=lisnMain!60,align=center] at (11.10,4.78)
+        {diagonal $=0$\\is implicit};
+      \node[font=\small\bfseries,text=lisnTeal!80!black] at (11.10,4.08)
+        {\textbf{6} values};
+
+    % ------------------------------------------------------------
+    % 3. The code still asks for a complete logical row.
+    % ------------------------------------------------------------
+      \node[font=\scriptsize\bfseries,text=lisnMain!78] at (6.12,2.55)
+        {later: read $3^{rd}$ row};
+
+      % Dense row: one physical span across the lower-left area.
+      \node[anchor=east,font=\scriptsize\bfseries,text=lisnTeal!80!black]
+        at (1.35,1.50) {dense};
+      \draw[groupbox] (1.55,1.18) rectangle (4.13,1.82);
+      \foreach \c/\v in {0/16,1/10,2/0,3/26} {
+        \pgfmathsetmacro{\xx}{1.88 + .64*\c}
+        \ifnum\c=2\relax
+          \node[zero] at (\xx,1.50) {\v};
+        \else
+          \node[rowcell] at (\xx,1.50) {\v};
+        \fi
+      }
+      \node[font=\tiny\bfseries,text=lisnTeal!80!black]
+        at (2.84,.99) {contiguous row};
+
+      % Packed memory: conceptual segments [row 0] [row 1] [row 2].
+      \node[anchor=east,font=\scriptsize\bfseries,text=lisnSecondary!90!black]
+        at (6.52,1.50) {packed};
+      \draw[groupbox] (6.75,1.18) rectangle (10.44,1.82);
+      \foreach \x/\v/\sel in {
+        7.05/2/0,7.60/16/1,8.15/34/0,
+        8.86/10/1,9.41/20/0,10.12/26/1} {
+        \ifnum\sel=1\relax
+          \node[selectedmem] at (\x,1.50) {\v};
+        \else
+          \node[memcell] at (\x,1.50) {\v};
+        \fi
+      }
+      \node[font=\tiny,text=lisnMain!60] at (7.60,.99) {row 0};
+      \node[font=\tiny,text=lisnMain!60] at (9.14,.99) {row 1};
+      \node[font=\tiny,text=lisnMain!60] at (10.12,.99) {row 2};
+  \end{tikzpicture}
+\end{frame}

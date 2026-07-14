@@ -140,4 +140,4 @@ It also generates local-header-flattened version files of the code of the C++ al
 
 ### GMM diagnostics
 
-The [`python/explain_gmm_diag_scikit_parity.py`](../python/explain_gmm_diag_scikit_parity.py) tool  investigates diagonal GMM parity behavior; see [Diagnostic tool for diagonal GMM](scikit_parity_and_validation.md#diagnostic-tool-for-diagonal-gmm).
+The [`python/explain_gmm_diag_scikit_parity.py`](../python/explain_gmm_diag_scikit_parity.py) tool  investigates diagonal GMM parity behavior; see [Diagnostic tool for diagonal GMM](scikit_parity_and_validation.md#-diagnostic-tool-for-diagonal-gmm).
